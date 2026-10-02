@@ -25,7 +25,7 @@ BAD_COMMAND = {
     "session_id": "s1",
 }
 GOOD_COMMAND = {**BAD_COMMAND, "tool_input": {"command": "ls"}}
-NOT_FOUND = "Не найден Python 3.12 или новее"
+NOT_FOUND = {"sh": "Не найден Python 3.12 или новее", "cmd": "Python 3.12 or newer not found"}
 
 RUNNERS = ["sh", "cmd"]
 
@@ -181,7 +181,7 @@ def test_no_python_blocks_guards_in_a_managed_project(
     make_shims(shims, runner)  # все три сломаны
     result = launch(runner, "guard_paths.py", BAD_COMMAND, project, shims)
     assert result.blocked, result.stderr
-    assert NOT_FOUND in result.stderr
+    assert NOT_FOUND[runner] in result.stderr
     assert "claude plugin disable" in result.stderr
 
 
@@ -193,7 +193,7 @@ def test_no_python_does_not_block_non_guard_hooks(
     make_shims(shims, runner)
     result = launch(runner, "audit_log.py", BAD_COMMAND, project, shims)
     assert result.code == 1  # не 2: сообщение видно, но работу не запирает
-    assert NOT_FOUND in result.stderr
+    assert NOT_FOUND[runner] in result.stderr
 
 
 def test_no_python_is_silent_in_unmanaged_projects(
@@ -215,6 +215,16 @@ def test_launcher_is_a_polyglot_with_lf_line_endings() -> None:
     assert b"\r" not in data  # CR в части для sh ломает запуск
     assert data.startswith(b": << 'CMDBLOCK'\n")
     assert b"\nCMDBLOCK\n" in data
+
+
+def test_whole_file_is_plain_ascii_and_batch_half_has_no_comments() -> None:
+    """cmd при кодовой странице UTF-8 неверно разбирает любые не-ASCII байты в .cmd.
+
+    Так упал CI на Windows: кириллица в комментариях ломала разбор строк batch-части.
+    """
+    text = LAUNCHER.read_bytes().decode("ascii")
+    batch = text.split("\nCMDBLOCK\n", 1)[0]
+    assert "rem " not in batch.lower()
 
 
 def test_hooks_json_runs_every_script_through_the_launcher() -> None:
