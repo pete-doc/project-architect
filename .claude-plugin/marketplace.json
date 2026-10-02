@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "pa",
+      "name": "parch",
       "source": "./plugin",
       "description": "Роли агентов, hooks и skills ProjectArchitect"
     }

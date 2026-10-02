@@ -13,7 +13,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 def test_plugin_manifest_has_name() -> None:
     manifest = _load(REPO / "plugin" / ".claude-plugin" / "plugin.json")
-    assert manifest["name"] == "pa"
+    assert manifest["name"] == "parch"
 
 
 def test_marketplace_points_to_existing_plugin() -> None:
@@ -21,7 +21,7 @@ def test_marketplace_points_to_existing_plugin() -> None:
     plugins: list[dict[str, Any]] = market["plugins"]
     assert len(plugins) == 1
     entry = plugins[0]
-    assert entry["name"] == "pa"
+    assert entry["name"] == "parch"
     assert (REPO / str(entry["source"]) / ".claude-plugin" / "plugin.json").is_file()
 
 

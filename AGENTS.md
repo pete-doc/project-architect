@@ -5,7 +5,7 @@
 
 ## Структура
 
-- `plugin/` — плагин Claude Code (имя `pa`): `agents/`, `hooks/`, `skills/`, манифест в `plugin/.claude-plugin/plugin.json`.
+- `plugin/` — плагин Claude Code (имя `parch`): `agents/`, `hooks/`, `skills/`, манифест в `plugin/.claude-plugin/plugin.json`.
 - `.claude-plugin/marketplace.json` — каталог для установки плагина.
 - `templates/` — шаблоны для целевых проектов: `docs/`, `ci/`, `state/`.
 - `tests/` — тесты продукта, включая «плохие примеры».
