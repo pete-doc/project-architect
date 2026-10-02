@@ -1,7 +1,7 @@
 """PreToolUse: охрана путей. Правила одинаковы для всех, включая основную сессию без роли.
 
 1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок.
-2. Защищённые пути (настройки Claude и hooks, CI-файлы, state/features.json, CONSTITUTION.md,
+2. Защищённые пути (настройки Claude и hooks, CI-файлы, файлы state/ проверок, CONSTITUTION.md,
    принятые ADR): блокировка для всех. Снять её может только владелец, подтвердив запрос,
    который Claude Code показывает ему (решение «ask»). Агент подтвердить запрос не может.
    Когда запрос показать некому (режимы bypassPermissions и dontAsk, фоновый запуск), действие
@@ -58,6 +58,7 @@ _CI_ROOT_FILES = {
     ".pre-commit-config.yaml",
 }
 _CI_DIRS = {".github", ".circleci"}
+_STATE_FILES = {"features.json", "baseline.json", "jscpd-baseline.json", "vulture-whitelist.py"}
 _ALLOWED_ROOT_MD = {"agents.md", "claude.md", "readme.md"}
 _ADR_STATUS = re.compile(r"(?im)^\s*[-*]?\s*(?:статус|status)\s*:\s*(accepted|принят|утвержд)")
 
@@ -117,8 +118,11 @@ def _gated_reason(rel: str, project: Path) -> str | None:
         return "это настройки Claude и hooks: ими держатся все остальные проверки"
     if parts[0] in _CI_DIRS or (len(parts) == 1 and name in _CI_ROOT_FILES):
         return "это CI-файл: он определяет, что считается «готово»"
-    if rel.endswith("state/features.json"):
-        return "state/features.json пересчитывается автоматически по реальным тестам"
+    if len(parts) >= 2 and parts[-2] == "state" and name in _STATE_FILES:
+        return (
+            f"state/{name} относится к проверкам CI («храповик»): его нельзя менять, "
+            "чтобы пропустить нарушение"
+        )
     if name == "constitution.md":
         return "CONSTITUTION.md (стек, список пакетов) утверждает только владелец"
     if len(parts) >= 3 and parts[-3:-1] == ("docs", "adr") and name.endswith(".md"):

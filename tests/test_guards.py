@@ -188,7 +188,10 @@ GATED = [
     ".claude/settings.local.json",
     ".claude/hooks/guard.py",
     ".github/workflows/ci.yml",
+    ".github/parch/parch_ci.py",
     "state/features.json",
+    "state/baseline.json",
+    "state/jscpd-baseline.json",
     "docs/CONSTITUTION.md",
     "docs/adr/0001-accepted.md",
 ]

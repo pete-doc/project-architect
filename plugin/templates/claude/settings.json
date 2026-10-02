@@ -8,7 +8,11 @@
       "Edit(/docs/CONSTITUTION.md)",
       "Edit(/CONSTITUTION.md)",
       "Edit(~/.claude/settings.json)",
-      "Edit(~/.claude/plugins/**)"
+      "Edit(~/.claude/plugins/**)",
+      "Edit(/state/features.json)",
+      "Edit(/state/baseline.json)",
+      "Edit(/state/jscpd-baseline.json)",
+      "Edit(/state/vulture-whitelist.py)"
     ],
     "deny": [
       "Edit(/.claude/audit/**)",
