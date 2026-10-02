@@ -1,5 +1,6 @@
 """Навыки /parch:init-project, /parch:adr, /parch:doctor и шаблоны документов."""
 
+import importlib.util
 import json
 import re
 import shutil
@@ -110,6 +111,9 @@ EXPECTED_FILES = [
     "pyproject.toml",
     "requirements-dev.txt",
     "tests/test_smoke.py",
+    "requirements.txt",
+    "state/baseline.json",
+    ".github/parch/parch_ci.py",
 ]
 
 
@@ -120,7 +124,9 @@ def test_init_creates_a_working_structure(tmp_path: Path) -> None:
     assert result["created"][-1].startswith("docs/CONSTITUTION.md")  # включает защиту последним
     constitution = (tmp_path / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert "Мой сервис" in constitution
-    assert "- pip: pytest, ruff, pyright" in constitution
+    assert (
+        "- pip: pytest, pytest-cov, coverage, ruff, pyright, import-linter, vulture" in constitution
+    )
     assert "- python -m pytest -q" in constitution
     assert "{{" not in constitution
     assert "- Python 3.12+" in constitution
@@ -221,7 +227,7 @@ def test_initialized_project_is_protected_by_the_hooks(tmp_path: Path) -> None:
     constitution = tmp_path / "docs" / "CONSTITUTION.md"
     # проверки идут тем же интерпретатором, что и тесты: на Windows `python` из PATH бывает другим
     constitution.write_text(
-        constitution.read_text(encoding="utf-8").replace("- python -m", f'- "{sys.executable}" -m'),
+        constitution.read_text(encoding="utf-8").replace("- python ", f'- "{sys.executable}" '),
         encoding="utf-8",
     )
     stop = run_hook("stop_gate.py", {"hook_event_name": "Stop"}, tmp_path)
@@ -437,3 +443,102 @@ def test_skills_work_from_an_installed_copy_of_the_plugin_only(tmp_path: Path) -
     assert (project / ".github" / "workflows" / "ci.yml").is_file()
     assert not (tmp_path / "installed" / "templates").exists()
     assert result["created"]
+
+
+# ---------- CI Python в сгенерированном проекте (фаза D) ----------
+
+CI_SCRIPT = PLUGIN / "templates" / "ci" / "parch" / "parch_ci.py"
+
+
+def parch_check(project: Path, check: str) -> subprocess.CompletedProcess[str]:
+    script = project / ".github" / "parch" / "parch_ci.py"
+    return subprocess.run(
+        [sys.executable, str(script), check],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=300,
+    )
+
+
+def test_generated_project_passes_the_parch_checks_and_ships_the_script(tmp_path: Path) -> None:
+    init(tmp_path)
+    script = tmp_path / ".github" / "parch" / "parch_ci.py"
+    assert script.read_bytes() == CI_SCRIPT.read_bytes().replace(b"\r\n", b"\n")
+    checks = ("settings", "tests", "skips", "suppressions", "modules", "deps")
+    for check in (*checks, "dead-code", "architecture", "coverage"):
+        done = parch_check(tmp_path, check)
+        assert done.returncode == 0, f"{check}: {done.stdout}{done.stderr}"
+    workflow = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for check in (*checks, "architecture", "dead-code", "duplicates", "coverage"):
+        assert f"parch_ci.py {check}" in workflow
+
+
+def test_package_added_through_a_manifest_is_caught_in_the_generated_project(
+    tmp_path: Path,
+) -> None:
+    """Закрывает дыру из ADR-0004: пакет в requirements.txt в обход команды установки."""
+    init(tmp_path)
+    with (tmp_path / "requirements.txt").open("a", encoding="utf-8") as handle:
+        handle.write("flask==3.1.0\n")
+    done = parch_check(tmp_path, "deps")
+    assert done.returncode == 1
+    assert "flask" in done.stdout and "Разрешённые пакеты" in done.stdout
+
+
+def test_deleting_the_smoke_test_is_caught_in_the_generated_project(tmp_path: Path) -> None:
+    init(tmp_path)
+    (tmp_path / "tests" / "test_smoke.py").write_text(
+        "def test_other() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    done = parch_check(tmp_path, "tests")
+    assert done.returncode == 1
+    assert "tests/test_smoke.py::test_smoke" in done.stdout
+
+
+def test_tool_versions_in_generated_requirements_match_this_repository() -> None:
+    """Версии инструментов проверки зафиксированы и едины: в шаблоне и в CI самого продукта."""
+    spec = importlib.util.spec_from_file_location("init_project_module", INIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    generated: str = module.REQUIREMENTS_DEV
+    mine = {
+        line.split("==")[0]: line
+        for line in (REPO / "requirements-dev.txt").read_text(encoding="utf-8").split()
+    }
+    for line in generated.split():
+        assert "==" in line, f"версия не зафиксирована: {line}"
+        assert mine[line.split("==")[0]] == line
+
+
+def test_generated_project_blocks_skips_suppressions_and_weaker_settings(tmp_path: Path) -> None:
+    init(tmp_path)
+    smoke = tmp_path / "tests" / "test_smoke.py"
+    original = smoke.read_text(encoding="utf-8")
+    body = original.split("\n\n\n", 1)[1]
+    smoke.write_text("import pytest\n\n\n@pytest.mark.skip\n" + body, encoding="utf-8")
+    assert parch_check(tmp_path, "skips").returncode == 1
+    smoke.write_text(original, encoding="utf-8")
+    assert parch_check(tmp_path, "skips").returncode == 0
+    smoke.write_text(original + "\n\nX: int = 'a'  # type: ignore\n", encoding="utf-8")
+    assert parch_check(tmp_path, "suppressions").returncode == 1
+    smoke.write_text(original, encoding="utf-8")
+    pyproject = tmp_path / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    weaker = text.replace('typeCheckingMode = "strict"', 'typeCheckingMode = "off"')
+    pyproject.write_text(weaker, encoding="utf-8")
+    assert parch_check(tmp_path, "settings").returncode == 1
+
+
+def test_generated_initial_baseline_records_settings_and_counts(tmp_path: Path) -> None:
+    init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["skips"]["python"] == {}
+    assert baseline["suppressions"]["python"] == {}
+    keys = set(baseline["config"]["python"])
+    assert {"pyproject.toml#tool.ruff", "pyproject.toml#tool.pyright"} <= keys
+    assert "pyproject.toml#tool.pytest" in keys

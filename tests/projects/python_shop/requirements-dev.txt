@@ -5,4 +5,3 @@ pytest-cov==7.1.0
 import-linter==2.15
 vulture==2.16
 deptry==0.25.1
-coverage==7.16.2

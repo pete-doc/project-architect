@@ -22,8 +22,10 @@ from typing import Any
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 TEMPLATES = PLUGIN_ROOT / "templates"
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "adr" / "scripts"))
+sys.path.insert(0, str(PLUGIN_ROOT / "templates" / "ci" / "parch"))
 
 import adr  # noqa: E402  (путь добавлен строкой выше)
+import parch_ci  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -34,16 +36,20 @@ class Language:
     checks: tuple[str, ...]
 
 
+CI_SCRIPT = ".github/parch/parch_ci.py"
+LOCAL_CI_CHECKS = ("tests", "modules", "deps", "dead-code", "architecture")
+
 LANGUAGES = {
     "python": Language(
-        "Python 3.12+ (ruff, pyright, pytest)",
+        "Python 3.12+ (ruff, pyright, pytest, import-linter, vulture, deptry, jscpd)",
         "pip",
-        "pytest, ruff, pyright",
+        "pytest, pytest-cov, coverage, ruff, pyright, import-linter, vulture, deptry",
         (
             "python -m pytest -q",
             "python -m ruff check .",
             "python -m ruff format --check .",
             "python -m pyright",
+            *(f"python {CI_SCRIPT} {check}" for check in LOCAL_CI_CHECKS),
         ),
     ),
     "typescript": Language(
@@ -78,17 +84,48 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+extraPaths = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 """
-REQUIREMENTS_DEV = "ruff==0.16.10\npyright==1.1.414\npytest==9.1.1\n"
+# Версии инструментов проверки зафиксированы: CI не должен ломаться от выхода новой версии.
+REQUIREMENTS_DEV = (
+    "ruff==0.16.10\npyright==1.1.414\npytest==9.1.1\npytest-cov==7.1.0\n"
+    "import-linter==2.15\nvulture==2.16\ndeptry==0.25.1\ncoverage==7.16.2\n"
+)
+REQUIREMENTS = "# Рабочие зависимости. Только пакеты из «Разрешённые пакеты» в CONSTITUTION.md.\n"
 SMOKE_TEST = '''"""Начальный тест: проверки проекта запускаются. Замените его настоящими тестами."""
 
 
 def test_smoke() -> None:
     assert True
 '''
+
+
+def initial_baseline(project: Path) -> dict[str, Any]:
+    """Начальный baseline Python-проекта: известные тесты, пропуски, подавления и настройки."""
+    return {
+        "version": 1,
+        "tests": {"python": ["tests/test_smoke.py::test_smoke"]},
+        "dead_code": {"python": []},
+        "skips": {
+            "python": parch_ci.scan_counts(
+                project, "python", parch_ci.RULES["python"].skip_patterns, True
+            )
+        },
+        "suppressions": {
+            "python": parch_ci.scan_counts(
+                project,
+                "python",
+                parch_ci.RULES["python"].suppression_patterns,
+                False,
+                in_comments=True,
+            )
+        },
+        "config": {"python": parch_ci.settings_fingerprint(project, "python")},
+    }
 
 
 class Report:
@@ -208,8 +245,11 @@ def init_project(
     report.copy("state/STATUS.md", "state/STATUS.md")
     if "python" in languages:
         report.write("pyproject.toml", PYPROJECT)
+        report.write("requirements.txt", REQUIREMENTS)
         report.write("requirements-dev.txt", REQUIREMENTS_DEV)
         report.write("tests/test_smoke.py", SMOKE_TEST)
+        report.write("state/baseline.json", json.dumps(initial_baseline(project), indent=2) + "\n")
+        report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
     for lang in languages:
         if lang in CI_TEMPLATES:
             report.copy(f"ci/{CI_TEMPLATES[lang]}", ".github/workflows/ci.yml")

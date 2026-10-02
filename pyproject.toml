@@ -9,8 +9,10 @@ select = ["E", "F", "I", "B", "UP"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["plugin", "tests"]
-extraPaths = ["plugin/hooks", "plugin/skills/adr/scripts"]
+exclude = ["tests/projects", "**/__pycache__"]
+extraPaths = ["plugin/hooks", "plugin/skills/adr/scripts", "plugin/templates/ci/parch"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["plugin/hooks"]
+norecursedirs = ["projects"]
+pythonpath = ["plugin/hooks", "plugin/templates/ci/parch"]

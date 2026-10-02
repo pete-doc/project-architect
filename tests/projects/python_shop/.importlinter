@@ -1,0 +1,9 @@
+[importlinter]
+root_package = shop
+
+[importlinter:contract:ui-not-db]
+name = UI не обращается к хранилищу напрямую
+type = forbidden
+source_modules = shop.ui
+forbidden_modules = shop.db
+allow_indirect_imports = True
