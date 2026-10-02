@@ -1,0 +1,14 @@
+{
+  "name": "project-architect",
+  "description": "ProjectArchitect: контроль ИИ-разработки (архитектура, стандарты, дубли, мёртвый код)",
+  "owner": {
+    "name": "pete-doc"
+  },
+  "plugins": [
+    {
+      "name": "pa",
+      "source": "./plugin",
+      "description": "Роли агентов, hooks и skills ProjectArchitect"
+    }
+  ]
+}
