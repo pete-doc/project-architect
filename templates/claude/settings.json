@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "ask": [
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.github/**)",
+      "Edit(/docs/CONSTITUTION.md)",
+      "Edit(/CONSTITUTION.md)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/plugins/**)"
+    ],
+    "deny": [
+      "Edit(/.claude/audit/**)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(!.env.example)",
+      "Read(**/*.pem)",
+      "Read(**/id_rsa*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git clean -d*)",
+      "Bash(git clean -x*)",
+      "Bash(git clean -X*)",
+      "Bash(git clean --force*)",
+      "PowerShell(Remove-Item * -Recurse -Force*)"
+    ]
+  }
+}
