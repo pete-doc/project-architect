@@ -467,19 +467,12 @@ def test_generated_project_passes_the_parch_checks_and_ships_the_script(tmp_path
     init(tmp_path)
     script = tmp_path / ".github" / "parch" / "parch_ci.py"
     assert script.read_bytes() == CI_SCRIPT.read_bytes().replace(b"\r\n", b"\n")
-    for check in ("tests", "modules", "deps", "dead-code", "architecture", "coverage"):
+    checks = ("settings", "tests", "skips", "suppressions", "modules", "deps")
+    for check in (*checks, "dead-code", "architecture", "coverage"):
         done = parch_check(tmp_path, check)
         assert done.returncode == 0, f"{check}: {done.stdout}{done.stderr}"
     workflow = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    for check in (
-        "tests",
-        "modules",
-        "deps",
-        "architecture",
-        "dead-code",
-        "duplicates",
-        "coverage",
-    ):
+    for check in (*checks, "architecture", "dead-code", "duplicates", "coverage"):
         assert f"parch_ci.py {check}" in workflow
 
 
@@ -520,3 +513,32 @@ def test_tool_versions_in_generated_requirements_match_this_repository() -> None
     for line in generated.split():
         assert "==" in line, f"версия не зафиксирована: {line}"
         assert mine[line.split("==")[0]] == line
+
+
+def test_generated_project_blocks_skips_suppressions_and_weaker_settings(tmp_path: Path) -> None:
+    init(tmp_path)
+    smoke = tmp_path / "tests" / "test_smoke.py"
+    original = smoke.read_text(encoding="utf-8")
+    body = original.split("\n\n\n", 1)[1]
+    smoke.write_text("import pytest\n\n\n@pytest.mark.skip\n" + body, encoding="utf-8")
+    assert parch_check(tmp_path, "skips").returncode == 1
+    smoke.write_text(original, encoding="utf-8")
+    assert parch_check(tmp_path, "skips").returncode == 0
+    smoke.write_text(original + "\n\nX: int = 'a'  # type: ignore\n", encoding="utf-8")
+    assert parch_check(tmp_path, "suppressions").returncode == 1
+    smoke.write_text(original, encoding="utf-8")
+    pyproject = tmp_path / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    weaker = text.replace('typeCheckingMode = "strict"', 'typeCheckingMode = "off"')
+    pyproject.write_text(weaker, encoding="utf-8")
+    assert parch_check(tmp_path, "settings").returncode == 1
+
+
+def test_generated_initial_baseline_records_settings_and_counts(tmp_path: Path) -> None:
+    init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["skips"]["python"] == {}
+    assert baseline["suppressions"]["python"] == {}
+    keys = set(baseline["config"]["python"])
+    assert {"pyproject.toml#tool.ruff", "pyproject.toml#tool.pyright"} <= keys
+    assert "pyproject.toml#tool.pytest" in keys

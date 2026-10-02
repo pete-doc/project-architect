@@ -22,8 +22,10 @@ from typing import Any
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 TEMPLATES = PLUGIN_ROOT / "templates"
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "adr" / "scripts"))
+sys.path.insert(0, str(PLUGIN_ROOT / "templates" / "ci" / "parch"))
 
 import adr  # noqa: E402  (путь добавлен строкой выше)
+import parch_ci  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -94,17 +96,36 @@ REQUIREMENTS_DEV = (
     "import-linter==2.15\nvulture==2.16\ndeptry==0.25.1\ncoverage==7.16.2\n"
 )
 REQUIREMENTS = "# Рабочие зависимости. Только пакеты из «Разрешённые пакеты» в CONSTITUTION.md.\n"
-INITIAL_BASELINE: dict[str, Any] = {
-    "version": 1,
-    "tests": {"python": ["tests/test_smoke.py::test_smoke"]},
-    "dead_code": {"python": []},
-}
 SMOKE_TEST = '''"""Начальный тест: проверки проекта запускаются. Замените его настоящими тестами."""
 
 
 def test_smoke() -> None:
     assert True
 '''
+
+
+def initial_baseline(project: Path) -> dict[str, Any]:
+    """Начальный baseline Python-проекта: известные тесты, пропуски, подавления и настройки."""
+    return {
+        "version": 1,
+        "tests": {"python": ["tests/test_smoke.py::test_smoke"]},
+        "dead_code": {"python": []},
+        "skips": {
+            "python": parch_ci.scan_counts(
+                project, "python", parch_ci.RULES["python"].skip_patterns, True
+            )
+        },
+        "suppressions": {
+            "python": parch_ci.scan_counts(
+                project,
+                "python",
+                parch_ci.RULES["python"].suppression_patterns,
+                False,
+                in_comments=True,
+            )
+        },
+        "config": {"python": parch_ci.settings_fingerprint(project, "python")},
+    }
 
 
 class Report:
@@ -227,7 +248,7 @@ def init_project(
         report.write("requirements.txt", REQUIREMENTS)
         report.write("requirements-dev.txt", REQUIREMENTS_DEV)
         report.write("tests/test_smoke.py", SMOKE_TEST)
-        report.write("state/baseline.json", json.dumps(INITIAL_BASELINE, indent=2) + "\n")
+        report.write("state/baseline.json", json.dumps(initial_baseline(project), indent=2) + "\n")
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
     for lang in languages:
         if lang in CI_TEMPLATES:

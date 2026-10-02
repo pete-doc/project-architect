@@ -15,4 +15,4 @@ extraPaths = ["plugin/hooks", "plugin/skills/adr/scripts", "plugin/templates/ci/
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["projects"]
-pythonpath = ["plugin/hooks"]
+pythonpath = ["plugin/hooks", "plugin/templates/ci/parch"]

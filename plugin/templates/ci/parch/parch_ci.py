@@ -11,8 +11,12 @@
   duplicates    дубли кода (jscpd), «храповик» по baseline
   architecture  правила архитектуры (import-linter); правило, которое ничего не охватывает, падает
   coverage      покрытие тестами не ниже baseline
-  baseline      обновить baseline (--update); новое нарушение требует --accept-new,
-                пропавший тест требует --accept-removed
+  skips         пропущенные тесты (skip, xfail, Ignore, -Skip) считаются удалёнными
+  suppressions  подавляющие комментарии (type: ignore, noqa, ts-ignore): рост запрещён
+  settings      настройки проверок (ruff, pyright, tsconfig, eslint...) не менялись
+  baseline      обновить baseline (--update); каждое ухудшение требует флага владельца:
+                --accept-new, --accept-removed, --accept-skips,
+                --accept-suppressions, --accept-config
 
 «Храповик»: старые нарушения (они записаны в baseline) CI пропускает, любое новое останавливает.
 Baseline лежит в state/baseline.json и state/jscpd-baseline.json; менять его может только владелец.
@@ -23,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import fnmatch
+import hashlib
 import io
 import json
 import os
@@ -30,6 +36,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tokenize
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -731,50 +738,564 @@ def check_coverage(project: Path, language: str) -> Result:
 # ---------- baseline --update ----------
 
 
-def update_baseline(project: Path, language: str, accept_new: bool, accept_removed: bool) -> Result:
-    result = Result()
-    collector = COLLECTORS[language]
-    baseline = Baseline(project)
-    tests = set(collector.test_ids(project))
-    removed = sorted(baseline.strings("tests", language) - tests)
-    if removed and not accept_removed:
-        result.fail(
-            "Отказ: из baseline пропали бы тесты. Их удаление должен утвердить владелец "
-            "(флаг --accept-removed):",
-            *shown(removed),
-        )
-    has_sources = collector.has_sources(project)
-    dead = collector.dead_code(project) if has_sources else set[str]()
-    initialized = baseline.has("dead_code", language)
-    new_dead = sorted(dead - baseline.strings("dead_code", language))
-    if new_dead and initialized and not accept_new:
-        result.fail(
-            "Отказ: это новые нарушения, записывать их в baseline без решения владельца нельзя "
-            "(флаг --accept-new):",
-            *shown([describe_finding(f) for f in new_dead]),
-        )
-    if has_sources:
-        ensure_empty_jscpd_baseline(project)
-        probe = [*jscpd_command(), *jscpd_args(project, language), "--fail-on-new-clones", "0"]
-        if run(probe, project).returncode != 0 and initialized and not accept_new:
+@dataclass(frozen=True)
+class Accept:
+    """Решения владельца, без которых baseline не принимает ухудшений."""
+
+    new: bool = False
+    removed: bool = False
+    skips: bool = False
+    suppressions: bool = False
+    config: bool = False
+
+
+def refuse_growth(
+    result: Result,
+    baseline: Baseline,
+    section: str,
+    language: str,
+    current: dict[str, int],
+    allowed: bool,
+    flag: str,
+    title: str,
+) -> None:
+    if baseline.has(section, language) and not allowed:
+        more = grown(current, count_dict(baseline.section(section, language)))
+        if more:
             result.fail(
-                "Отказ: в коде есть новые дубли, записывать их в baseline нельзя (--accept-new)."
+                f"Отказ: {title} выросло, записывать это в baseline нельзя ({flag}):", *shown(more)
             )
+
+
+def update_baseline(project: Path, language: str, accept: Accept) -> Result:
+    result = Result()
+    baseline = Baseline(project)
+    skips = scan_counts(project, language, RULES[language].skip_patterns, True)
+    suppressions = scan_counts(
+        project, language, RULES[language].suppression_patterns, False, in_comments=True
+    )
+    config = settings_fingerprint(project, language)
+    refuse_growth(
+        result,
+        baseline,
+        "skips",
+        language,
+        skips,
+        accept.skips,
+        "--accept-skips",
+        "число пропущенных тестов",
+    )
+    refuse_growth(
+        result, baseline, "suppressions", language, suppressions, accept.suppressions,
+        "--accept-suppressions", "число подавляющих комментариев",
+    )  # fmt: skip
+    if baseline.has("config", language) and not accept.config:
+        known = as_dict(baseline.section("config", language))
+        changed = sorted(
+            {k for k in config if known.get(k) != config[k]} | (set(known) - set(config))
+        )
+        if changed:
+            result.fail(
+                "Отказ: настройки проверок изменены, записывать их в baseline нельзя "
+                "(--accept-config):",
+                *shown(changed),
+            )
+    collected = COLLECTORS.get(language)
+    tests: set[str] = set()
+    dead: set[str] = set()
+    if collected is not None:
+        tests = set(collected.test_ids(project))
+        removed = sorted(baseline.strings("tests", language) - tests)
+        if removed and not accept.removed:
+            result.fail(
+                "Отказ: из baseline пропали бы тесты. Их удаление должен утвердить владелец "
+                "(флаг --accept-removed):",
+                *shown(removed),
+            )
+        has_sources = collected.has_sources(project)
+        dead = collected.dead_code(project) if has_sources else set[str]()
+        initialized = baseline.has("dead_code", language)
+        new_dead = sorted(dead - baseline.strings("dead_code", language))
+        if new_dead and initialized and not accept.new:
+            result.fail(
+                "Отказ: это новые нарушения, записывать их в baseline без решения владельца нельзя "
+                "(флаг --accept-new):",
+                *shown([describe_finding(f) for f in new_dead]),
+            )
+        if has_sources:
+            ensure_empty_jscpd_baseline(project)
+            probe = [*jscpd_command(), *jscpd_args(project, language), "--fail-on-new-clones", "0"]
+            if run(probe, project).returncode != 0 and initialized and not accept.new:
+                result.fail(
+                    "Отказ: в коде есть новые дубли, записывать их в baseline нельзя "
+                    "(--accept-new)."
+                )
     if not result.ok:
         return result
-    baseline.set("tests", language, sorted(tests))
-    baseline.set("dead_code", language, sorted(dead))
-    if has_sources:
-        baseline.set("coverage", language, round(collector.coverage(project), 2))
-        refresh = [*jscpd_command(), *jscpd_args(project, language), "--update-baseline"]
-        updated = run(refresh, project)
-        if updated.returncode != 0:
-            raise ToolError("jscpd не смог обновить baseline:\n" + tail(updated, 800))
+    baseline.set("skips", language, skips)
+    baseline.set("suppressions", language, suppressions)
+    baseline.set("config", language, config)
+    if collected is not None:
+        baseline.set("tests", language, sorted(tests))
+        baseline.set("dead_code", language, sorted(dead))
+        if collected.has_sources(project):
+            baseline.set("coverage", language, round(collected.coverage(project), 2))
+            refresh = [*jscpd_command(), *jscpd_args(project, language), "--update-baseline"]
+            updated = run(refresh, project)
+            if updated.returncode != 0:
+                raise ToolError("jscpd не смог обновить baseline:\n" + tail(updated, 800))
     baseline.save()
     result.note(
-        f"baseline обновлён: тестов {len(tests)}, известных находок мёртвого кода {len(dead)}."
+        f"baseline обновлён: тестов {len(tests)}, находок мёртвого кода {len(dead)}, "
+        f"пропусков {sum(skips.values())}, подавлений {sum(suppressions.values())}, "
+        f"отпечатков настроек {len(config)}."
     )
     return result
+
+
+# ---------- правила для языков: пропуски тестов, подавления, файлы настроек ----------
+
+
+@dataclass(frozen=True)
+class LanguageRules:
+    source_extensions: tuple[str, ...]
+    test_file_patterns: tuple[str, ...]  # fnmatch по пути от корня проекта (прямые слэши)
+    skip_patterns: dict[str, str]  # вид пропуска -> регулярное выражение
+    suppression_patterns: dict[str, str]  # вид подавления -> регулярное выражение
+    config_files: tuple[str, ...]  # файлы настроек проверок целиком (fnmatch по имени файла)
+    container_files: tuple[str, ...]  # файлы, где настройки проверок лежат в разделах
+
+
+RULES: dict[str, LanguageRules] = {
+    "python": LanguageRules(
+        source_extensions=(".py",),
+        test_file_patterns=("test_*.py", "*_test.py", "conftest.py"),
+        skip_patterns={
+            "pytest.mark.skip": r"\bpytest\.mark\.(skip|skipif|xfail)\b",
+            "pytest.skip()": r"\bpytest\.(skip|xfail|importorskip)\s*\(",
+            "unittest.skip": r"\bunittest\.(skip|skipIf|skipUnless|expectedFailure)\b",
+            "skipTest": r"\bskipTest\s*\(|\bSkipTest\b",
+            "@skip": r"^\s*@(skip|skipIf|skipUnless|expectedFailure)\b",
+            "add_marker(skip)": r"\badd_marker\s*\(.*\b(skip|xfail)\b",
+        },
+        suppression_patterns={
+            "type: ignore": r"#\s*type:\s*ignore",
+            "pyright: ignore": r"#\s*pyright:\s*ignore",
+            "pyright: basic/off": r"#\s*pyright:\s*(basic|standard|off)\b",
+            "noqa": r"#\s*(ruff:\s*|flake8:\s*)?noqa\b",
+            "pragma: no cover": r"#\s*pragma:\s*no\s*cover",
+            "mypy: ignore-errors": r"#\s*mypy:\s*ignore-errors",
+        },
+        config_files=(
+            "ruff.toml",
+            ".ruff.toml",
+            "pyrightconfig.json",
+            ".coveragerc",
+            "pytest.ini",
+            ".importlinter",
+            ".jscpd.json",
+            "tox.ini",
+        ),  # fmt: skip
+        container_files=("pyproject.toml", "setup.cfg"),
+    ),
+    "typescript": LanguageRules(
+        source_extensions=(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue"),
+        test_file_patterns=(
+            "*.test.ts",
+            "*.test.tsx",
+            "*.test.js",
+            "*.test.jsx",
+            "*.spec.ts",
+            "*.spec.tsx",
+            "*.spec.js",
+            "*.spec.jsx",
+            "*.test.mts",
+            "*.spec.mts",
+            "__tests__/*",
+            "*/__tests__/*",
+        ),  # fmt: skip
+        skip_patterns={
+            "it/test/describe.skip": (
+                r"\b(it|test|describe|suite|context)\."
+                r"(skip|skipIf|todo|only|fails|failing)\b"
+            ),
+            "xit/xtest/xdescribe": r"\b(xit|xtest|xdescribe|fit|fdescribe)\s*\(",
+        },
+        suppression_patterns={
+            "@ts-ignore": r"@ts-(ignore|expect-error|nocheck)\b",
+            "eslint-disable": r"\beslint-disable",
+            "biome-ignore": r"\bbiome-ignore\b",
+            "prettier-ignore": r"\bprettier-ignore\b",
+            "coverage ignore": r"\b(istanbul|c8|v8)\s+ignore\b",
+            "knip-ignore": r"@public\b|\bknip-ignore\b",
+        },
+        config_files=(
+            "tsconfig*.json",
+            ".eslintrc*",
+            "eslint.config.*",
+            "biome.json",
+            "biome.jsonc",
+            ".prettierrc*",
+            "prettier.config.*",
+            "vitest.config.*",
+            "vitest.workspace.*",
+            "vite.config.*",
+            "jest.config.*",
+            ".dependency-cruiser.*",
+            "dependency-cruiser.*",
+            "knip.json",
+            "knip.jsonc",
+            ".knip.*",
+            ".jscpd.json",
+            ".nycrc*",
+            ".c8rc*",
+        ),  # fmt: skip
+        container_files=("package.json",),
+    ),
+    "csharp": LanguageRules(
+        source_extensions=(".cs",),
+        test_file_patterns=("*Tests.cs", "*Test.cs", "*.Tests/*", "*/*.Tests/*", "*Tests/*"),
+        skip_patterns={
+            "Skip =": r"\bSkip\s*=",
+            "[Ignore]/[Explicit]": r"\[\s*(Ignore|Explicit)\b",
+            "Assert.Ignore": r"\bAssert\.(Ignore|Inconclusive)\s*\(",
+            "Skip.If": r"\bSkip\.(If|IfNot)\s*\(",
+        },
+        suppression_patterns={
+            "#pragma warning disable": r"#pragma\s+warning\s+disable",
+            "SuppressMessage": r"\bSuppressMessage(Attribute)?\s*\(",
+            "ReSharper disable": r"//\s*(ReSharper|noinspection)\b",
+            "#nullable disable": r"#nullable\s+disable",
+            "ExcludeFromCodeCoverage": r"\bExcludeFromCodeCoverage\b",
+        },
+        config_files=(
+            ".editorconfig",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "Directory.Packages.props",
+            "*.ruleset",
+            "*.globalconfig",
+            "*.runsettings",
+            "global.json",
+            "stylecop.json",
+            ".jscpd.json",
+            "coverlet.runsettings",
+        ),  # fmt: skip
+        container_files=("*.csproj",),
+    ),
+    "powershell": LanguageRules(
+        source_extensions=(".ps1", ".psm1", ".psd1"),
+        test_file_patterns=("*.Tests.ps1",),
+        skip_patterns={
+            "-Skip": r"\s-Skip\b",
+            "Set-ItResult": r"\bSet-ItResult\b.*-(Skipped|Pending|Inconclusive)\b",
+            "-Pending": r"\s-Pending\b",
+        },
+        suppression_patterns={
+            "SuppressMessage": r"\bSuppressMessage(Attribute)?\s*\(",
+            "PSScriptAnalyzer disable": r"#\s*(PSScriptAnalyzer|noqa)\b",
+        },
+        config_files=(
+            "PSScriptAnalyzerSettings.psd1",
+            "PesterConfiguration*",
+            "pester.config.*",
+            ".jscpd.json",
+        ),  # fmt: skip
+        container_files=(),
+    ),
+}
+
+WALK_SKIP_DIRS = {
+    ".git", ".github", ".claude", ".venv", "venv", "env", "node_modules", "__pycache__",
+    "build", "dist", "bin", "obj", ".tox", "site-packages", ".mypy_cache", ".ruff_cache",
+    ".pytest_cache",
+}  # fmt: skip
+PYPROJECT_SECTIONS = (
+    "tool.ruff", "tool.pyright", "tool.pytest", "tool.coverage", "tool.importlinter",
+    "tool.vulture", "tool.deptry", "tool.parch",
+)  # fmt: skip
+SETUP_CFG_PREFIXES = (
+    "tool:pytest",
+    "coverage:",
+    "flake8",
+    "pyright",
+    "importlinter",
+    "isort",
+    "mypy",
+)
+PACKAGE_JSON_KEYS = ("jest", "vitest", "eslintConfig", "prettier", "c8", "nyc", "mocha", "ava")
+PACKAGE_JSON_SCRIPTS = re.compile(r"^(test|lint|typecheck|type-check|check|coverage|format)")
+CSPROJ_ELEMENTS = {
+    "Nullable", "TreatWarningsAsErrors", "WarningsAsErrors", "WarningsNotAsErrors", "NoWarn",
+    "AnalysisMode", "AnalysisLevel", "EnforceCodeStyleInBuild", "LangVersion", "IsTestProject",
+    "CollectCoverage", "Threshold", "ThresholdType",
+}  # fmt: skip
+
+
+def all_config_patterns() -> list[str]:
+    return [p for rules in RULES.values() for p in rules.config_files]
+
+
+def matches_any(name: str, patterns: tuple[str, ...] | list[str]) -> bool:
+    return any(fnmatch.fnmatch(name.lower(), p.lower()) for p in patterns)
+
+
+def is_pure_config(rel: str) -> bool:
+    """Файл целиком состоит из настроек проверок (любой язык)."""
+    return matches_any(PurePosixPath(rel).name, all_config_patterns())
+
+
+def is_container(rel: str) -> bool:
+    """Файл, в котором настройки проверок лежат лишь в части разделов (любой язык)."""
+    name = PurePosixPath(rel).name
+    patterns = [p for rules in RULES.values() for p in rules.container_files]
+    return matches_any(name, patterns) or name.lower() == "directory.build.props"
+
+
+def digest(text: str) -> str:
+    normalized = "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def digest_value(value: object) -> str:
+    return digest(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def container_settings(rel: str, text: str) -> dict[str, str]:
+    """Отпечатки разделов с настройками проверок в pyproject.toml, setup.cfg, package.json, csproj.
+
+    Разбор, который не удался, считается изменением (в отпечаток попадает хеш текста целиком):
+    сломанный файл не должен «молча» оставлять настройки прежними.
+    """
+    name = PurePosixPath(rel).name.lower()
+    found: dict[str, str] = {}
+    try:
+        if name == "pyproject.toml":
+            data = as_dict(tomllib.loads(text))
+            for section in PYPROJECT_SECTIONS:
+                node: object = data
+                for part in section.split("."):
+                    node = as_dict(node).get(part)
+                if node is not None:
+                    found[f"{rel}#{section}"] = digest_value(node)
+        elif name == "setup.cfg":
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(text)
+            for section in parser.sections():
+                if section.startswith(SETUP_CFG_PREFIXES):
+                    found[f"{rel}#{section}"] = digest_value(dict(parser.items(section)))
+        elif name == "package.json":
+            data = as_dict(json.loads(text))
+            for key in PACKAGE_JSON_KEYS:
+                if key in data:
+                    found[f"{rel}#{key}"] = digest_value(data[key])
+            for script, command in as_dict(data.get("scripts")).items():
+                if PACKAGE_JSON_SCRIPTS.match(script):
+                    found[f"{rel}#scripts.{script}"] = digest_value(command)
+        elif name.endswith((".csproj", ".props")):
+            values: dict[str, list[str]] = {}
+            for element in ElementTree.fromstring(text).iter():
+                tag = element.tag.split("}")[-1]
+                if tag in CSPROJ_ELEMENTS:
+                    values.setdefault(tag, []).append((element.text or "").strip())
+            for tag, items in values.items():
+                found[f"{rel}#{tag}"] = digest_value(items)
+    except (ValueError, ElementTree.ParseError, configparser.Error):
+        found[f"{rel}#НЕ-РАЗОБРАН"] = digest(text)
+    return found
+
+
+def settings_of_text(rel: str, text: str) -> dict[str, str]:
+    if is_pure_config(rel):
+        return {rel: digest(text)}
+    if is_container(rel):
+        return container_settings(rel, text)
+    return {}
+
+
+def walk_files(project: Path, extensions: tuple[str, ...] | None = None) -> list[Path]:
+    found: list[Path] = []
+    for folder, dirs, files in os.walk(project):
+        dirs[:] = sorted(d for d in dirs if d not in WALK_SKIP_DIRS)
+        for file in sorted(files):
+            if extensions is None or file.lower().endswith(extensions):
+                found.append(Path(folder) / file)
+    return found
+
+
+def rel_of(project: Path, path: Path) -> str:
+    return path.relative_to(project).as_posix()
+
+
+def settings_fingerprint(project: Path, language: str) -> dict[str, str]:
+    rules = RULES[language]
+    current: dict[str, str] = {}
+    for path in walk_files(project):
+        rel = rel_of(project, path)
+        name = PurePosixPath(rel).name
+        if matches_any(name, rules.config_files) or matches_any(name, rules.container_files):
+            current.update(
+                settings_of_text(rel, path.read_text(encoding="utf-8", errors="replace"))
+            )
+    return current
+
+
+def check_settings(project: Path, language: str) -> Result:
+    result = Result()
+    current = settings_fingerprint(project, language)
+    baseline = Baseline(project)
+    if not baseline.has("config", language):
+        result.note(
+            "Внимание: в baseline нет отпечатка настроек проверок, их изменение не будет замечено. "
+            "Создайте его: baseline --update."
+        )
+        return result
+    known = as_dict(baseline.section("config", language))
+    changed = sorted(k for k in current if known.get(k) != current[k])
+    removed = sorted(k for k in known if k not in current)
+    if changed or removed:
+        result.fail(
+            "Настройки проверок изменены (ruff, pyright, pytest, coverage, import-linter, "
+            "tsconfig, eslint, .editorconfig и аналоги):",
+            *shown(
+                [f"{k}: изменён или добавлен" for k in changed] + [f"{k}: удалён" for k in removed]
+            ),
+            "Ослабить проверки, правя их настройки, нельзя. Если изменение настоящее, его "
+            "утверждает "
+            "владелец: python .github/parch/parch_ci.py baseline --update --accept-config",
+        )
+    else:
+        result.note(f"Настройки проверок не менялись (отпечатков: {len(current)}).")
+    return result
+
+
+# ---------- пропуски тестов и подавляющие комментарии ----------
+
+
+def blank_python_comments_and_strings(text: str) -> tuple[str, list[str]]:
+    """Код без комментариев и строк, а также тексты настоящих комментариев (через tokenize)."""
+    lines = text.split("\n")
+    comments: list[str] = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT:
+                comments.append(token.string)
+            if token.type in (tokenize.COMMENT, tokenize.STRING):
+                (start_row, start_col), (end_row, end_col) = token.start, token.end
+                for row in range(start_row, end_row + 1):
+                    line = lines[row - 1]
+                    left = start_col if row == start_row else 0
+                    right = end_col if row == end_row else len(line)
+                    lines[row - 1] = line[:left] + " " * (right - left) + line[right:]
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return text, re.findall(r"#.*", text)
+    return "\n".join(lines), comments
+
+
+def is_test_file(rules: LanguageRules, rel: str) -> bool:
+    return matches_any(PurePosixPath(rel).name, rules.test_file_patterns) or any(
+        fnmatch.fnmatch(rel.lower(), p.lower()) for p in rules.test_file_patterns if "/" in p
+    )
+
+
+def scan_counts(
+    project: Path,
+    language: str,
+    patterns: dict[str, str],
+    only_tests: bool,
+    in_comments: bool = False,
+) -> dict[str, int]:
+    """Сколько раз встречается каждый вид (по файлам): «файл|вид» -> число.
+
+    Для Python разбор через tokenize: подавления ищутся только в настоящих комментариях, пропуски
+    только в коде (не в строках и не в комментариях). Для остальных языков поиск по тексту.
+    """
+    rules = RULES[language]
+    counts: dict[str, int] = {}
+    for path in walk_files(project, rules.source_extensions):
+        rel = rel_of(project, path)
+        if only_tests and not is_test_file(rules, rel):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        scope = text
+        if language == "python":
+            code, comments = blank_python_comments_and_strings(text)
+            scope = "\n".join(comments) if in_comments else code
+        for kind, pattern in patterns.items():
+            found = len(re.findall(pattern, scope, flags=re.MULTILINE | re.IGNORECASE))
+            if found:
+                counts[f"{rel}|{kind}"] = counts.get(f"{rel}|{kind}", 0) + found
+    return counts
+
+
+def count_dict(value: object) -> dict[str, int]:
+    return {k: int(v) for k, v in as_dict(value).items() if isinstance(v, (int, float))}
+
+
+def grown(current: dict[str, int], known: dict[str, int]) -> list[str]:
+    return sorted(
+        f"{k}: было {known.get(k, 0)}, стало {v}" for k, v in current.items() if v > known.get(k, 0)
+    )
+
+
+def check_counts(
+    project: Path, language: str, section: str, title: str, hint: str, only_tests: bool
+) -> Result:
+    result = Result()
+    rules = RULES[language]
+    patterns = rules.skip_patterns if section == "skips" else rules.suppression_patterns
+    current = scan_counts(
+        project, language, patterns, only_tests, in_comments=section == "suppressions"
+    )
+    baseline = Baseline(project)
+    known = count_dict(baseline.section(section, language))
+    more = grown(current, known)
+    if more:
+        flag = "--accept-skips" if section == "skips" else "--accept-suppressions"
+        result.fail(
+            f"{title} (новых или больше, чем в baseline):",
+            *shown(more),
+            hint,
+            "Если это решение владельца: "
+            f"python .github/parch/parch_ci.py baseline --update {flag}",
+        )
+        return result
+    result.note(
+        f"{title}: не выросло (сейчас {sum(current.values())}, в baseline {sum(known.values())})."
+    )
+    if sum(current.values()) < sum(known.values()):
+        result.note("Улучшение: стало меньше, чем в baseline. Закрепите: baseline --update.")
+    if not baseline.has(section, language):
+        result.note(
+            "Внимание: в baseline нет этого раздела, рост не будет замечен. "
+            "Создайте: baseline --update."
+        )
+    return result
+
+
+def check_skips(project: Path, language: str) -> Result:
+    return check_counts(
+        project,
+        language,
+        "skips",
+        "Пропущенные тесты (skip, skipif, xfail, only, Ignore, -Skip)",
+        "Пропущенный тест не проверяет ничего: он считается удалённым. Почините тест или "
+        "удалите его "
+        "с решением владельца.",
+        only_tests=True,
+    )
+
+
+def check_suppressions(project: Path, language: str) -> Result:
+    return check_counts(
+        project,
+        language,
+        "suppressions",
+        "Подавляющие комментарии (type: ignore, noqa, pragma: no cover, ts-ignore, pragma warning "
+        "disable и аналоги)",
+        "Не заглушайте проверку, исправьте причину. Число подавлений не должно расти.",
+        only_tests=False,
+    )
 
 
 # ---------- адаптеры языков ----------
@@ -815,6 +1336,18 @@ CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "duplicates": check_duplicates,
     "architecture": check_architecture,
     "coverage": check_coverage,
+    "skips": check_skips,
+    "suppressions": check_suppressions,
+    "settings": check_settings,
+}
+COLLECTOR_CHECKS = {
+    "tests",
+    "modules",
+    "deps",
+    "dead-code",
+    "duplicates",
+    "architecture",
+    "coverage",
 }
 
 
@@ -824,18 +1357,34 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="parch_ci")
     parser.add_argument("check", choices=[*CHECKS, "baseline"])
-    parser.add_argument("--language", default="python", choices=list(COLLECTORS))
+    parser.add_argument("--language", default="python", choices=list(RULES))
     parser.add_argument("--project", default=".")
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--accept-new", action="store_true")
     parser.add_argument("--accept-removed", action="store_true")
+    parser.add_argument("--accept-skips", action="store_true")
+    parser.add_argument("--accept-suppressions", action="store_true")
+    parser.add_argument("--accept-config", action="store_true")
     args = parser.parse_args(argv)
     project = Path(args.project).resolve()
     try:
         if args.check == "baseline":
             if not args.update:
                 parser.error("для baseline нужен флаг --update")
-            result = update_baseline(project, args.language, args.accept_new, args.accept_removed)
+            accept = Accept(
+                new=args.accept_new,
+                removed=args.accept_removed,
+                skips=args.accept_skips,
+                suppressions=args.accept_suppressions,
+                config=args.accept_config,
+            )
+            result = update_baseline(project, args.language, accept)
+        elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
+            print(
+                f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка "
+                "ещё не реализована"
+            )
+            return 1
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:

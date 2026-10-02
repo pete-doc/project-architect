@@ -382,3 +382,195 @@ def test_workflow_template_runs_every_check_and_pins_versions() -> None:
     assert 'node-version: "22"' in workflow  # jscpd запускается через npx из скрипта
     script = SCRIPT.read_text(encoding="utf-8")
     assert f'JSCPD_VERSION = "{JSCPD_VERSION}"' in script  # версия jscpd зафиксирована
+
+
+# ---------- пропущенные тесты считаются удалёнными ----------
+
+SKIP_VARIANTS = [
+    '@pytest.mark.skip(reason="потом")\ndef test_extra() -> None:\n    assert True\n',
+    '@pytest.mark.skipif(True, reason="потом")\ndef test_extra() -> None:\n    assert True\n',
+    "@pytest.mark.xfail\ndef test_extra() -> None:\n    assert False\n",
+    'def test_extra() -> None:\n    pytest.skip("потом")\n',
+    'def test_extra() -> None:\n    pytest.importorskip("nonexistent_module")\n',
+    'pytestmark = pytest.mark.skip(reason="всё")\n\n\ndef test_extra() -> None:\n    assert True\n',
+    "@unittest.skip('потом')\ndef test_extra() -> None:\n    assert True\n",
+    "class TestOld(unittest.TestCase):\n    def test_old(self) -> None:\n"
+    "        self.skipTest('потом')\n",
+]
+
+
+def add_extra_test(shop: Shop, body: str) -> None:
+    imports = [name for name in ("unittest", "pytest") if name in body]
+    header = "".join(f"import {name}\n" for name in imports)
+    shop.write("tests/test_extra.py", header + ("\n\n" if header else "") + body)
+
+
+@pytest.mark.parametrize("body", SKIP_VARIANTS)
+def test_a_new_skipped_test_is_a_violation(shop: Shop, body: str) -> None:
+    add_extra_test(shop, body)
+    out = shop.fails("skips")
+    assert "tests/test_extra.py" in out
+    assert "Пропущенный тест не проверяет ничего" in out
+    assert "--accept-skips" in out
+
+
+def test_skip_words_in_strings_and_comments_are_not_skips(shop: Shop) -> None:
+    add_extra_test(
+        shop,
+        '# @pytest.mark.skip(reason="закомментировано")\n'
+        'TEXT = "pytest.skip(1) и @pytest.mark.xfail"\n\n\n'
+        "def test_extra() -> None:\n    assert TEXT\n",
+    )
+    shop.passes("skips")
+
+
+def test_old_skips_pass_and_new_ones_do_not(make_shop: Callable[[], Shop]) -> None:
+    project = make_shop()
+    add_extra_test(project, SKIP_VARIANTS[0])
+    project.passes("baseline", "--update")
+    project.passes("skips")
+    project.append("tests/test_extra.py", "\n\n" + SKIP_VARIANTS[1].split("\n\n", 0)[0])
+    out = project.fails("skips")
+    assert "было 1, стало 2" in out or "было 1, стало" in out
+
+
+def test_baseline_refuses_new_skips_without_the_owner_flag(shop: Shop) -> None:
+    add_extra_test(shop, SKIP_VARIANTS[0])
+    refused = shop.fails("baseline", "--update")
+    assert "--accept-skips" in refused
+    shop.passes("baseline", "--update", "--accept-skips")
+    shop.passes("skips")
+
+
+def test_removing_a_skip_is_an_improvement(make_shop: Callable[[], Shop]) -> None:
+    project = make_shop()
+    add_extra_test(project, SKIP_VARIANTS[0])
+    project.passes("baseline", "--update")
+    add_extra_test(project, "def test_extra() -> None:\n    assert True\n")
+    assert "Улучшение" in project.passes("skips")
+
+
+# ---------- подавляющие комментарии: число не растёт ----------
+
+SUPPRESSIONS = [
+    "x: int = 'a'  # type: ignore",
+    "x: int = 'a'  # pyright: ignore[reportAssignmentType]",
+    "import os  # noqa: F401",
+    "import sys  # ruff: noqa",
+    "def f() -> None:  # pragma: no cover\n    pass",
+    "# pyright: basic",
+    "# mypy: ignore-errors",
+]
+
+
+@pytest.mark.parametrize("line", SUPPRESSIONS)
+def test_a_new_suppression_comment_is_a_violation(shop: Shop, line: str) -> None:
+    shop.append("src/shop/util.py", "\n\n" + line + "\n")
+    out = shop.fails("suppressions")
+    assert "src/shop/util.py" in out
+    assert "Число подавлений не должно расти" in out
+    assert "--accept-suppressions" in out
+
+
+def test_suppression_words_in_strings_are_not_suppressions(shop: Shop) -> None:
+    shop.append("src/shop/util.py", '\n\nNOTE = "# noqa и # type: ignore как текст"\n')
+    shop.passes("suppressions")
+
+
+def test_old_suppressions_pass_new_ones_do_not_and_moving_inside_a_file_is_fine(
+    make_shop: Callable[[], Shop],
+) -> None:
+    project = make_shop()
+    project.append("src/shop/util.py", "\n\nimport os  # noqa: F401\n")
+    project.passes("baseline", "--update")
+    project.passes("suppressions")
+    util = (project.root / "src" / "shop" / "util.py").read_text(encoding="utf-8")
+    moved = util.replace("\n\nimport os  # noqa: F401\n", "") + "\n\nimport sys  # noqa: F401\n"
+    project.write("src/shop/util.py", moved)
+    project.passes("suppressions")  # то же число в том же файле
+    project.append("src/shop/util.py", "\n\nimport re  # noqa: F401\n")
+    assert "было 1, стало 2" in project.fails("suppressions")
+
+
+def test_baseline_refuses_new_suppressions_without_the_owner_flag(shop: Shop) -> None:
+    shop.append("src/shop/util.py", "\n\nimport os  # noqa: F401\n")
+    refused = shop.fails("baseline", "--update")
+    assert "--accept-suppressions" in refused
+    shop.passes("baseline", "--update", "--accept-suppressions")
+    shop.passes("suppressions")
+
+
+# ---------- настройки проверок защищены отпечатком ----------
+
+
+def edit_settings(shop: Shop, rel: str, old: str, new: str) -> None:
+    text = (shop.root / rel).read_text(encoding="utf-8")
+    assert old in text, (rel, old)
+    shop.write(rel, text.replace(old, new, 1))
+
+
+SETTINGS_CHANGES = [
+    ("pyproject.toml", "line-length = 100", "line-length = 200"),
+    ("pyproject.toml", 'select = ["E", "F", "I", "B", "UP"]', 'select = ["E"]'),
+    (
+        "pyproject.toml",
+        'testpaths = ["tests"]',
+        'testpaths = ["tests"]\naddopts = "--deselect tests"',
+    ),
+    (
+        ".importlinter",
+        "allow_indirect_imports = True",
+        "allow_indirect_imports = True\nignore_imports =\n    shop.ui -> shop.db",
+    ),
+]
+
+
+@pytest.mark.parametrize(("rel", "old", "new"), SETTINGS_CHANGES)
+def test_changing_check_settings_is_blocked(shop: Shop, rel: str, old: str, new: str) -> None:
+    edit_settings(shop, rel, old, new)
+    out = shop.fails("settings")
+    assert rel in out
+    assert "--accept-config" in out
+
+
+@pytest.mark.parametrize(
+    ("rel", "content"),
+    [
+        ("ruff.toml", "line-length = 300\n"),
+        ("pyrightconfig.json", '{"typeCheckingMode": "off"}\n'),
+        (".coveragerc", "[run]\nomit = src/*\n"),
+        ("pytest.ini", "[pytest]\naddopts = -k nothing\n"),
+        ("setup.cfg", "[tool:pytest]\naddopts = --co\n"),
+        ("tox.ini", "[pytest]\naddopts = -q\n"),
+    ],
+)
+def test_adding_a_settings_file_is_blocked(shop: Shop, rel: str, content: str) -> None:
+    shop.write(rel, content)
+    out = shop.fails("settings")
+    assert rel in out
+
+
+def test_deleting_the_architecture_config_is_blocked(shop: Shop) -> None:
+    (shop.root / ".importlinter").unlink()
+    out = shop.fails("settings")
+    assert ".importlinter: удалён" in out
+
+
+def test_unrelated_changes_do_not_touch_the_settings_fingerprint(shop: Shop) -> None:
+    text = (shop.root / "pyproject.toml").read_text(encoding="utf-8")
+    shop.write("pyproject.toml", text + '\n[project]\nname = "shop"\nversion = "1"\n')
+    shop.passes("settings")
+
+
+def test_baseline_refuses_changed_settings_without_the_owner_flag(shop: Shop) -> None:
+    edit_settings(shop, "pyproject.toml", "line-length = 100", "line-length = 120")
+    refused = shop.fails("baseline", "--update")
+    assert "--accept-config" in refused
+    shop.passes("baseline", "--update", "--accept-config")
+    shop.passes("settings")
+
+
+def test_workflow_template_runs_the_new_checks() -> None:
+    workflow = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
+    for check in ("skips", "suppressions", "settings"):
+        assert f"parch_ci.py {check}" in workflow

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from _common import managed_root
-from conftest import CONSTITUTION, HookResult, bash, file_call, powershell, run_hook
+from conftest import CONSTITUTION, HOOKS, HookResult, bash, file_call, powershell, run_hook
 
 IMPLEMENTER = "parch:implementer"
 
@@ -512,3 +512,208 @@ def test_docs_folder_is_not_mistaken_for_a_project_root(project: Path) -> None:
     assert managed_root(project / "docs") == project
     assert managed_root(project / "docs" / "adr") == project
     assert managed_root(project.parent) is None or managed_root(project.parent) != project / "docs"
+
+
+# ---------- guard_paths: настройки проверок спрашивают владельца ----------
+
+SETTINGS_FILES = [
+    "ruff.toml",
+    ".ruff.toml",
+    "pyrightconfig.json",
+    ".coveragerc",
+    "pytest.ini",
+    ".importlinter",
+    "tox.ini",
+    "tsconfig.json",
+    "tsconfig.build.json",
+    ".eslintrc.json",
+    "eslint.config.js",
+    "biome.json",
+    ".prettierrc",
+    "prettier.config.js",
+    "vitest.config.ts",
+    "jest.config.js",
+    ".dependency-cruiser.cjs",
+    "knip.json",
+    ".jscpd.json",
+    ".editorconfig",
+    "Directory.Build.props",
+    "App.ruleset",
+    "x.globalconfig",
+    "global.json",
+    "stylecop.json",
+    "PSScriptAnalyzerSettings.psd1",
+    "PesterConfiguration.psd1",
+    "src/web/tsconfig.json",
+]
+PYPROJECT = """[project]
+name = "demo"
+dependencies = ["requests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.importlinter]
+root_package = "demo"
+"""
+
+
+def write_call(path: Path, content: str) -> dict[str, object]:
+    return {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(path), "content": content},
+    }
+
+
+def asks(result: HookResult) -> bool:
+    return (
+        result.code == 0
+        and bool(result.stdout.strip())
+        and json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    )
+
+
+@pytest.mark.parametrize("rel", SETTINGS_FILES)
+@pytest.mark.parametrize("role", EVERY_ROLE)
+def test_settings_files_need_owner_confirmation_for_every_role(
+    rel: str, role: str | None, project: Path
+) -> None:
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    assert asks(result), result.stderr
+    reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "настройки проверок" in reason
+
+
+def settings_edit(project: Path, rel: str, old: str, new: str, text: str) -> HookResult:
+    (project / rel).parent.mkdir(parents=True, exist_ok=True)
+    (project / rel).write_text(text, encoding="utf-8")
+    return run_hook("guard_paths.py", edit_call(project / rel, old, new), project)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("line-length = 100", "line-length = 300"),
+        ('typeCheckingMode = "strict"', 'typeCheckingMode = "off"'),
+        ('testpaths = ["tests"]', 'testpaths = ["nothing"]'),
+        ("branch = true", 'branch = false\nomit = ["src/*"]'),
+        ('root_package = "demo"', 'root_package = "other"'),
+    ],
+)
+def test_editing_a_check_section_of_pyproject_asks_the_owner(
+    project: Path, old: str, new: str
+) -> None:
+    assert asks(settings_edit(project, "pyproject.toml", old, new, PYPROJECT))
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('dependencies = ["requests"]', 'dependencies = ["requests", "rich"]'),
+        ('name = "demo"', 'name = "demo2"'),
+    ],
+)
+def test_editing_unrelated_parts_of_pyproject_is_free(project: Path, old: str, new: str) -> None:
+    result = settings_edit(project, "pyproject.toml", old, new, PYPROJECT)
+    assert result.code == 0 and result.stdout == "", result.stdout
+
+
+def test_writing_a_whole_pyproject_compares_the_check_sections(project: Path) -> None:
+    (project / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
+    same_settings = PYPROJECT.replace('name = "demo"', 'name = "renamed"')
+    free = run_hook(
+        "guard_paths.py", write_call(project / "pyproject.toml", same_settings), project
+    )
+    assert free.code == 0 and free.stdout == ""
+    weaker = PYPROJECT.replace('typeCheckingMode = "strict"', 'typeCheckingMode = "basic"')
+    assert asks(run_hook("guard_paths.py", write_call(project / "pyproject.toml", weaker), project))
+    broken = "[tool.ruff\nline-length = "
+    assert asks(run_hook("guard_paths.py", write_call(project / "pyproject.toml", broken), project))
+
+
+def test_multiedit_of_pyproject_is_compared_too(project: Path) -> None:
+    (project / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
+    call = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "MultiEdit",
+        "tool_input": {
+            "file_path": str(project / "pyproject.toml"),
+            "edits": [
+                {"old_string": 'name = "demo"', "new_string": 'name = "x"'},
+                {"old_string": "line-length = 100", "new_string": "line-length = 500"},
+            ],
+        },
+    }
+    assert asks(run_hook("guard_paths.py", call, project))
+
+
+SETUP_CFG = "[metadata]\nname = a\n[tool:pytest]\naddopts = -q\n"
+PACKAGE_TEST = '{"name": "a", "scripts": {"test": "vitest run"}}'
+PACKAGE_START = '{"name": "a", "scripts": {"start": "node a"}}'
+PACKAGE_JEST = '{"name": "a", "jest": {"bail": 1}}'
+CSPROJ = "<Project><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>"
+
+
+@pytest.mark.parametrize(
+    ("rel", "text", "old", "new", "settings"),
+    [
+        ("setup.cfg", SETUP_CFG, "-q", "--co", True),
+        ("setup.cfg", SETUP_CFG, "name = a", "name = b", False),
+        ("package.json", PACKAGE_TEST, "vitest run", "echo ok", True),
+        ("package.json", PACKAGE_START, "node a", "node b", False),
+        ("package.json", PACKAGE_JEST, '"bail": 1', '"bail": 0', True),
+        ("package.json", '{"name": "a", "version": "1"}', '"1"', '"2"', False),
+        ("App.csproj", CSPROJ, "enable", "disable", True),
+        ("App.csproj", CSPROJ, "</Project>", "<ItemGroup/></Project>", False),
+    ],
+)
+def test_other_settings_containers(
+    project: Path, rel: str, text: str, old: str, new: str, settings: bool
+) -> None:
+    result = settings_edit(project, rel, old, new, text)
+    assert asks(result) is settings, (rel, result.stdout)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i s/100/300/ pyproject.toml",
+        "echo 'x' >> ruff.toml",
+        "echo '{}' > tsconfig.json",
+        "tee .coveragerc",
+    ],
+)
+def test_shell_writes_to_settings_ask_the_owner(project: Path, command: str) -> None:
+    (project / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
+    assert asks(run_hook("guard_paths.py", bash(command), project))
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "dontAsk"])
+def test_settings_edit_is_forbidden_when_the_owner_cannot_be_asked(
+    project: Path, mode: str
+) -> None:
+    result = run_hook(
+        "guard_paths.py", file_call("Write", project / "ruff.toml"), project, permission_mode=mode
+    )
+    assert_blocked(result, "guard_paths", "Спросить владельца сейчас нельзя")
+
+
+def test_permissions_template_asks_for_every_settings_file_pattern() -> None:
+    from parch_ci import all_config_patterns
+
+    template = json.loads(
+        (HOOKS.parent / "templates" / "claude" / "settings.json").read_text(encoding="utf-8")
+    )
+    ask = set(template["permissions"]["ask"])
+    missing = [p for p in all_config_patterns() if f"Edit({p})" not in ask]
+    assert not missing, missing

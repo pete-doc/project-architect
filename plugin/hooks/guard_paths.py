@@ -15,8 +15,12 @@
 from __future__ import annotations
 
 import fnmatch
+import importlib
 import re
+import sys
 from pathlib import Path, PurePosixPath
+from types import ModuleType
+from typing import cast
 
 from _common import (
     FILE_TOOLS,
@@ -162,7 +166,60 @@ def _sets_accepted_status(data: JsonDict, command: str) -> bool:
     return "proposed" in (old or command).lower() and bool(_ACCEPTED_WORD.search(new or command))
 
 
-def _decide(rel: str, role: str, project: Path, data: JsonDict, command: str) -> Block | Ask | None:
+def _ci_module() -> ModuleType:
+    """Единый источник правил про файлы настроек проверок: скрипт CI из шаблонов плагина."""
+    folder = str(Path(__file__).resolve().parents[1] / "templates" / "ci" / "parch")
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    return importlib.import_module("parch_ci")
+
+
+def _simulated_text(data: JsonDict, current: str) -> str | None:
+    """Текст файла после правки инструментом Write, Edit или MultiEdit; None, если не понять."""
+    fields = tool_input(data)
+    tool = get_str(data, "tool_name")
+    if tool == "Write":
+        content = fields.get("content")
+        return content if isinstance(content, str) else None
+    edits: list[object] = [fields]
+    if tool == "MultiEdit":
+        listed = fields.get("edits")
+        edits = list(listed) if isinstance(listed, list) else []  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+    text = current
+    for item in edits:
+        step = cast("dict[str, object]", item) if isinstance(item, dict) else {}
+        old, new = step.get("old_string"), step.get("new_string")
+        if not isinstance(old, str) or not isinstance(new, str) or old not in text:
+            return None
+        text = text.replace(old, new) if step.get("replace_all") else text.replace(old, new, 1)
+    return text
+
+
+def _settings_reason(rel: str, real: Path, data: JsonDict, command: str) -> str | None:
+    """Правка касается настроек проверок (линтер, типы, тесты, покрытие, архитектура)."""
+    ci = _ci_module()
+    base = (
+        "это настройки проверок: ослаблять линтер, типы, тесты, покрытие или правила архитектуры "
+        "можно только по решению владельца"
+    )
+    if ci.is_pure_config(rel):
+        return base
+    if not ci.is_container(rel):
+        return None
+    if command:
+        return base  # правка через оболочку: какой раздел меняется, не понять
+    current = real.read_text(encoding="utf-8", errors="replace") if real.is_file() else ""
+    after = _simulated_text(data, current)
+    if after is None:
+        return None
+    if ci.settings_of_text(rel, current) != ci.settings_of_text(rel, after):
+        return f"в этом файле меняются настройки проверок ({base})"
+    return None
+
+
+def _decide(
+    rel: str, real: Path, role: str, project: Path, data: JsonDict, command: str
+) -> Block | Ask | None:
     if _is_test_path(rel) and role not in TEST_ROLES:
         shown = f"«{role}»" if role else "основная сессия без роли"
         return Block(
@@ -174,6 +231,8 @@ def _decide(rel: str, role: str, project: Path, data: JsonDict, command: str) ->
     gated = _gated_reason(rel, project)
     if gated is None and _is_adr(rel) and _sets_accepted_status(data, command):
         gated = "статус ADR accepted ставит только владелец: агент оставляет proposed"
+    if gated is None:
+        gated = _settings_reason(rel, real, data, command)
     if gated:
         return Ask(
             HOOK,
@@ -261,7 +320,7 @@ def _check_paths(
             rel = rel_posix(cleaned, root)
             if rel is None:
                 continue
-            decision = _decide(rel, role, root, data, command)
+            decision = _decide(rel, Path(cleaned), role, root, data, command)
             if isinstance(decision, Block):
                 return decision
             if decision is not None and asked is None:

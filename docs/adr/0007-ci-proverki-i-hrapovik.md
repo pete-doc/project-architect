@@ -43,6 +43,45 @@
    и `--fail-on-empty`, то есть ровно то, что нужно для «храповика» и принципа из п. 5. Новая крупная версия
    менее обкатана, чем 4.x: риск принят, версия зафиксирована.
 
+## Пропуски тестов, подавления и настройки проверок (правила заложены для всех четырёх языков)
+
+Три способа «пройти» проверки, ничего не исправив, закрыты тем же «храповиком». Правила написаны сразу для Python,
+TypeScript, C# и PowerShell; полный CI для трёх последних появится в следующих PR, но сами правила и тесты на них уже есть.
+
+9. **Пропущенный тест считается удалённым** (проверка `skips`). Считаются: `pytest.mark.skip/skipif/xfail`, `pytest.skip()`,
+   `importorskip`, `unittest.skip*`, `skipTest`; TypeScript `it/test/describe.skip/todo/only/fails`, `xit/xdescribe`;
+   C# `Skip =`, `[Ignore]`, `[Explicit]`, `Assert.Ignore`, `Skip.If`; PowerShell `-Skip`, `Set-ItResult -Skipped`, `-Pending`.
+   Считается по файлам тестов: новый или лишний пропуск нарушает «храповик», записать его в baseline можно только флагом
+   владельца `--accept-skips`. В Python разбор идёт через `tokenize`: слова «skip» в строках и комментариях не считаются.
+10. **Подавляющие комментарии не растут** (проверка `suppressions`). Python: `# type: ignore`, `# pyright: ignore`,
+    `# pyright: basic/off`, `# noqa`, `# ruff: noqa`, `# pragma: no cover`, `# mypy: ignore-errors`; TypeScript: `@ts-ignore`,
+    `@ts-expect-error`, `@ts-nocheck`, `eslint-disable`, `biome-ignore`, `prettier-ignore`, `istanbul/c8/v8 ignore`;
+    C#: `#pragma warning disable`, `SuppressMessage`, `ReSharper disable`, `#nullable disable`, `ExcludeFromCodeCoverage`;
+    PowerShell: `SuppressMessage(Attribute)`. Считается число по файлам и видам: переносить подавление внутри файла можно,
+    добавлять нельзя. Запись в baseline только флагом `--accept-suppressions`.
+11. **Настройки проверок защищены отпечатком** (проверка `settings`) **и вопросом владельцу в hook**. Файлы целиком:
+    `ruff.toml`, `pyrightconfig.json`, `.coveragerc`, `pytest.ini`, `.importlinter`, `tox.ini`, `tsconfig*.json`, ESLint, Biome,
+    Prettier, Vitest/Jest, dependency-cruiser, knip, `.jscpd.json`, `.editorconfig`, `Directory.Build.props`, `*.ruleset`,
+    `*.runsettings`, `global.json`, `PSScriptAnalyzerSettings.psd1`, `PesterConfiguration*`. Разделы внутри файлов:
+    `pyproject.toml` (`tool.ruff`, `pyright`, `pytest`, `coverage`, `importlinter`, `vulture`, `deptry`, `parch`), `setup.cfg`,
+    `package.json` (`jest`, `eslintConfig`, `prettier` и скрипты `test`, `lint`, `typecheck`, `check`, `coverage`, `format`: подмена
+    `"test": "echo ok"` отключила бы все тесты), `.csproj` (`Nullable`, `TreatWarningsAsErrors`, `NoWarn`, `WarningsAsErrors`, `AnalysisMode`
+    и др.). CI хранит отпечатки в `state/baseline.json` и падает на любом изменении, добавлении или удалении (флаг владельца
+    `--accept-config`). Hook `guard_paths` спрашивает владельца при правке таких файлов: для файлов целиком всегда, для
+    `pyproject.toml`, `setup.cfg`, `package.json`, `.csproj` только если правка действительно меняет защищённые разделы (hook
+    применяет правку к тексту и сравнивает отпечатки; правка через оболочку спрашивает всегда). Единый источник правил:
+    `parch_ci.py`; hook подключает его из шаблонов плагина, чтобы правила в CI и в hook не разошлись.
+
+## Известные ограничения
+
+- **Тест с телом `assert True` не ловится.** Все проверки выше видят, что тест есть, не пропущен и проходит, но не видят,
+  что он ничего не проверяет. План: еженедельное мутационное тестирование (например, `mutmut` для Python, Stryker для
+  TypeScript и C#) в фазе F: оно меняет код программы и проверяет, что хотя бы один тест это замечает; тесты, которые
+  не замечают ничего, попадают в отчёт.
+- Подавления и пропуски в TypeScript, C# и PowerShell ищутся по тексту, поэтому слово из этого списка в строке или
+  комментарии тоже считается (для Python это исключено разбором через `tokenize`). Ложное срабатывание лечится решением владельца.
+- Динамические пропуски (тест сам решает во время выполнения не запускаться без маркера и вызова `skip`) этим не видны.
+
 ## Что проверяют тесты
 
 Тестовый проект `tests/projects/python_shop` и его варианты с намеренными нарушениями: дубль, мёртвая функция,
