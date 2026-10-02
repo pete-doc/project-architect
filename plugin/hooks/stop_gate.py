@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -107,9 +108,13 @@ def run_checks(project: Path, commands: list[str]) -> list[str]:
         tokens = command_tokens(command)
         if not tokens:
             continue
+        argv = tokens[0]
+        found = shutil.which(argv[0])  # npm, npx и другие .cmd на Windows находятся только так
+        if found:
+            argv = [found, *argv[1:]]
         try:
             result = subprocess.run(
-                tokens[0],
+                argv,
                 cwd=project,
                 capture_output=True,
                 text=True,

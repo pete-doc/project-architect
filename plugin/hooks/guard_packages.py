@@ -200,7 +200,28 @@ def _powershell_requests(tokens: list[str], ecosystem: str) -> list[Request]:
     return [(ecosystem, positional[0])] if positional else []
 
 
+_REDIRECT_ALONE = re.compile(r"^(\d*|&)(>>?|<)$")
+_REDIRECT_ATTACHED = re.compile(r"^(\d*|&)(>>?|<)\S")
+
+
+def drop_redirections(tokens: list[str]) -> list[str]:
+    """Убирает перенаправления вывода (`2>&1`, `> файл`, `2>/dev/null`): это не имена пакетов."""
+    kept: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+        elif _REDIRECT_ALONE.match(token):
+            skip_next = True
+        elif _REDIRECT_ATTACHED.match(token):
+            continue
+        else:
+            kept.append(token)
+    return kept
+
+
 def install_requests(tokens: list[str], project: Path) -> list[Request]:
+    tokens = drop_redirections(tokens)
     name = command_name(tokens)
     if re.fullmatch(r"pip[\d.]*", name):
         args = _after(tokens, "install")

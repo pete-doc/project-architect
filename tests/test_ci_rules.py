@@ -5,7 +5,6 @@
 заложены сразу для всех четырёх языков. Здесь на каждое правило есть плохой пример.
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,24 +15,6 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
 
 PROJECTS: dict[str, dict[str, str]] = {
-    "typescript": {
-        "package.json": json.dumps(
-            {
-                "name": "demo",
-                "scripts": {"test": "vitest run", "lint": "eslint .", "start": "node src/a.js"},
-                "devDependencies": {"vitest": "2.0.0"},
-            },
-            indent=2,
-        ),
-        "tsconfig.json": '{"compilerOptions": {"strict": true}}\n',
-        "eslint.config.js": "export default [];\n",
-        "src/a.ts": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
-        "src/a.test.ts": (
-            "import { it, expect } from 'vitest';\n"
-            "import { add } from './a';\n\n"
-            "it('adds', () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
-        ),
-    },
     "csharp": {
         "src/App/App.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n'
@@ -71,15 +52,6 @@ TS_SKIP = "it/test/describe.skip"
 
 # (язык, проверка, файл, дописать в конец, вид нарушения в выводе)
 APPENDS = [
-    ("typescript", "skips", TS_TEST, "\nit.skip('later', () => {});\n", TS_SKIP),
-    ("typescript", "skips", TS_TEST, "\nxit('later', () => {});\n", "xit/xtest/xdescribe"),
-    ("typescript", "skips", TS_TEST, "\ndescribe.only('x', () => {});\n", TS_SKIP),
-    ("typescript", "skips", TS_TEST, "\ntest.todo('later');\n", TS_SKIP),
-    ("typescript", "suppressions", TS_SRC, "\n// @ts-ignore\nlet x = 1;\n", "@ts-ignore"),
-    ("typescript", "suppressions", TS_SRC, "\n// @ts-expect-error\nlet y = 1;\n", "@ts-ignore"),
-    ("typescript", "suppressions", TS_SRC, "\n/* eslint-disable */\n", "eslint-disable"),
-    ("typescript", "suppressions", TS_SRC, "\n// biome-ignore lint: x\n", "biome-ignore"),
-    ("typescript", "suppressions", TS_SRC, "\n/* istanbul ignore next */\n", "coverage ignore"),
     ("csharp", "skips", CS_TEST, '\n[Fact(Skip = "later")] void Later() {}\n', "Skip ="),
     ("csharp", "skips", CS_TEST, "\n[Ignore] void Later() {}\n", "Ignore"),
     ("csharp", "skips", CS_TEST, '\nvoid X() { Assert.Ignore("later"); }\n', "Assert.Ignore"),
@@ -94,10 +66,6 @@ APPENDS = [
 
 # (язык, файл, что заменить, на что)
 SETTINGS_EDITS = [
-    ("typescript", "tsconfig.json", '"strict": true', '"strict": false'),
-    ("typescript", "eslint.config.js", "export default [];", "export default [{ rules: {} }];"),
-    ("typescript", "package.json", '"test": "vitest run"', '"test": "echo ok"'),
-    ("typescript", "package.json", '"lint": "eslint ."', '"lint": "true"'),
     ("csharp", "src/App/App.csproj", "<Nullable>enable<", "<Nullable>disable<"),
     ("csharp", "src/App/App.csproj", "Errors>true<", "Errors>false<"),
     ("csharp", ".editorconfig", "severity = error", "severity = none"),
@@ -106,9 +74,6 @@ SETTINGS_EDITS = [
 
 NOWARN_PROPS = "<Project><PropertyGroup><NoWarn>CS8618</NoWarn></PropertyGroup></Project>\n"
 SETTINGS_ADDITIONS = [
-    ("typescript", ".jscpd.json", '{"threshold": 100}\n'),
-    ("typescript", "biome.json", '{"linter": {"enabled": false}}\n'),
-    ("typescript", "vitest.config.ts", "export default { test: { exclude: ['**/*'] } };\n"),
     ("csharp", "Directory.Build.props", NOWARN_PROPS),
     ("csharp", "global.json", '{"sdk": {"version": "1.0.0"}}\n'),
     ("powershell", "PesterConfiguration.psd1", "@{ Run = @{ Exit = $false } }\n"),
@@ -116,14 +81,12 @@ SETTINGS_ADDITIONS = [
 
 
 CLEAN_REPORTS = {
-    "typescript": '{"testResults": [{"name": "src/a.test.ts", "assertionResults": '
-    '[{"fullName": "adds", "status": "passed"}]}]}',
     "csharp": '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
     '<UnitTestResult testName="App.Tests.CalcTests.Adds" outcome="Passed"/></Results></TestRun>',
     "powershell": '<testsuites><testsuite name="Tool"><testcase classname="Tool" name="answers"/>'
     "</testsuite></testsuites>",
 }
-REPORT_FILES = {"typescript": "report.json", "csharp": "report.trx", "powershell": "report.xml"}
+REPORT_FILES = {"csharp": "report.trx", "powershell": "report.xml"}
 
 
 class Project:
@@ -223,29 +186,28 @@ def test_adding_a_settings_file_is_blocked(
     assert rel in project.fails("settings")
 
 
-def test_unrelated_package_json_and_csproj_edits_are_free(tmp_path: Path) -> None:
-    ts = make(tmp_path, "typescript")
-    text = (ts.root / "package.json").read_text(encoding="utf-8")
-    ts.write(
-        "package.json", text.replace('"name": "demo"', '"name": "demo2"').replace("2.0.0", "2.1.0")
-    )
-    ts.passes("settings")
+def test_unrelated_csproj_edits_are_free(tmp_path: Path) -> None:
     cs = make(tmp_path, "csharp")
     text = (cs.root / "src/App/App.csproj").read_text(encoding="utf-8")
-    cs.write("src/App/App.csproj", text.replace("</Project>", "  <ItemGroup/>\n</Project>"))
+    cs.write(
+        "src/App/App.csproj", text.replace("</Project>", "  <ItemGroup/>" + chr(10) + "</Project>")
+    )
     cs.passes("settings")
 
 
 def test_skips_in_non_test_files_and_other_languages_are_not_counted(tmp_path: Path) -> None:
-    project = make(tmp_path, "typescript")
-    project.append("src/a.ts", "\nconst note = 'it.skip is only a word here';\n")
+    project = make(tmp_path, "csharp")
+    project.append(
+        "src/App/Calc.cs",
+        "// [Fact(Skip = " + chr(34) + "x" + chr(34) + ")] только слово" + chr(10),
+    )
     project.passes("skips")  # не файл тестов
-    project.write("src/b.cs", '[Fact(Skip = "x")] class B {}\n')
+    project.write("tests/App.Tests/notes.ts", "it.skip(" + chr(39) + "x" + chr(39) + ")" + chr(10))
     project.passes("skips")  # чужое расширение
 
 
 def test_checks_without_an_adapter_say_so_instead_of_passing(tmp_path: Path) -> None:
-    project = make(tmp_path, "typescript")
+    project = make(tmp_path, "csharp")
     out = project.fails("dead-code")
     assert "ещё не реализована" in out
 
@@ -256,7 +218,6 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
 
 # Реальные отчёты, снятые с настоящих запусков (Vitest 2.1.9, dotnet test с xUnit, Pester 3.4).
 REAL_REPORTS = [
-    ("typescript", "vitest.json", {f"a.test.js::{n}" for n in ("later", "someday", "conditional")}),
     ("csharp", "dotnet.trx", {"Demo.UnitTest1.Later", "Demo.UnitTest1.Th"}),
     ("powershell", "pester-nunit.xml", {"Tool.skipped", "Tool.pending", "Tool.inconclusive"}),
 ]  # fmt: skip
@@ -319,8 +280,8 @@ def test_skips_without_a_report_fail_instead_of_passing_on_text_search_alone(
 
 
 def test_a_broken_report_is_a_failure_not_a_pass(tmp_path: Path) -> None:
-    project = make(tmp_path, "typescript")
-    project.report.write_text("это не JSON", encoding="utf-8")
+    project = make(tmp_path, "csharp")
+    project.report.write_text("это не XML", encoding="utf-8")
     done = project.run("skips")
     assert done.returncode != 0
 

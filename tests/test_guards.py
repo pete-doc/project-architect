@@ -717,3 +717,31 @@ def test_permissions_template_asks_for_every_settings_file_pattern() -> None:
     ask = set(template["permissions"]["ask"])
     missing = [p for p in all_config_patterns() if f"Edit({p})" not in ask]
     assert not missing, missing
+
+
+# ---------- guard_packages: перенаправления вывода не принимаются за имена пакетов ----------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install requests 2>&1",
+        "pip install requests > install.log 2>&1",
+        "npm install react 2>&1 | tail -3",
+        "npm install --no-audit 2>/dev/null",
+        "pip install requests &> out.txt",
+    ],
+)
+def test_redirections_are_not_taken_for_package_names(command: str, project: Path) -> None:
+    result = run_hook("guard_packages.py", bash(command), project)
+    assert result.code == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["pip install flask 2>&1", "npm install lodash 2>&1 | tail -3", "pip install flask > log 2>&1"],
+)
+def test_unlisted_packages_are_still_blocked_next_to_redirections(
+    command: str, project: Path
+) -> None:
+    assert run_hook("guard_packages.py", bash(command), project).blocked

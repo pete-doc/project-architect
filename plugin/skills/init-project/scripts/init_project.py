@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,30 @@ class Language:
 
 CI_SCRIPT = ".github/parch/parch_ci.py"
 LOCAL_CI_CHECKS = ("tests", "modules", "deps", "dead-code", "architecture")
+# Версии инструментов TypeScript зафиксированы точно (без ^ и ~): CI не должен ломаться
+# от выхода новой версии. TypeScript 7 (нативный компилятор) не подходит: у него нет JS API,
+# на котором работают dependency-cruiser и knip (dependency-cruiser молча анализирует 0 файлов).
+TS_TOOL_VERSIONS = {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "22.19.1",
+    "@vitest/coverage-v8": "5.0.3",
+    "dependency-cruiser": "18.5.0",
+    "knip": "6.39.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3",
+}
+TS_REPORT_TEST = (
+    "vitest run --coverage --reporter=default --reporter=json --outputFile.json=test-report.json"
+)
+TS_SCRIPTS = {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "test": TS_REPORT_TEST,
+    "arch": "depcruise src --config .dependency-cruiser.json",
+    "deadcode": "knip",
+}
+TS_CHECK_FLAGS = "--language typescript --report test-report.json"
+TS_LOCAL_CI_CHECKS = ("settings", "tests", "skips", "modules", "deps", "dead-code", "architecture")
 
 LANGUAGES = {
     "python": Language(
@@ -53,10 +79,15 @@ LANGUAGES = {
         ),
     ),
     "typescript": Language(
-        "TypeScript (tsc strict, ESLint или Biome, Vitest)",
+        "TypeScript 5.9 (tsc strict, Biome, Vitest, dependency-cruiser, knip, jscpd)",
         "npm",
-        "typescript, vitest, eslint, prettier, @types/node",
-        (),
+        ", ".join(TS_TOOL_VERSIONS),
+        (
+            "npm run typecheck",
+            "npm run lint",
+            "npm test",
+            *(f"python {CI_SCRIPT} {check} {TS_CHECK_FLAGS}" for check in TS_LOCAL_CI_CHECKS),
+        ),
     ),
     "csharp": Language(
         "C# (.NET, nullable, warnings as errors, xUnit)",
@@ -71,7 +102,7 @@ LANGUAGES = {
         (),
     ),
 }
-CI_TEMPLATES = {"python": "python.yml"}
+CI_TEMPLATES = {"python": "python.yml", "typescript": "typescript.yml"}
 GITIGNORE_LINES = [".claude/audit/", ".claude/settings.local.json"]
 
 PYPROJECT = """[tool.ruff]
@@ -104,28 +135,32 @@ def test_smoke() -> None:
 '''
 
 
-def initial_baseline(project: Path) -> dict[str, Any]:
-    """Начальный baseline Python-проекта: известные тесты, пропуски, подавления и настройки."""
-    return {
-        "version": 1,
-        "tests": {"python": ["tests/test_smoke.py::test_smoke"]},
-        "dead_code": {"python": []},
-        "skips": {
-            "python": parch_ci.scan_counts(
-                project, "python", parch_ci.RULES["python"].skip_patterns, True
-            )
-        },
-        "suppressions": {
-            "python": parch_ci.scan_counts(
-                project,
-                "python",
-                parch_ci.RULES["python"].suppression_patterns,
-                False,
-                in_comments=True,
-            )
-        },
-        "config": {"python": parch_ci.settings_fingerprint(project, "python")},
+def initial_baseline(project: Path, languages: list[str]) -> dict[str, Any]:
+    """Начальный baseline: известные тесты, пропуски, подавления и настройки каждого языка."""
+    first_tests = {
+        "python": ["tests/test_smoke.py::test_smoke"],
+        "typescript": ["smoke.test.ts::smoke"],
     }
+    baseline: dict[str, Any] = {
+        "version": 1,
+        "tests": {},
+        "dead_code": {},
+        "skips": {},
+        "suppressions": {},
+        "skipped_tests": {},
+        "config": {},
+    }
+    for lang in (item for item in languages if item in first_tests):
+        rules = parch_ci.RULES[lang]
+        baseline["tests"][lang] = first_tests[lang]
+        baseline["dead_code"][lang] = []
+        baseline["skipped_tests"][lang] = []
+        baseline["skips"][lang] = parch_ci.scan_counts(project, lang, rules.skip_patterns, True)
+        baseline["suppressions"][lang] = parch_ci.scan_counts(
+            project, lang, rules.suppression_patterns, False, in_comments=True
+        )
+        baseline["config"][lang] = parch_ci.settings_fingerprint(project, lang)
+    return baseline
 
 
 class Report:
@@ -228,6 +263,51 @@ def update_gitignore(report: Report) -> None:
     report.created.append(".gitignore (добавлены строки)" if existing else ".gitignore")
 
 
+def create_typescript_files(project: Path, report: Report, name: str) -> None:
+    """Файлы TypeScript-проекта; package-lock.json создаётся, если доступен npm."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "project"
+    manifest = {
+        "name": slug,
+        "version": "0.1.0",
+        "private": True,
+        "type": "module",
+        "main": "src/index.ts",
+        "scripts": TS_SCRIPTS,
+        "devDependencies": TS_TOOL_VERSIONS,
+    }
+    report.write("package.json", json.dumps(manifest, indent=2) + "\n")
+    for template, target in (
+        ("tsconfig.json", "tsconfig.json"),
+        ("biome.json", "biome.json"),
+        ("vitest.config.ts", "vitest.config.ts"),
+        ("knip.json", "knip.json"),
+        ("dependency-cruiser.json", ".dependency-cruiser.json"),
+        ("smoke.test.ts", "tests/smoke.test.ts"),
+    ):
+        report.copy(f"typescript/{template}", target)
+    npm = shutil.which("npm")
+    if npm is None or (project / "package-lock.json").exists():
+        if npm is None:
+            report.notes.append(
+                "npm не найден: выполните `npm install` один раз и закоммитьте package-lock.json "
+                "(CI ставит зависимости командой `npm ci`, ей нужен lock-файл)."
+            )
+        return
+    done = subprocess.run(
+        [npm, "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=project,
+        capture_output=True,
+        check=False,
+        timeout=300,
+    )
+    if done.returncode == 0:
+        report.created.append("package-lock.json")
+    else:
+        report.notes.append(
+            "Не удалось создать package-lock.json: выполните `npm install` и закоммитьте его."
+        )
+
+
 def init_project(
     project: Path, name: str, languages: list[str], description: str, priorities: str
 ) -> dict[str, Any]:
@@ -248,11 +328,17 @@ def init_project(
         report.write("requirements.txt", REQUIREMENTS)
         report.write("requirements-dev.txt", REQUIREMENTS_DEV)
         report.write("tests/test_smoke.py", SMOKE_TEST)
-        report.write("state/baseline.json", json.dumps(initial_baseline(project), indent=2) + "\n")
+    if "typescript" in languages:
+        create_typescript_files(project, report, name)
+    if "python" in languages or "typescript" in languages:
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
+        report.write(
+            "state/baseline.json", json.dumps(initial_baseline(project, languages), indent=2) + "\n"
+        )
     for lang in languages:
         if lang in CI_TEMPLATES:
-            report.copy(f"ci/{CI_TEMPLATES[lang]}", ".github/workflows/ci.yml")
+            workflow = "ci.yml" if lang == languages[0] or lang == "python" else f"ci-{lang}.yml"
+            report.copy(f"ci/{CI_TEMPLATES[lang]}", f".github/workflows/{workflow}")
         else:
             report.notes.append(
                 f"CI-шаблона для {lang} пока нет (появится в фазе D): создана только запись "
