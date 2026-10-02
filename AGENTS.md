@@ -7,7 +7,7 @@
 
 - `plugin/` — плагин Claude Code (имя `parch`): `agents/`, `hooks/`, `skills/`, манифест в `plugin/.claude-plugin/plugin.json`.
 - `.claude-plugin/marketplace.json` — каталог для установки плагина.
-- `templates/` — шаблоны для целевых проектов: `docs/`, `ci/`, `state/`.
+- `templates/` — шаблоны для целевых проектов: `docs/`, `ci/`, `state/`, `claude/` (правила permissions).
 - `tests/` — тесты продукта, включая «плохие примеры».
 - `docs/adr/` — решения по самому продукту.
 
@@ -49,7 +49,7 @@ CI (`.github/workflows/ci.yml`) гоняет то же самое на Ubuntu и
 
 1. Все обязательные проверки CI зелёные.
 2. В PR нет ADR со статусом `proposed`.
-3. PR не меняет `.github/`, `.claude/`, `plugin/hooks/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `pyproject.toml` в части правил проверок.
+3. PR не меняет `.github/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `templates/ci/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `pyproject.toml` в части правил проверок.
 4. Описание PR заполнено по правилу 7.
 
 Не выполнено хотя бы одно из 2–4: не сливай, напиши владельцу в чат одной строкой, что требует его решения, и жди ответа «сливай». Если автослияние отключено или нет прав, скажи об этом, не обходи.
