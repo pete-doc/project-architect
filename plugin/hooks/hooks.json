@@ -1,5 +1,5 @@
 {
-  "description": "Hooks ProjectArchitect: охрана путей, пакетов и опасных команд, проверка после правки, ворота остановки, журнал.",
+  "description": "Hooks ProjectArchitect: охрана путей, пакетов и опасных команд, проверка после правки, ворота остановки, журнал. Запуск через run-hook.cmd, который сам находит Python.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,10 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/guard_destructive.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" guard_destructive.py",
             "timeout": 15
           }
         ]
@@ -20,10 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/guard_paths.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" guard_paths.py",
             "timeout": 15
           }
         ]
@@ -33,10 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/guard_packages.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" guard_packages.py",
             "timeout": 15
           }
         ]
@@ -46,10 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/audit_log.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" audit_log.py",
             "timeout": 15
           }
         ]
@@ -61,10 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/post_edit_check.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" post_edit_check.py",
             "timeout": 180
           }
         ]
@@ -74,10 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/audit_log.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" audit_log.py",
             "timeout": 15
           }
         ]
@@ -88,10 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/stop_gate.py"
-            ],
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" stop_gate.py",
             "timeout": 900
           }
         ]
