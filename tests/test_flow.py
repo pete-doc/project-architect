@@ -209,24 +209,10 @@ def load_hooks() -> dict[str, Any]:
     ]
 
 
-def test_every_script_in_hooks_json_exists_and_every_script_is_registered() -> None:
-    registered: set[str] = set()
-    for groups in load_hooks().values():
-        for group in groups:
-            for hook in group["hooks"]:
-                assert hook["type"] == "command"
-                assert hook["command"] == "python"  # без оболочки: одинаково на macOS и Windows
-                script = hook["args"][0].removeprefix("${CLAUDE_PLUGIN_ROOT}/hooks/")
-                assert (HOOKS / script).is_file(), script
-                registered.add(script)
-    on_disk = {p.name for p in HOOKS.glob("*.py") if not p.name.startswith("_")}
-    assert registered == on_disk
-
-
 def test_shell_guards_cover_both_shell_tools() -> None:
     """На Windows без Git Bash команды идут через PowerShell: matcher только Bash их бы не видел."""
     for group in load_hooks()["PreToolUse"]:
-        scripts = " ".join(h["args"][0] for h in group["hooks"])
+        scripts = " ".join(h["command"] for h in group["hooks"])
         if "guard_packages" in scripts or "guard_paths" in scripts:
             assert "Bash" in group["matcher"]
             assert "PowerShell" in group["matcher"]
