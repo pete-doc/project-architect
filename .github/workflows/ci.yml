@@ -26,4 +26,8 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pyright
-      - run: pytest -v
+      - run: pytest -v --junitxml=test-report.xml
+      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
+      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+      - run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+      - run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml

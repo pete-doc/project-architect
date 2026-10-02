@@ -15,4 +15,6 @@ extraPaths = ["plugin/hooks", "plugin/skills/adr/scripts", "plugin/templates/ci/
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["projects"]
+# Параметризованный тест с пустым набором параметров не должен молча пропускаться.
+empty_parameter_set_mark = "fail_at_collect"
 pythonpath = ["plugin/hooks", "plugin/templates/ci/parch"]

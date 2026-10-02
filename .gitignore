@@ -12,3 +12,4 @@ bin/
 obj/
 TestResults/
 test-results/
+test-report.xml

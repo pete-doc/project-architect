@@ -17,6 +17,7 @@
   baseline      обновить baseline (--update); каждое ухудшение требует флага владельца:
                 --accept-new, --accept-removed, --accept-skips,
                 --accept-suppressions, --accept-config
+                --only-tests: обновить только списки тестов и пропусков
 
 «Храповик»: старые нарушения (они записаны в baseline) CI пропускает, любое новое останавливает.
 Baseline лежит в state/baseline.json и state/jscpd-baseline.json; менять его может только владелец.
@@ -234,6 +235,9 @@ def py_has_sources(project: Path) -> bool:
 # ---------- tests ----------
 
 
+PY_TEST_ID = re.compile(r"^[^\s:]+\.py::\S")
+
+
 def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
     """Тесты Python собираются самим pytest; отчёт не нужен."""
     del report
@@ -242,7 +246,8 @@ def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
     if done.returncode not in (0, 5):
         raise ToolError("pytest не смог собрать тесты:\n" + tail(done))
     lines = (line.strip() for line in done.stdout.splitlines())
-    return sorted({line for line in lines if "::" in line and " " not in line})
+    # идентификатор теста начинается с пути к файлу; в скобках параметров бывают пробелы
+    return sorted({line for line in lines if PY_TEST_ID.match(line)})
 
 
 def check_tests(project: Path, language: str, report: Path | None = None) -> Result:
@@ -791,8 +796,13 @@ def refuse_growth(
 
 
 def update_baseline(
-    project: Path, language: str, accept: Accept, report: Path | None = None
+    project: Path,
+    language: str,
+    accept: Accept,
+    report: Path | None = None,
+    only_tests: bool = False,
 ) -> Result:
+    """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта)."""
     result = Result()
     baseline = Baseline(project)
     outcomes = test_outcomes(project, language, report)
@@ -826,11 +836,12 @@ def update_baseline(
         "--accept-skips",
         "число пропущенных тестов",
     )
-    refuse_growth(
-        result, baseline, "suppressions", language, suppressions, accept.suppressions,
-        "--accept-suppressions", "число подавляющих комментариев",
-    )  # fmt: skip
-    if baseline.has("config", language) and not accept.config:
+    if not only_tests:
+        refuse_growth(
+            result, baseline, "suppressions", language, suppressions, accept.suppressions,
+            "--accept-suppressions", "число подавляющих комментариев",
+        )  # fmt: skip
+    if not only_tests and baseline.has("config", language) and not accept.config:
         known = as_dict(baseline.section("config", language))
         changed = sorted(
             {k for k in config if known.get(k) != config[k]} | (set(known) - set(config))
@@ -853,7 +864,7 @@ def update_baseline(
                 "(флаг --accept-removed):",
                 *shown(removed),
             )
-        has_sources = collected.has_sources(project)
+        has_sources = collected.has_sources(project) and not only_tests
         dead = collected.dead_code(project) if has_sources else set[str]()
         initialized = baseline.has("dead_code", language)
         new_dead = sorted(dead - baseline.strings("dead_code", language))
@@ -875,18 +886,26 @@ def update_baseline(
         return result
     baseline.set("skips", language, skips)
     baseline.set("skipped_tests", language, sorted(skipped_now))
-    baseline.set("suppressions", language, suppressions)
-    baseline.set("config", language, config)
+    if not only_tests:
+        baseline.set("suppressions", language, suppressions)
+        baseline.set("config", language, config)
     if collected is not None:
         baseline.set("tests", language, sorted(tests))
-        baseline.set("dead_code", language, sorted(dead))
-        if collected.has_sources(project):
+        if not only_tests:
+            baseline.set("dead_code", language, sorted(dead))
+        if collected.has_sources(project) and not only_tests:
             baseline.set("coverage", language, round(collected.coverage(project), 2))
             refresh = [*jscpd_command(), *jscpd_args(project, language), "--update-baseline"]
             updated = run(refresh, project)
             if updated.returncode != 0:
                 raise ToolError("jscpd не смог обновить baseline:\n" + tail(updated, 800))
     baseline.save()
+    if only_tests:
+        result.note(
+            f"baseline обновлён (только тесты и пропуски): тестов {len(tests)}, "
+            f"пропусков {sum(skips.values())}, пропущенных запуском {len(skipped_now)}."
+        )
+        return result
     result.note(
         f"baseline обновлён: тестов {len(tests)}, находок мёртвого кода {len(dead)}, "
         f"пропусков {sum(skips.values())}, подавлений {sum(suppressions.values())}, "
@@ -1416,10 +1435,28 @@ def local_name(tag: str) -> str:
     return tag.split("}")[-1]
 
 
+def parsed_root(path: Path, tags: set[str], kind: str) -> ElementTree.Element:
+    """Корень XML-отчёта; чужой или повреждённый файл это ошибка, а не «тестов нет»."""
+    root = ElementTree.parse(path).getroot()
+    if local_name(root.tag) not in tags:
+        raise ToolError(
+            f"{path.name}: это не отчёт {kind} (корневой элемент {local_name(root.tag)})"
+        )
+    return root
+
+
+def with_tests(outcomes: dict[str, str], path: Path) -> dict[str, str]:
+    """Отчёт без единого теста нельзя принимать: пустой файл скрыл бы любые пропуски."""
+    if not outcomes:
+        raise ToolError(f"в отчёте {path.name} нет ни одного теста: отчёт пустой или повреждён")
+    return outcomes
+
+
 def junit_outcomes(path: Path) -> dict[str, str]:
     """JUnit XML (pytest --junitxml, Pester JUnitXml): исход каждого теста."""
     outcomes: dict[str, str] = {}
-    for case in ElementTree.parse(path).getroot().iter("testcase"):
+    root = parsed_root(path, {"testsuites", "testsuite"}, "JUnit XML")
+    for case in root.iter("testcase"):
         name = case.get("name", "")
         classname = case.get("classname", "")
         key = f"{classname}::{name}" if classname else name
@@ -1428,13 +1465,13 @@ def junit_outcomes(path: Path) -> dict[str, str]:
         if children & {"failure", "error"}:
             state = "failed"
         outcomes[key] = state
-    return outcomes
+    return with_tests(outcomes, path)
 
 
 def nunit_outcomes(path: Path) -> dict[str, str]:
     """NUnit 2.5 XML (Pester NUnitXml): исход каждого теста."""
     outcomes: dict[str, str] = {}
-    for case in ElementTree.parse(path).getroot().iter("test-case"):
+    for case in parsed_root(path, {"test-results"}, "NUnit XML").iter("test-case"):
         result = case.get("result", "").lower()
         state = "passed"
         if result in FAILED_NUNIT:
@@ -1442,7 +1479,7 @@ def nunit_outcomes(path: Path) -> dict[str, str]:
         elif result in SKIPPED_NUNIT or case.get("executed", "True").lower() == "false":
             state = "skipped"
         outcomes[case.get("name", "")] = state
-    return outcomes
+    return with_tests(outcomes, path)
 
 
 def pester_outcomes(path: Path) -> dict[str, str]:
@@ -1453,7 +1490,7 @@ def pester_outcomes(path: Path) -> dict[str, str]:
 def trx_outcomes(path: Path) -> dict[str, str]:
     """TRX (dotnet test --logger trx): исход каждого теста."""
     outcomes: dict[str, str] = {}
-    for result in ElementTree.parse(path).getroot().iter():
+    for result in parsed_root(path, {"TestRun"}, "TRX").iter():
         if local_name(result.tag) != "UnitTestResult":
             continue
         outcome = result.get("outcome", "").lower()
@@ -1463,7 +1500,7 @@ def trx_outcomes(path: Path) -> dict[str, str]:
         elif outcome in SKIPPED_TRX:
             state = "skipped"
         outcomes[result.get("testName", "")] = state
-    return outcomes
+    return with_tests(outcomes, path)
 
 
 def cs_trx_files(report: Path) -> list[Path]:
@@ -1487,6 +1524,8 @@ def jest_json_outcomes(path: Path) -> dict[str, str]:
     """JSON-отчёт Jest и Vitest (--json, --reporter=json): исход каждого теста."""
     outcomes: dict[str, str] = {}
     root = as_dict(json.loads(path.read_text(encoding="utf-8")))
+    if not isinstance(root.get("testResults"), list):
+        raise ToolError(f"{path.name}: это не отчёт Jest/Vitest (нет списка testResults)")
     for file_result in as_list(root.get("testResults")):
         entry = as_dict(file_result)
         file_name = PurePosixPath(str(entry.get("name", "")).replace("\\", "/")).name
@@ -1497,7 +1536,7 @@ def jest_json_outcomes(path: Path) -> dict[str, str]:
             if status in SKIPPED_JEST:
                 state = "skipped"
             outcomes[f"{file_name}::{test.get('fullName', test.get('title', ''))}"] = state
-    return outcomes
+    return with_tests(outcomes, path)
 
 
 REPORT_PARSERS: dict[str, Callable[[Path], dict[str, str]]] = {
@@ -2445,6 +2484,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--accept-suppressions", action="store_true")
     parser.add_argument("--accept-config", action="store_true")
     parser.add_argument("--report", default=None)
+    parser.add_argument(
+        "--only-tests",
+        action="store_true",
+        help="baseline --update: только списки тестов и пропусков (остальное не трогать)",
+    )
     args = parser.parse_args(argv)
     project = Path(args.project).resolve()
     report = Path(args.report).resolve() if args.report else None
@@ -2459,7 +2503,7 @@ def main(argv: list[str] | None = None) -> int:
                 suppressions=args.accept_suppressions,
                 config=args.accept_config,
             )
-            result = update_baseline(project, args.language, accept, report)
+            result = update_baseline(project, args.language, accept, report, args.only_tests)
         elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
             print(
                 f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка "
