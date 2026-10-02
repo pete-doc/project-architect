@@ -9,7 +9,7 @@ select = ["E", "F", "I", "B", "UP"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["plugin", "tests"]
-extraPaths = ["plugin/hooks"]
+extraPaths = ["plugin/hooks", "plugin/skills/adr/scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

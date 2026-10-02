@@ -56,7 +56,13 @@ def run_hook(
         if data["permission_mode"] is None:
             del data["permission_mode"]
         body = json.dumps(data)
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "PYTHONIOENCODING": "utf-8"}
+    interpreter_dir = str(Path(sys.executable).parent)  # `python` в hooks = интерпретатор тестов
+    env = {
+        **os.environ,
+        "PATH": interpreter_dir + os.pathsep + os.environ.get("PATH", ""),
+        "CLAUDE_PROJECT_DIR": str(project),
+        "PYTHONIOENCODING": "utf-8",
+    }
     process = subprocess.run(
         [sys.executable, str(HOOKS / script)],
         input=body.encode("utf-8"),

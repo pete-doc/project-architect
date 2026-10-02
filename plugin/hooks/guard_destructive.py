@@ -2,7 +2,7 @@
 
 Работает во всех проектах, подключён ли ProjectArchitect или нет. Для всех ролей.
 Разбор команд приблизительный: надёжная защита от обхода — правила permissions
-(см. templates/claude/settings.json) и песочница.
+(см. plugin/templates/claude/settings.json) и песочница.
 """
 
 from __future__ import annotations

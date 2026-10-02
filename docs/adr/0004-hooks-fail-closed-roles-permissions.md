@@ -50,7 +50,7 @@
 6. **Контракт с `CONSTITUTION.md` (его шаблон появится в фазе C).** Раздел «Разрешённые пакеты» — строки вида
    `- pip: requests, pydantic` (экосистемы `pip`, `npm`, `nuget`, `psgallery`). Раздел «Команды проверки» — по команде
    на строку; если его нет, `stop_gate` сам подбирает pytest, ruff и pyright для Python-проекта.
-7. **Permissions.** Поскольку плагин правила поставлять не может, они лежат шаблоном `templates/claude/settings.json`
+7. **Permissions.** Поскольку плагин правила поставлять не может, они лежат шаблоном `plugin/templates/claude/settings.json`
    (новая папка, в разделе 3 плана её нет). `/parch:init-project` (фаза C) копирует его в `.claude/settings.json`
    проекта. Там два списка. `ask` (спросить владельца): настройки Claude и hooks, `.github/`, `CONSTITUTION.md`.
    `deny` (запретить совсем): правка журнала `.claude/audit/`, чтение секретов (`.env` кроме `.env.example`, ключи,
