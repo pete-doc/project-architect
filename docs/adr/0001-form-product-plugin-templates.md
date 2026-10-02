@@ -15,7 +15,7 @@ ProjectArchitect должен подключаться к любому прое�
 Один репозиторий, две части:
 
 1. `plugin/` — плагин Claude Code. Манифест — `plugin/.claude-plugin/plugin.json`, компоненты (`agents/`, `hooks/`, `skills/`) лежат в корне плагина, а не внутри `.claude-plugin/`, как требует документация.
-2. `templates/` — шаблоны документов, CI и состояния. Плагин копирует их в целевой проект командой `/init-project`.
+2. `templates/` — шаблоны документов, CI и состояния. Плагин копирует их в целевой проект командой `/init-project`. (Расположение уточнено ADR-0006: папка лежит внутри плагина, `plugin/templates/`.)
 
 Плагин ставится через каталог `.claude-plugin/marketplace.json` в корне репозитория (источник `./plugin`):
 `/plugin marketplace add pete-doc/project-architect`, затем `/plugin install parch@project-architect`.

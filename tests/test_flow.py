@@ -230,7 +230,7 @@ def test_every_hook_script_has_a_test_with_a_bad_example() -> None:
 
 def load_permissions() -> dict[str, list[str]]:
     settings = json.loads(
-        (REPO / "templates" / "claude" / "settings.json").read_text(encoding="utf-8")
+        (REPO / "plugin" / "templates" / "claude" / "settings.json").read_text(encoding="utf-8")
     )
     return settings["permissions"]
 

@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import HookResult, bash, file_call, powershell, run_hook
+from _common import managed_root
+from conftest import CONSTITUTION, HookResult, bash, file_call, powershell, run_hook
 
 IMPLEMENTER = "parch:implementer"
 
@@ -413,3 +414,98 @@ def test_missing_allowed_list_blocks_every_install(project: Path) -> None:
 
 def test_package_guard_is_inactive_without_constitution(bare_project: Path) -> None:
     assert run_hook("guard_packages.py", bash("pip install flask"), bare_project).code == 0
+
+
+# ---------- guard_paths: перевод ADR в accepted делает только владелец ----------
+
+ADR_PROPOSED = "docs/adr/0002-proposed.md"
+
+
+def edit_call(path: Path, old: str, new: str) -> dict[str, object]:
+    return {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(path), "old_string": old, "new_string": new},
+    }
+
+
+@pytest.mark.parametrize("role", EVERY_ROLE)
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("- Статус: proposed", "- Статус: accepted"),
+        ("- Статус: proposed", "- Status: Accepted (утверждено)"),
+        ("proposed", "accepted"),
+        ("proposed", "принят владельцем"),
+    ],
+)
+def test_agent_cannot_flip_an_adr_to_accepted_on_its_own(
+    old: str, new: str, role: str | None, project: Path
+) -> None:
+    result = run_hook("guard_paths.py", edit_call(project / ADR_PROPOSED, old, new), project, role)
+    assert_asks_owner(result, ADR_PROPOSED)
+    assert (
+        "ставит только владелец"
+        in json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    )
+
+
+def test_new_adr_cannot_be_created_already_accepted(project: Path) -> None:
+    call = file_call("Write", project / "docs" / "adr" / "0009-new.md")
+    call["tool_input"]["content"] = "# ADR-0009\n\n- Статус: accepted\n"
+    assert_asks_owner(run_hook("guard_paths.py", call, project), "docs/adr/0009-new.md")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i s/proposed/accepted/ docs/adr/0002-proposed.md",
+        "echo '- Статус: accepted' >> docs/adr/0002-proposed.md",
+    ],
+)
+def test_shell_cannot_flip_an_adr_to_accepted(command: str, project: Path) -> None:
+    result = run_hook("guard_paths.py", bash(command), project)
+    assert result.code == 0, result.stderr
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_ordinary_adr_edits_stay_free(project: Path) -> None:
+    call = edit_call(project / ADR_PROPOSED, "Контекст", "Контекст решения")
+    assert run_hook("guard_paths.py", call, project).code == 0
+    still_proposed = edit_call(project / ADR_PROPOSED, "- Статус: proposed", "- Статус: proposed ")
+    assert run_hook("guard_paths.py", still_proposed, project).code == 0
+
+
+# ---------- проект определяется по текущей папке и пути, а не только по папке сессии ----------
+
+
+def test_temporary_project_is_protected_even_when_the_session_project_is_not(
+    tmp_path: Path,
+) -> None:
+    session = tmp_path / "session"
+    session.mkdir()
+    other = tmp_path / "other"
+    (other / "docs").mkdir(parents=True)
+    (other / "docs" / "CONSTITUTION.md").write_text(CONSTITUTION, encoding="utf-8")
+    note = file_call("Write", other / "notes.md")
+    assert_blocked(run_hook("guard_paths.py", note, session), "guard_paths", ".md")
+    blocked = run_hook("guard_packages.py", bash("pip install flask"), session, cwd=str(other))
+    assert_blocked(blocked, "guard_packages", "flask")
+    tests_edit = file_call("Write", other / "tests" / "test_x.py")
+    assert_blocked(run_hook("guard_paths.py", tests_edit, session), "guard_paths", "architect")
+    free = file_call("Write", session / "notes.md")
+    assert run_hook("guard_paths.py", free, session).code == 0
+
+
+def test_relative_paths_are_resolved_from_the_current_folder(project: Path) -> None:
+    sub = project / "sub"
+    sub.mkdir()
+    result = run_hook("guard_paths.py", bash("echo x >> ../.github/ci.yml"), project, cwd=str(sub))
+    assert result.code == 0, result.stderr
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_docs_folder_is_not_mistaken_for_a_project_root(project: Path) -> None:
+    assert managed_root(project / "docs") == project
+    assert managed_root(project / "docs" / "adr") == project
+    assert managed_root(project.parent) is None or managed_root(project.parent) != project / "docs"

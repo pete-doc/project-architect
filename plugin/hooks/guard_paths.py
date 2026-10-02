@@ -9,7 +9,7 @@
 3. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений).
 
 Активен только в проектах с CONSTITUTION.md. Правки через Bash/PowerShell ловятся
-приблизительно; жёсткая защита: правила permissions (templates/claude/settings.json).
+приблизительно; жёсткая защита: правила permissions (plugin/plugin/templates/claude/settings.json).
 """
 
 from __future__ import annotations
@@ -30,9 +30,11 @@ from _common import (
     get_str,
     is_managed,
     rel_posix,
+    roots_for_path,
     run_guard,
     shell_command,
     target_paths,
+    tool_input,
 )
 
 HOOK = "guard_paths"
@@ -125,7 +127,38 @@ def _gated_reason(rel: str, project: Path) -> str | None:
     return None
 
 
-def _decide(rel: str, role: str, project: Path) -> Block | Ask | None:
+_ACCEPTED_WORD = re.compile(r"(?i)\b(accepted|принят\w*|утвержд\w*)\b")
+
+
+def _strings(value: object) -> list[str]:
+    """Все строки внутри значения (для поиска статуса в содержимом правки)."""
+    if isinstance(value, str):
+        return [value]
+    items: list[object] = []
+    if isinstance(value, dict):
+        items = list(value.values())  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+    elif isinstance(value, list):
+        items = list(value)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]
+    return [text for item in items for text in _strings(item)]
+
+
+def _is_adr(rel: str) -> bool:
+    parts = PurePosixPath(rel).parts
+    return len(parts) >= 3 and parts[-3:-1] == ("docs", "adr") and parts[-1].endswith(".md")
+
+
+def _sets_accepted_status(data: JsonDict, command: str) -> bool:
+    """Правка пытается перевести ADR в accepted или создать его уже принятым."""
+    fields = tool_input(data)
+    texts = [command] if command else _strings(fields)
+    if any(_ADR_STATUS.search(text) for text in texts):
+        return True
+    old = " ".join(_strings(fields.get("old_string")))
+    new = " ".join(_strings(fields.get("new_string")))
+    return "proposed" in (old or command).lower() and bool(_ACCEPTED_WORD.search(new or command))
+
+
+def _decide(rel: str, role: str, project: Path, data: JsonDict, command: str) -> Block | Ask | None:
     if _is_test_path(rel) and role not in TEST_ROLES:
         shown = f"«{role}»" if role else "основная сессия без роли"
         return Block(
@@ -135,6 +168,8 @@ def _decide(rel: str, role: str, project: Path) -> Block | Ask | None:
             "её сделает architect или tester.",
         )
     gated = _gated_reason(rel, project)
+    if gated is None and _is_adr(rel) and _sets_accepted_status(data, command):
+        gated = "статус ADR accepted ставит только владелец: агент оставляет proposed"
     if gated:
         return Ask(
             HOOK,
@@ -207,33 +242,44 @@ def _written_paths(tokens: list[str]) -> list[str]:
     return paths
 
 
-def _check_paths(rels: list[str], role: str, project: Path) -> Block | Ask | None:
+def _check_paths(
+    raws: list[str], role: str, session_project: Path, data: JsonDict, command: str
+) -> Block | Ask | None:
     asked: Ask | None = None
-    for rel in rels:
-        decision = _decide(rel, role, project)
-        if isinstance(decision, Block):
-            return decision
-        if decision is not None and asked is None:
-            asked = decision
-        block = _md_block(rel, project)
-        if block:
-            return block
+    cwd = Path(get_str(data, "cwd") or session_project)
+    for raw in raws:
+        cleaned = raw.strip("\"'").replace("\\", "/")
+        if not Path(cleaned).is_absolute():
+            cleaned = str(cwd / cleaned)  # относительный путь считается от текущей папки вызова
+        for root in roots_for_path(cleaned, session_project):
+            if not is_managed(root):
+                continue
+            rel = rel_posix(cleaned, root)
+            if rel is None:
+                continue
+            decision = _decide(rel, role, root, data, command)
+            if isinstance(decision, Block):
+                return decision
+            if decision is not None and asked is None:
+                asked = decision
+            block = _md_block(rel, root)
+            if block:
+                return block
     return asked
 
 
 def check(data: JsonDict, project: Path) -> Block | Ask | None:
-    if not is_managed(project):
-        return None
     role = agent_role(data)
     tool = get_str(data, "tool_name")
+    command = ""
     if tool in SHELL_TOOLS:
-        raws = [raw for t in command_tokens(shell_command(data)) for raw in _written_paths(t)]
+        command = shell_command(data)
+        raws = [raw for tokens in command_tokens(command) for raw in _written_paths(tokens)]
     elif tool in FILE_TOOLS:
         raws = target_paths(data)
     else:
         return None
-    rels = [rel for raw in raws if (rel := rel_posix(raw.strip("\"'"), project)) is not None]
-    return _check_paths(rels, role, project)
+    return _check_paths(raws, role, project, data, command)
 
 
 if __name__ == "__main__":

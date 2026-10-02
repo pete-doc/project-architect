@@ -76,17 +76,57 @@ def tool_input(data: JsonDict) -> JsonDict:
     return {}
 
 
-def project_dir(data: JsonDict) -> Path:
-    base = os.environ.get("CLAUDE_PROJECT_DIR") or get_str(data, "cwd") or os.getcwd()
-    return Path(base).resolve()
-
-
 def constitution_path(project: Path) -> Path | None:
     for candidate in CONSTITUTION_CANDIDATES:
         path = project / candidate
         if path.is_file():
             return path
     return None
+
+
+def managed_root(start: Path) -> Path | None:
+    """Ближайшая папка вверх от start (включая её), где есть CONSTITUTION.md."""
+    for folder in (start, *start.parents):
+        if folder.name.lower() == "docs" and constitution_path(folder.parent) is not None:
+            continue  # это папка docs/ проекта, а не корень проекта
+        if constitution_path(folder) is not None:
+            return folder
+    return None
+
+
+def project_dir(data: JsonDict) -> Path:
+    """Корень проекта для вызова.
+
+    Если текущая папка вызова лежит внутри проекта с CONSTITUTION.md, берётся он (так hooks работают
+    в рабочих копиях git и во вложенных проектах, а `/parch:doctor` проверяет временный проект).
+    Иначе берётся папка, в которой запущена сессия (CLAUDE_PROJECT_DIR).
+    """
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    cwd = get_str(data, "cwd")
+    if cwd:
+        found = managed_root(Path(cwd).resolve())
+        if found is not None:
+            return found
+    return Path(env or cwd or os.getcwd()).resolve()
+
+
+def roots_for_path(file_path: str, project: Path) -> list[Path]:
+    """Корни проектов, к которым относится путь: ближайший проект с CONSTITUTION.md и проект сессии.
+
+    Проверять приходится оба: вложенный проект не должен ослаблять защиту внешнего.
+    """
+    if not file_path:
+        return []
+    candidate = Path(file_path.replace("\\", "/"))
+    if not candidate.is_absolute():
+        candidate = project / candidate
+    resolved = candidate.resolve()
+    roots: list[Path] = []
+    nearest = managed_root(resolved.parent)
+    for root in (nearest, project):
+        if root is not None and root not in roots and root in (resolved, *resolved.parents):
+            roots.append(root)
+    return roots
 
 
 def is_managed(project: Path) -> bool:
