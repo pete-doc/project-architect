@@ -1,11 +1,15 @@
-"""PreToolUse: охрана путей.
+"""PreToolUse: охрана путей. Правила одинаковы для всех, включая основную сессию без роли.
 
-1. Роль implementer не правит тесты, настройки Claude, CI-файлы, state/features.json,
-   CONSTITUTION.md и принятые ADR.
-2. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений).
+1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок.
+2. Защищённые пути (настройки Claude и hooks, CI-файлы, state/features.json, CONSTITUTION.md,
+   принятые ADR): блокировка для всех. Снять её может только владелец, подтвердив запрос,
+   который Claude Code показывает ему (решение «ask»). Агент подтвердить запрос не может.
+   Когда запрос показать некому (режимы bypassPermissions и dontAsk, фоновый запуск), действие
+   запрещается совсем.
+3. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений).
 
 Активен только в проектах с CONSTITUTION.md. Правки через Bash/PowerShell ловятся
-приблизительно; жёсткая защита — правила permissions (templates/claude/settings.json).
+приблизительно; жёсткая защита: правила permissions (templates/claude/settings.json).
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from _common import (
     FILE_TOOLS,
     SHELL_TOOLS,
+    Ask,
     Block,
     JsonDict,
     agent_role,
@@ -31,6 +36,7 @@ from _common import (
 )
 
 HOOK = "guard_paths"
+TEST_ROLES = frozenset({"architect", "tester"})
 
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs"}
 _TEST_NAME_PATTERNS = (
@@ -89,26 +95,6 @@ def _is_test_path(rel: str) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in _TEST_NAME_PATTERNS)
 
 
-def _protected_reason(rel: str, project: Path) -> str | None:
-    """Почему путь закрыт для implementer; None, если не закрыт."""
-    parts = PurePosixPath(rel).parts
-    name = parts[-1]
-    if _is_test_path(rel):
-        return "тесты правит не implementer: тест — это требование, а не деталь реализации"
-    if parts[0] in (".claude", ".claude-plugin") or name == ".mcp.json":
-        return "настройки Claude и hooks защищают сами проверки"
-    if parts[0] in _CI_DIRS or (len(parts) == 1 and name in _CI_ROOT_FILES):
-        return "CI-файлы определяют, что считается «готово»"
-    if rel.endswith("state/features.json"):
-        return "state/features.json пересчитывается автоматически по реальным тестам"
-    if name == "constitution.md":
-        return "CONSTITUTION.md (стек, список пакетов) утверждает только владелец"
-    if len(parts) >= 3 and parts[-3:-1] == ("docs", "adr") and name.endswith(".md"):
-        if _is_accepted_adr(rel, project):
-            return "принятый ADR неизменяем: решение пересматривается новым ADR"
-    return None
-
-
 def _is_accepted_adr(rel: str, project: Path) -> bool:
     # Имя в нижнем регистре могло не совпасть с реальным; ищем файл без учёта регистра.
     folder = project / PurePosixPath(rel).parent
@@ -119,6 +105,43 @@ def _is_accepted_adr(rel: str, project: Path) -> bool:
             head = candidate.read_text(encoding="utf-8", errors="replace")[:2000]
             return bool(_ADR_STATUS.search(head))
     return False
+
+
+def _gated_reason(rel: str, project: Path) -> str | None:
+    """Почему путь закрыт для всех, пока владелец не подтвердит; None, если не закрыт."""
+    parts = PurePosixPath(rel).parts
+    name = parts[-1]
+    if parts[0] in (".claude", ".claude-plugin") or name == ".mcp.json":
+        return "это настройки Claude и hooks: ими держатся все остальные проверки"
+    if parts[0] in _CI_DIRS or (len(parts) == 1 and name in _CI_ROOT_FILES):
+        return "это CI-файл: он определяет, что считается «готово»"
+    if rel.endswith("state/features.json"):
+        return "state/features.json пересчитывается автоматически по реальным тестам"
+    if name == "constitution.md":
+        return "CONSTITUTION.md (стек, список пакетов) утверждает только владелец"
+    if len(parts) >= 3 and parts[-3:-1] == ("docs", "adr") and name.endswith(".md"):
+        if _is_accepted_adr(rel, project):
+            return "принятый ADR неизменяем: решение пересматривается новым ADR"
+    return None
+
+
+def _decide(rel: str, role: str, project: Path) -> Block | Ask | None:
+    if _is_test_path(rel) and role not in TEST_ROLES:
+        shown = f"«{role}»" if role else "основная сессия без роли"
+        return Block(
+            HOOK,
+            f"Тесты ({rel}) правят только роли architect и tester, а у тебя {shown}. "
+            "Тест — это требование, а не деталь реализации. Опиши нужную правку в ответе: "
+            "её сделает architect или tester.",
+        )
+    gated = _gated_reason(rel, project)
+    if gated:
+        return Ask(
+            HOOK,
+            f"Нужно подтверждение владельца: изменяется защищённый путь {rel}, {gated}. "
+            "Подтверждай, только если сам просил именно эту правку.",
+        )
+    return None
 
 
 def _md_creation_allowed(rel: str) -> bool:
@@ -135,6 +158,14 @@ def _md_creation_allowed(rel: str) -> bool:
     return len(parts) >= 2 and parts[0] in {"analysis", "state"}
 
 
+def _exists_ignoring_case(project: Path, rel: str) -> bool:
+    folder = project / PurePosixPath(rel).parent
+    if not folder.is_dir():
+        return False
+    name = PurePosixPath(rel).name
+    return any(child.name.lower() == name for child in folder.iterdir())
+
+
 def _md_block(rel: str, project: Path) -> Block | None:
     if not rel.endswith(".md") or _md_creation_allowed(rel):
         return None
@@ -146,14 +177,6 @@ def _md_block(rel: str, project: Path) -> Block | None:
         "репозиторий не кладём. Решения оформляй как ADR в docs/adr/, остальное напиши "
         "в ответе, а не в файле.",
     )
-
-
-def _exists_ignoring_case(project: Path, rel: str) -> bool:
-    folder = project / PurePosixPath(rel).parent
-    if not folder.is_dir():
-        return False
-    name = PurePosixPath(rel).name
-    return any(child.name.lower() == name for child in folder.iterdir())
 
 
 def _written_paths(tokens: list[str]) -> list[str]:
@@ -184,52 +207,33 @@ def _written_paths(tokens: list[str]) -> list[str]:
     return paths
 
 
-def _shell_block(command: str, role: str, project: Path) -> Block | None:
-    for tokens in command_tokens(command):
-        for raw in _written_paths(tokens):
-            rel = rel_posix(raw.strip("\"'"), project)
-            if rel is None:
-                continue
-            if role == "implementer":
-                reason = _protected_reason(rel, project)
-                if reason:
-                    return Block(
-                        HOOK,
-                        f"Команда меняет защищённый путь {rel}: {reason}. "
-                        "Если правка действительно нужна, опиши её в ответе, "
-                        "и это сделает другая роль или владелец.",
-                    )
-            block = _md_block(rel, project)
-            if block:
-                return block
-    return None
+def _check_paths(rels: list[str], role: str, project: Path) -> Block | Ask | None:
+    asked: Ask | None = None
+    for rel in rels:
+        decision = _decide(rel, role, project)
+        if isinstance(decision, Block):
+            return decision
+        if decision is not None and asked is None:
+            asked = decision
+        block = _md_block(rel, project)
+        if block:
+            return block
+    return asked
 
 
-def check(data: JsonDict, project: Path) -> Block | None:
+def check(data: JsonDict, project: Path) -> Block | Ask | None:
     if not is_managed(project):
         return None
     role = agent_role(data)
     tool = get_str(data, "tool_name")
     if tool in SHELL_TOOLS:
-        return _shell_block(shell_command(data), role, project)
-    if tool not in FILE_TOOLS:
+        raws = [raw for t in command_tokens(shell_command(data)) for raw in _written_paths(t)]
+    elif tool in FILE_TOOLS:
+        raws = target_paths(data)
+    else:
         return None
-    for raw in target_paths(data):
-        rel = rel_posix(raw, project)
-        if rel is None:
-            continue
-        if role == "implementer":
-            reason = _protected_reason(rel, project)
-            if reason:
-                return Block(
-                    HOOK,
-                    f"Роль implementer не может менять {rel}: {reason}. "
-                    "Опиши нужную правку в ответе, и это сделает другая роль или владелец.",
-                )
-        block = _md_block(rel, project)
-        if block:
-            return block
-    return None
+    rels = [rel for raw in raws if (rel := rel_posix(raw.strip("\"'"), project)) is not None]
+    return _check_paths(rels, role, project)
 
 
 if __name__ == "__main__":

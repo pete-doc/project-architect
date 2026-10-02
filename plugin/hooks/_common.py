@@ -33,6 +33,22 @@ class Block:
     reason: str
 
 
+@dataclass(frozen=True)
+class Ask:
+    """Решение «спросить владельца»: Claude Code покажет запрос на подтверждение.
+
+    Агент нажать «разрешить» сам не может, поэтому подтверждение владельца и есть способ
+    снять блокировку. Если запрос показать некому (режимы bypass и dontAsk, фоновый запуск),
+    решение превращается в обычный Block.
+    """
+
+    hook: str
+    reason: str
+
+
+PROMPT_MODES = ("default", "acceptEdits", "plan", "auto")
+
+
 def _use_utf8() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -242,7 +258,7 @@ def describe_call(data: JsonDict) -> str:
 
 # ---------- запуск охранного hook ----------
 
-Check = Callable[[JsonDict, Path], Block | None]
+Check = Callable[[JsonDict, Path], Block | Ask | None]
 
 
 def run_guard(hook: str, check: Check) -> NoReturn:
@@ -253,11 +269,30 @@ def run_guard(hook: str, check: Check) -> NoReturn:
     try:
         data = read_input()
         project = project_dir(data)
-        block = check(data, project)
-        if block is None:
+        decision = check(data, project)
+        if decision is None:
             sys.exit(0)
-        audit(project, data, hook, "block", f"{describe_call(data)} :: {block.reason}")
-        sys.stderr.write(f"[{hook}] {block.reason}\n")
+        if isinstance(decision, Ask):
+            mode = get_str(data, "permission_mode")
+            if mode in PROMPT_MODES:
+                audit(project, data, hook, "ask", f"{describe_call(data)} :: {decision.reason}")
+                answer = {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "ask",
+                        "permissionDecisionReason": f"[{hook}] {decision.reason}",
+                    }
+                }
+                sys.stdout.write(json.dumps(answer, ensure_ascii=False) + "\n")
+                sys.exit(0)
+            decision = Block(
+                decision.hook,
+                f"{decision.reason} Спросить владельца сейчас нельзя (режим разрешений: "
+                f"«{mode or 'неизвестен'}»), поэтому действие запрещено. Владелец может сам "
+                "внести правку или запустить сессию в обычном режиме и подтвердить её.",
+            )
+        audit(project, data, hook, "block", f"{describe_call(data)} :: {decision.reason}")
+        sys.stderr.write(f"[{hook}] {decision.reason}\n")
         sys.exit(2)
     except SystemExit:
         raise

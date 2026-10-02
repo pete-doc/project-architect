@@ -1,5 +1,6 @@
 """Охранные hooks: попытка нарушения -> блок (код 2) -> понятное сообщение агенту."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,19 @@ DESTRUCTIVE = [
     "git push origin +main",
     "git push --force-with-lease origin main",
     "git -C repo push -fu origin main",
+    "git reset --hard",
+    "git reset --hard HEAD~3",
+    "git -C repo reset --hard origin/main",
+    "git clean -f",
+    "git clean -fd",
+    "git clean -fdx",
+    "git clean -xdf",
+    "git clean -d",
+    "git clean -x",
+    "git clean -X",
+    "git clean --force",
+    "git -C repo clean -fd",
+    "cd app && git clean -fdx",
 ]
 SECRETS = [
     "cat .env",
@@ -54,6 +68,12 @@ HARMLESS = [
     "ls -la",
     "pytest tests -q",
     "env FOO=1 python x.py",
+    "git reset --soft HEAD~1",
+    "git reset HEAD file.txt",
+    "git clean -n",
+    "git clean -nd",
+    "git clean --dry-run",
+    "git status",
 ]
 
 
@@ -100,86 +120,177 @@ def test_broken_input_blocks_instead_of_passing(project: Path) -> None:
     assert_blocked(result, "guard_destructive", "сломалась")
 
 
-# ---------- guard_paths: роль implementer ----------
+# ---------- guard_paths: тесты правят только architect и tester ----------
 
-IMPLEMENTER_BLOCKED = [
+TEST_PATHS = [
     "tests/test_x.py",
     "src/test_foo.py",
     "src/foo.test.ts",
     "web/app.spec.tsx",
     "Foo.Tests/BarTests.cs",
     "Tests/Test_Upper.py",
+]
+NO_TEST_ACCESS = [None, IMPLEMENTER, "parch:reviewer", "parch:janitor", "parch:explorer"]
+TEST_ROLES = ["parch:architect", "parch:tester"]
+
+
+@pytest.mark.parametrize("rel", TEST_PATHS)
+@pytest.mark.parametrize("role", NO_TEST_ACCESS)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_only_architect_and_tester_may_edit_tests(
+    rel: str, role: str | None, tool: str, project: Path
+) -> None:
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, role)
+    assert_blocked(result, "guard_paths", "architect и tester", rel.lower())
+
+
+def test_main_session_without_role_is_told_so(project: Path) -> None:
+    result = run_hook("guard_paths.py", file_call("Edit", project / "tests/test_x.py"), project)
+    assert_blocked(result, "guard_paths", "основная сессия без роли")
+
+
+@pytest.mark.parametrize("rel", TEST_PATHS)
+@pytest.mark.parametrize("role", TEST_ROLES)
+def test_architect_and_tester_may_edit_tests(rel: str, role: str, project: Path) -> None:
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    assert result.code == 0, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("role", NO_TEST_ACCESS)
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo x > tests/test_a.py",
+        "rm tests/test_a.py",
+        "git checkout -- tests/test_a.py",
+        "cp patch.py tests/test_b.py",
+        "sed -i s/a/b/ src/test_foo.py",
+    ],
+)
+def test_shell_writes_to_tests_are_blocked_without_test_role(
+    command: str, role: str | None, project: Path
+) -> None:
+    result = run_hook("guard_paths.py", bash(command), project, role)
+    assert_blocked(result, "guard_paths", "architect и tester")
+
+
+def test_architect_may_write_tests_through_shell(project: Path) -> None:
+    result = run_hook("guard_paths.py", bash("echo x > tests/test_a.py"), project, TEST_ROLES[0])
+    assert result.code == 0, result.stderr
+
+
+# ---------- guard_paths: защищённые пути снимает только владелец ----------
+
+GATED = [
     ".claude/settings.json",
     ".claude/settings.local.json",
+    ".claude/hooks/guard.py",
     ".github/workflows/ci.yml",
     "state/features.json",
     "docs/CONSTITUTION.md",
     "docs/adr/0001-accepted.md",
 ]
-IMPLEMENTER_ALLOWED = [
-    "src/app.py",
-    "docs/adr/0002-proposed.md",
-    "docs/adr/0009-new.md",
-    "docs/notes.md",
-]
+EVERY_ROLE = [None, IMPLEMENTER, "parch:architect", "parch:tester", "parch:reviewer"]
+ORDINARY = ["src/app.py", "docs/adr/0002-proposed.md", "docs/adr/0009-new.md", "docs/notes.md"]
 
 
-@pytest.mark.parametrize("rel", IMPLEMENTER_BLOCKED)
-@pytest.mark.parametrize("tool", ["Write", "Edit"])
-def test_implementer_cannot_edit_protected_paths(rel: str, tool: str, project: Path) -> None:
-    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, IMPLEMENTER)
-    assert_blocked(result, "guard_paths", "implementer", rel.lower())
-
-
-@pytest.mark.parametrize("rel", IMPLEMENTER_ALLOWED)
-def test_implementer_can_edit_ordinary_paths(rel: str, project: Path) -> None:
-    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, IMPLEMENTER)
+def assert_asks_owner(result: HookResult, rel: str) -> None:
     assert result.code == 0, result.stderr
+    answer = json.loads(result.stdout)["hookSpecificOutput"]
+    assert answer["hookEventName"] == "PreToolUse"
+    assert answer["permissionDecision"] == "ask"  # не allow: подтвердить может только владелец
+    assert "Нужно подтверждение владельца" in answer["permissionDecisionReason"]
+    assert rel in answer["permissionDecisionReason"]
 
 
-@pytest.mark.parametrize("role", [None, "parch:architect", "parch:reviewer"])
-def test_other_roles_may_edit_tests(role: str | None, project: Path) -> None:
-    call = file_call("Write", project / "tests" / "test_x.py")
-    assert run_hook("guard_paths.py", call, project, role).code == 0
-
-
-IMPLEMENTER_SHELL_BLOCKED = [
-    "echo x > tests/test_a.py",
-    "echo x >> .github/workflows/ci.yml",
-    "sed -i s/a/b/ .github/workflows/ci.yml",
-    "rm tests/test_a.py",
-    "git checkout -- tests/test_a.py",
-    "cp patch.py tests/test_b.py",
-    "tee state/features.json",
-    "mv docs/adr/0001-accepted.md docs/adr/old.md",
-]
-IMPLEMENTER_SHELL_ALLOWED = [
-    "pytest tests -q",
-    "cat tests/test_a.py",
-    "cp tests/test_a.py /tmp/copy.py",
-    "ls .github",
-    "python -m ruff check .",
-]
-
-
-@pytest.mark.parametrize("command", IMPLEMENTER_SHELL_BLOCKED)
-def test_implementer_shell_writes_to_protected_paths_are_blocked(
-    command: str, project: Path
+@pytest.mark.parametrize("rel", GATED)
+@pytest.mark.parametrize("role", EVERY_ROLE)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_protected_paths_need_owner_confirmation_for_every_role(
+    rel: str, role: str | None, tool: str, project: Path
 ) -> None:
-    result = run_hook("guard_paths.py", bash(command), project, IMPLEMENTER)
-    assert_blocked(result, "guard_paths", "защищённый путь")
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, role)
+    assert_asks_owner(result, rel.lower())
 
 
-@pytest.mark.parametrize("command", IMPLEMENTER_SHELL_ALLOWED)
-def test_implementer_harmless_shell_passes(command: str, project: Path) -> None:
-    assert run_hook("guard_paths.py", bash(command), project, IMPLEMENTER).code == 0
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "auto"])
+def test_prompting_modes_show_the_owner_a_question(mode: str, project: Path) -> None:
+    call = file_call("Edit", project / ".github" / "workflows" / "ci.yml")
+    result = run_hook("guard_paths.py", call, project, permission_mode=mode)
+    assert_asks_owner(result, ".github/workflows/ci.yml")
 
 
-def test_implementer_powershell_writes_are_blocked(project: Path) -> None:
-    result = run_hook(
-        "guard_paths.py", powershell("Set-Content tests/test_a.py 'x'"), project, IMPLEMENTER
-    )
-    assert_blocked(result, "guard_paths")
+@pytest.mark.parametrize("mode", ["bypassPermissions", "dontAsk", None])
+def test_without_a_way_to_ask_the_owner_the_change_is_forbidden(
+    mode: str | None, project: Path
+) -> None:
+    call = file_call("Edit", project / ".github" / "workflows" / "ci.yml")
+    result = run_hook("guard_paths.py", call, project, permission_mode=mode)
+    assert_blocked(result, "guard_paths", "Спросить владельца сейчас нельзя")
+
+
+def test_agent_cannot_unlock_protected_paths_by_itself(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Известные «обходы»: переменная окружения и лишние поля во входе не снимают защиту."""
+    monkeypatch.setenv("PARCH_UNLOCK", "1")
+    monkeypatch.setenv("PARCH_OWNER_APPROVED", "1")
+    call = file_call("Edit", project / ".github" / "workflows" / "ci.yml")
+    call["owner_approved"] = True
+    call["tool_input"]["owner_approved"] = True
+    assert_asks_owner(run_hook("guard_paths.py", call, project, IMPLEMENTER), ".github")
+    blocked = run_hook("guard_paths.py", call, project, IMPLEMENTER, permission_mode="dontAsk")
+    assert_blocked(blocked, "guard_paths")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo x >> .github/workflows/ci.yml",
+        "sed -i s/a/b/ .github/workflows/ci.yml",
+        "tee state/features.json",
+        "rm .claude/settings.json",
+        "mv docs/adr/0001-accepted.md docs/adr/old.md",
+    ],
+)
+@pytest.mark.parametrize("role", [None, IMPLEMENTER, "parch:architect"])
+def test_shell_writes_to_protected_paths_need_owner_confirmation(
+    command: str, role: str | None, project: Path
+) -> None:
+    result = run_hook("guard_paths.py", bash(command), project, role)
+    assert result.code == 0, result.stderr
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("rel", ORDINARY)
+@pytest.mark.parametrize("role", EVERY_ROLE)
+def test_ordinary_paths_are_free_for_every_role(rel: str, role: str | None, project: Path) -> None:
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    assert result.code == 0, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest tests -q",
+        "cat tests/test_a.py",
+        "cp tests/test_a.py /tmp/copy.py",
+        "ls .github",
+        "python -m ruff check .",
+    ],
+)
+def test_harmless_shell_passes_for_every_role(command: str, project: Path) -> None:
+    for role in (None, IMPLEMENTER):
+        assert run_hook("guard_paths.py", bash(command), project, role).code == 0
+
+
+def test_powershell_writes_are_checked(project: Path) -> None:
+    result = run_hook("guard_paths.py", powershell("Set-Content tests/test_a.py 'x'"), project)
+    assert_blocked(result, "guard_paths", "architect и tester")
+    ci = run_hook("guard_paths.py", powershell("Set-Content .github/ci.yml 'x'"), project)
+    assert json.loads(ci.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 # ---------- guard_paths: .md вне docs/ ----------

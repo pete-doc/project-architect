@@ -105,6 +105,32 @@ def _force_pushes(tokens: list[str]) -> bool:
     return False
 
 
+def _git_subcommand_args(tokens: list[str], subcommand: str) -> list[str] | None:
+    if command_name(tokens) != "git" or subcommand not in tokens[1:]:
+        return None
+    return tokens[tokens.index(subcommand) + 1 :]
+
+
+def _git_reset_hard(tokens: list[str]) -> bool:
+    args = _git_subcommand_args(tokens, "reset")
+    return args is not None and "--hard" in [a.lower() for a in args]
+
+
+def _git_clean_destroys(tokens: list[str]) -> bool:
+    """git clean с -f, -x, -X или -d (по отдельности или вместе, например -fdx) стирает файлы."""
+    args = _git_subcommand_args(tokens, "clean")
+    if args is None:
+        return False
+    lowered = [a.lower() for a in args]
+    if "--dry-run" in lowered or any(re.fullmatch(r"-[a-z]*n[a-z]*", a) for a in args):
+        return False  # пробный запуск ничего не удаляет
+    if "--force" in lowered:
+        return True
+    return any(
+        re.fullmatch(r"-[fxXd]+[a-zA-Z]*", a) or re.fullmatch(r"-[a-zA-Z]*[fxXd]", a) for a in args
+    )
+
+
 def _dumps_environment(tokens: list[str]) -> bool:
     name = command_name(tokens)
     if name == "printenv":
@@ -132,6 +158,20 @@ def _command_block(command: str) -> Block | None:
                 "git push --force запрещён: он переписывает общую историю и может стереть "
                 "чужую работу. Сделай обычный push; если ветка разошлась, смёржи или "
                 "перебазируй локально и спроси владельца.",
+            )
+        if _git_reset_hard(tokens):
+            return Block(
+                HOOK,
+                "git reset --hard запрещён: он стирает несохранённые изменения без возможности "
+                "вернуть. Сохрани работу коммитом или git stash; чтобы отменить один файл, "
+                "спроси владельца.",
+            )
+        if _git_clean_destroys(tokens):
+            return Block(
+                HOOK,
+                "git clean с флагами -f, -x или -d запрещён: он безвозвратно удаляет файлы, "
+                "которых нет в git. Сначала посмотри, что будет удалено: git clean -n; "
+                "удалять конкретные файлы нужно по одному.",
             )
         if _dumps_environment(tokens):
             return Block(

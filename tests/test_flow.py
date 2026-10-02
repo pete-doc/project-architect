@@ -1,5 +1,6 @@
 """post_edit_check, stop_gate, audit_log, конфигурация hooks и правила permissions."""
 
+import fnmatch
 import json
 import subprocess
 import sys
@@ -241,21 +242,66 @@ def test_every_hook_script_has_a_test_with_a_bad_example() -> None:
             assert script.name in sources, f"нет теста для {script.name}"
 
 
-def test_permissions_template_denies_config_edits_and_secrets() -> None:
+def load_permissions() -> dict[str, list[str]]:
     settings = json.loads(
         (REPO / "templates" / "claude" / "settings.json").read_text(encoding="utf-8")
     )
-    deny = set(settings["permissions"]["deny"])
-    expected = {
+    return settings["permissions"]
+
+
+def carve_out_is_effective(rules: list[str]) -> bool:
+    """По документации Claude Code исключение `Read(!x)` вырезает путь только из правил выше него.
+
+    Если оно стоит раньше правила или такого правила нет, оно не вырезает ничего.
+    """
+    for index, rule in enumerate(rules):
+        if rule.startswith("Read(!"):
+            carved = rule.removeprefix("Read(!").removesuffix(")")
+            earlier = [
+                r for r in rules[:index] if r.startswith("Read(") and not r.startswith("Read(!")
+            ]
+            if not any(
+                fnmatch.fnmatch(carved, r.removeprefix("Read(").removesuffix(")")) for r in earlier
+            ):
+                return False
+    return True
+
+
+def test_permissions_template_asks_owner_for_config_and_denies_the_rest() -> None:
+    permissions = load_permissions()
+    ask = set(permissions["ask"])
+    deny = set(permissions["deny"])
+    assert {
         "Edit(/.claude/settings.json)",
         "Edit(/.claude/settings.local.json)",
         "Edit(/.claude/hooks/**)",
-        "Edit(/.claude/audit/**)",
+        "Edit(/.github/**)",
+        "Edit(/docs/CONSTITUTION.md)",
         "Edit(~/.claude/settings.json)",
         "Edit(~/.claude/plugins/**)",
+    } <= ask
+    assert {
+        "Edit(/.claude/audit/**)",
         "Read(.env)",
         "Bash(rm -rf *)",
         "Bash(git push --force*)",
-    }
-    assert expected <= deny
-    assert not any(rule.startswith(("Write(", "MultiEdit(")) for rule in deny)
+        "Bash(git reset --hard*)",
+        "Bash(git clean -f*)",
+    } <= deny
+    # Правила для пути не должны быть одновременно «спросить» и «запретить»: запрет победил бы.
+    assert not ask & deny
+    # Путевые правила только для Edit и Read: для Write и MultiEdit Claude Code их не читает.
+    assert not any(rule.startswith(("Write(", "MultiEdit(")) for rule in ask | deny)
+
+
+def test_env_example_carve_out_matches_the_documented_form() -> None:
+    deny = load_permissions()["deny"]
+    assert "Read(.env.*)" in deny
+    assert "Read(!.env.example)" in deny
+    assert carve_out_is_effective(deny)
+
+
+def test_carve_out_listed_before_its_rule_is_detected_as_broken() -> None:
+    broken = ["Read(!.env.example)", "Read(.env.*)"]
+    assert not carve_out_is_effective(broken)
+    assert not carve_out_is_effective(["Read(!.env.example)"])

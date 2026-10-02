@@ -45,9 +45,16 @@ def run_hook(
     """Запускает hook так же, как Claude Code: JSON на stdin, переменная CLAUDE_PROJECT_DIR."""
     body = payload if isinstance(payload, str) else ""
     if isinstance(payload, dict):
-        data: dict[str, Any] = {"session_id": "s1", "cwd": str(project), **payload, **extra}
+        base: dict[str, Any] = {
+            "session_id": "s1",
+            "cwd": str(project),
+            "permission_mode": "default",
+        }
+        data: dict[str, Any] = {**base, **payload, **extra}
         if role:
             data["agent_type"] = role
+        if data["permission_mode"] is None:
+            del data["permission_mode"]
         body = json.dumps(data)
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "PYTHONIOENCODING": "utf-8"}
     process = subprocess.run(
