@@ -139,3 +139,40 @@ def test_tests_with_spaces_in_parameter_ids_are_tracked_too(tmp_path: Path) -> N
         "tests/test_a.py::test_one[a b c]",
         "tests/test_a.py::test_one[hello world]",
     ]
+
+
+def baseline_with_skip_lists(project: Path, **lists: list[str]) -> None:
+    path = project / "state" / "baseline.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for key, ids in lists.items():
+        data["skipped_tests"][key] = ids
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_a_skip_known_only_for_the_other_system_is_still_a_violation(tmp_path: Path) -> None:
+    import os
+
+    here, other = ("windows", "posix") if os.name == "nt" else ("posix", "windows")
+    project = make_project(tmp_path / "p")
+    assert run(project, "baseline", "--update", "--only-tests", report=PASSING).returncode == 0
+    skipped = ["tests.test_a::test_two"]
+    baseline_with_skip_lists(project, **{f"python@{other}": skipped})
+    refused = run(project, "skips", report=WITH_SKIP)
+    assert refused.returncode == 1, refused.stdout
+    baseline_with_skip_lists(project, **{f"python@{here}": skipped})
+    accepted = run(project, "skips", report=WITH_SKIP)
+    assert accepted.returncode == 0, accepted.stdout
+
+
+def test_baseline_update_records_skips_for_this_system_only(tmp_path: Path) -> None:
+    import os
+
+    project = make_project(tmp_path / "p")
+    assert run(project, "baseline", "--update", "--only-tests", report=PASSING).returncode == 0
+    here = "windows" if os.name == "nt" else "posix"
+    baseline_with_skip_lists(project, **{"python@elsewhere": ["tests.test_a::old"]})
+    done = run(project, "baseline", "--update", "--only-tests", "--accept-skips", report=WITH_SKIP)
+    assert done.returncode == 0, done.stdout
+    data = json.loads((project / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert data["skipped_tests"][f"python@{here}"] == ["tests.test_a::test_two"]
+    assert data["skipped_tests"]["python@elsewhere"] == ["tests.test_a::old"]  # чужое не тронуто

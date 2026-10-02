@@ -1,6 +1,18 @@
 {
   "skipped_tests": {
-    "python": []
+    "python": [],
+    "python@posix": [
+      "tests.test_launcher::test_falls_back_to_py_launcher[cmd]",
+      "tests.test_launcher::test_hook_exit_code_and_output_pass_through[cmd]",
+      "tests.test_launcher::test_no_python_blocks_guards_in_a_managed_project[cmd]",
+      "tests.test_launcher::test_no_python_does_not_block_non_guard_hooks[cmd]",
+      "tests.test_launcher::test_no_python_is_silent_in_unmanaged_projects[cmd]",
+      "tests.test_launcher::test_plugin_folder_with_spaces_in_path[cmd]",
+      "tests.test_launcher::test_skips_broken_store_stub_and_uses_python[cmd]",
+      "tests.test_launcher::test_skips_python_that_is_too_old[cmd]",
+      "tests.test_launcher::test_works_with_only_python3[cmd]"
+    ],
+    "python@windows": []
   },
   "skips": {
     "python": {
@@ -877,8 +889,10 @@
       "tests/test_plugin_manifest.py::test_marketplace_points_to_existing_plugin",
       "tests/test_plugin_manifest.py::test_plugin_manifest_has_name",
       "tests/test_product_ratchet.py::test_a_deleted_product_test_stops_ci",
+      "tests/test_product_ratchet.py::test_a_skip_known_only_for_the_other_system_is_still_a_violation",
       "tests/test_product_ratchet.py::test_a_skipped_product_test_stops_ci_even_with_an_alias",
       "tests/test_product_ratchet.py::test_baseline_refuses_to_hide_a_new_skip_without_the_owner",
+      "tests/test_product_ratchet.py::test_baseline_update_records_skips_for_this_system_only",
       "tests/test_product_ratchet.py::test_only_tests_updates_the_test_lists_and_nothing_else",
       "tests/test_product_ratchet.py::test_repository_baseline_exists_and_lists_the_product_tests",
       "tests/test_product_ratchet.py::test_repository_ci_runs_the_ratchet_on_the_product_itself",

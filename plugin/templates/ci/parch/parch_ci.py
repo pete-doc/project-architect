@@ -814,8 +814,8 @@ def update_baseline(
         )
         return result
     skipped_now = skipped_ids(outcomes)
-    new_skipped = sorted(skipped_now - baseline.strings("skipped_tests", language))
-    if baseline.has("skipped_tests", language) and new_skipped and not accept.skips:
+    new_skipped = sorted(skipped_now - known_skipped(baseline, language))
+    if has_skipped_list(baseline, language) and new_skipped and not accept.skips:
         result.fail(
             "Отказ: появились тесты, пропущенные по фактическому результату запуска, "
             "записывать их в baseline нельзя (--accept-skips):",
@@ -885,7 +885,9 @@ def update_baseline(
     if not result.ok:
         return result
     baseline.set("skips", language, skips)
-    baseline.set("skipped_tests", language, sorted(skipped_now))
+    if not baseline.has("skipped_tests", language):
+        baseline.set("skipped_tests", language, [])
+    baseline.set("skipped_tests", platform_key(language), sorted(skipped_now))
     if not only_tests:
         baseline.set("suppressions", language, suppressions)
         baseline.set("config", language, config)
@@ -1584,6 +1586,24 @@ REPORT_HINT = {
 }
 
 
+def platform_key(language: str) -> str:
+    """Ключ baseline для пропусков, зависящих от системы (тест только для Windows и т.п.)."""
+    return f"{language}@{'windows' if os.name == 'nt' else 'posix'}"
+
+
+def known_skipped(baseline: Baseline, language: str) -> set[str]:
+    """Пропущенные тесты, известные для всех систем и для этой системы."""
+    return baseline.strings("skipped_tests", language) | baseline.strings(
+        "skipped_tests", platform_key(language)
+    )
+
+
+def has_skipped_list(baseline: Baseline, language: str) -> bool:
+    return baseline.has("skipped_tests", language) or baseline.has(
+        "skipped_tests", platform_key(language)
+    )
+
+
 def check_skips(project: Path, language: str, report: Path | None = None) -> Result:
     """Пропуски считаются по фактическому результату запуска, текстовый поиск идёт дополнительно."""
     result = check_counts(
@@ -1606,7 +1626,7 @@ def check_skips(project: Path, language: str, report: Path | None = None) -> Res
         return result
     current = skipped_ids(outcomes)
     baseline = Baseline(project)
-    known = baseline.strings("skipped_tests", language)
+    known = known_skipped(baseline, language)
     new = sorted(current - known)
     if new:
         result.fail(
@@ -1622,7 +1642,7 @@ def check_skips(project: Path, language: str, report: Path | None = None) -> Res
         result.note(
             f"Пропущенных тестов по результату запуска: {len(current)} (все известны из baseline)."
         )
-        if not baseline.has("skipped_tests", language):
+        if not has_skipped_list(baseline, language):
             result.note(
                 "Внимание: в baseline нет списка пропущенных тестов. "
                 "Создайте его: baseline --update."
