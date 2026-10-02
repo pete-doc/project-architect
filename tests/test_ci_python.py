@@ -574,3 +574,77 @@ def test_workflow_template_runs_the_new_checks() -> None:
     workflow = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
     for check in ("skips", "suppressions", "settings"):
         assert f"parch_ci.py {check}" in workflow
+
+
+# ---------- пропуски по фактическому результату запуска: псевдонимы не обойти ----------
+
+ALIAS_VARIANTS = [
+    "import pytest as pt\n\n\n@pt.mark.skip(reason='x')\n"
+    "def test_extra() -> None:\n    assert True\n",
+    "from pytest import mark\n\n\n@mark.skip(reason='x')\n"
+    "def test_extra() -> None:\n    assert True\n",
+    "from pytest import mark as m\n\n\n@m.xfail\ndef test_extra() -> None:\n    assert False\n",
+    "from pytest import skip as bail\n\n\ndef test_extra() -> None:\n    bail('x')\n",
+    "import pytest as p\n\n\ndef test_extra() -> None:\n    p.skip('x')\n",
+    "from pytest import importorskip as need\n\n\n"
+    "def test_extra() -> None:\n    need('nonexistent_module_xyz')\n",
+]
+EXTRA_ID = "tests.test_extra::test_extra"
+
+
+@pytest.mark.parametrize("body", ALIAS_VARIANTS)
+def test_aliased_skips_are_caught_by_the_actual_test_run(shop: Shop, body: str) -> None:
+    shop.write("tests/test_extra.py", body)
+    out = shop.fails("skips")
+    assert "по фактическому результату запуска" in out
+    assert EXTRA_ID in out
+    assert "псевдонимы" in out
+
+
+def test_text_search_alone_would_miss_a_renamed_skip_function(shop: Shop) -> None:
+    """Текстовый поиск оставлен дополнительным: он слеп к `skip as bail`, запуск нет."""
+    from parch_ci import RULES, scan_counts
+
+    shop.write("tests/test_extra.py", ALIAS_VARIANTS[3])
+    seen = scan_counts(shop.root, "python", RULES["python"].skip_patterns, True)
+    assert not any("test_extra.py" in key for key in seen)
+    assert EXTRA_ID in shop.fails("skips")
+
+
+def test_text_search_still_runs_next_to_the_test_report(shop: Shop) -> None:
+    shop.write("tests/test_extra.py", ALIAS_VARIANTS[0])
+    out = shop.fails("skips")
+    assert "Пропуски в тексте тестов" in out  # дополнительная проверка по тексту (mark.skip)
+    assert "Пропущено по фактическому результату запуска" in out
+
+
+def test_aliased_skip_in_baseline_passes_and_a_new_one_does_not(
+    make_shop: Callable[[], Shop],
+) -> None:
+    project = make_shop()
+    project.write("tests/test_extra.py", ALIAS_VARIANTS[3])
+    project.passes("baseline", "--update")
+    assert "все известны" in project.passes("skips")
+    project.append("tests/test_extra.py", "\n\ndef test_second() -> None:\n    bail('y')\n")
+    out = project.fails("skips")
+    assert "tests.test_extra::test_second" in out
+    assert "tests.test_extra::test_extra" not in out.split("новых")[1]
+
+
+def test_baseline_refuses_actual_skips_without_the_owner_flag(shop: Shop) -> None:
+    shop.write("tests/test_extra.py", ALIAS_VARIANTS[1])
+    refused = shop.fails("baseline", "--update")
+    assert "--accept-skips" in refused
+    assert EXTRA_ID in refused
+    shop.passes("baseline", "--update", "--accept-skips")
+    shop.passes("skips")
+
+
+def test_skip_decided_at_run_time_by_a_condition_is_caught(shop: Shop) -> None:
+    shop.write(
+        "tests/test_extra.py",
+        "import sys\n\nimport pytest\n\n\n"
+        "@pytest.mark.skipif(sys.version_info >= (3, 0), reason='всегда')\n"
+        "def test_extra() -> None:\n    assert True\n",
+    )
+    assert EXTRA_ID in shop.fails("skips")

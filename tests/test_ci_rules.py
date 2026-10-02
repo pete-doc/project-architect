@@ -115,10 +115,23 @@ SETTINGS_ADDITIONS = [
 ]
 
 
+CLEAN_REPORTS = {
+    "typescript": '{"testResults": [{"name": "src/a.test.ts", "assertionResults": '
+    '[{"fullName": "adds", "status": "passed"}]}]}',
+    "csharp": '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
+    '<UnitTestResult testName="App.Tests.CalcTests.Adds" outcome="Passed"/></Results></TestRun>',
+    "powershell": '<testsuites><testsuite name="Tool"><testcase classname="Tool" name="answers"/>'
+    "</testsuite></testsuites>",
+}
+REPORT_FILES = {"typescript": "report.json", "csharp": "report.trx", "powershell": "report.xml"}
+
+
 class Project:
     def __init__(self, root: Path, language: str) -> None:
         self.root = root
         self.language = language
+        self.report: Path = root.parent / f"{language}-{REPORT_FILES[language]}"
+        self.report.write_text(CLEAN_REPORTS[language], encoding="utf-8")
         for rel, text in PROJECTS[language].items():
             self.write(rel, text)
 
@@ -135,7 +148,8 @@ class Project:
         return subprocess.run(
             [
                 sys.executable, str(SCRIPT), check,
-                "--language", self.language, "--project", str(self.root), *flags,
+                "--language", self.language, "--project", str(self.root),
+                "--report", str(self.report), *flags,
             ],
             capture_output=True,
             text=True,
@@ -234,3 +248,84 @@ def test_checks_without_an_adapter_say_so_instead_of_passing(tmp_path: Path) -> 
     project = make(tmp_path, "typescript")
     out = project.fails("dead-code")
     assert "ещё не реализована" in out
+
+
+# ---------- пропуски по результату запуска: отчёты Vitest/Jest, dotnet test, Pester ----------
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
+
+# Реальные отчёты, снятые с настоящих запусков (Vitest 2.1.9, dotnet test с xUnit, Pester 3.4).
+REAL_REPORTS = [
+    ("typescript", "vitest.json", {f"a.test.js::{n}" for n in ("later", "someday", "conditional")}),
+    ("csharp", "dotnet.trx", {"Demo.UnitTest1.Later", "Demo.UnitTest1.Th"}),
+    ("powershell", "pester-nunit.xml", {"Tool.skipped", "Tool.pending", "Tool.inconclusive"}),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("language", "fixture", "skipped"), REAL_REPORTS)
+def test_parsers_read_real_test_reports(language: str, fixture: str, skipped: set[str]) -> None:
+    from parch_ci import REPORT_PARSERS, skipped_ids
+
+    outcomes = REPORT_PARSERS[language](FIXTURES / fixture)
+    assert skipped_ids(outcomes) == skipped
+    assert "passed" in outcomes.values()  # исходы «прошёл» тоже разобраны
+
+
+def test_real_vitest_report_marks_it_fails_as_passed_so_the_text_search_matters() -> None:
+    """В отчёте Vitest `it.fails` выглядит как «прошёл»: его ловит поиск по тексту."""
+    from parch_ci import REPORT_PARSERS
+
+    outcomes = REPORT_PARSERS["typescript"](FIXTURES / "vitest.json")
+    assert outcomes["a.test.js::known"] == "passed"
+
+
+@pytest.mark.parametrize(("language", "fixture", "skipped"), REAL_REPORTS)
+def test_skips_from_the_real_run_are_violations_until_the_owner_accepts(
+    tmp_path: Path, language: str, fixture: str, skipped: set[str]
+) -> None:
+    project = make(tmp_path, language)
+    clean = project.report
+    project.report = FIXTURES / fixture
+    out = project.fails("skips")
+    assert "по фактическому результату запуска" in out
+    for test_id in sorted(skipped):
+        assert test_id in out
+    refused = project.fails("baseline", "--update")
+    assert "--accept-skips" in refused
+    project.passes("baseline", "--update", "--accept-skips")
+    assert "все известны" in project.passes("skips")
+    project.report = clean  # вернулись к чистому отчёту: это улучшение, а не нарушение
+    project.passes("skips")
+
+
+@pytest.mark.parametrize("language", list(PROJECTS))
+def test_skips_without_a_report_fail_instead_of_passing_on_text_search_alone(
+    tmp_path: Path, language: str
+) -> None:
+    project = make(tmp_path, language)
+    done = subprocess.run(
+        [
+            sys.executable, str(SCRIPT), "skips",
+            "--language", language, "--project", str(project.root),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )  # fmt: skip
+    assert done.returncode == 1
+    assert "Нет отчёта о запуске тестов" in done.stdout
+    assert "--report" in done.stdout
+
+
+def test_a_broken_report_is_a_failure_not_a_pass(tmp_path: Path) -> None:
+    project = make(tmp_path, "typescript")
+    project.report.write_text("это не JSON", encoding="utf-8")
+    done = project.run("skips")
+    assert done.returncode != 0
+
+
+def test_workflow_for_python_does_not_need_a_report_but_runs_the_tests_itself() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "--junitxml" in script  # Python: исход каждого теста берётся из отчёта pytest
+    assert "REPORT_PARSERS" in script

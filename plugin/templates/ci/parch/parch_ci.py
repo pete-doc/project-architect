@@ -767,9 +767,27 @@ def refuse_growth(
             )
 
 
-def update_baseline(project: Path, language: str, accept: Accept) -> Result:
+def update_baseline(
+    project: Path, language: str, accept: Accept, report: Path | None = None
+) -> Result:
     result = Result()
     baseline = Baseline(project)
+    outcomes = test_outcomes(project, language, report)
+    if outcomes is None:
+        result.fail(
+            f"Нет отчёта о запуске тестов для {language}: без него пропуски по фактическому "
+            "результату не посчитать. Передайте --report ФАЙЛ.",
+            REPORT_HINT.get(language, ""),
+        )
+        return result
+    skipped_now = skipped_ids(outcomes)
+    new_skipped = sorted(skipped_now - baseline.strings("skipped_tests", language))
+    if baseline.has("skipped_tests", language) and new_skipped and not accept.skips:
+        result.fail(
+            "Отказ: появились тесты, пропущенные по фактическому результату запуска, "
+            "записывать их в baseline нельзя (--accept-skips):",
+            *shown(new_skipped),
+        )
     skips = scan_counts(project, language, RULES[language].skip_patterns, True)
     suppressions = scan_counts(
         project, language, RULES[language].suppression_patterns, False, in_comments=True
@@ -833,6 +851,7 @@ def update_baseline(project: Path, language: str, accept: Accept) -> Result:
     if not result.ok:
         return result
     baseline.set("skips", language, skips)
+    baseline.set("skipped_tests", language, sorted(skipped_now))
     baseline.set("suppressions", language, suppressions)
     baseline.set("config", language, config)
     if collected is not None:
@@ -871,7 +890,7 @@ RULES: dict[str, LanguageRules] = {
         source_extensions=(".py",),
         test_file_patterns=("test_*.py", "*_test.py", "conftest.py"),
         skip_patterns={
-            "pytest.mark.skip": r"\bpytest\.mark\.(skip|skipif|xfail)\b",
+            "mark.skip": r"\bmark\.(skip|skipif|xfail)\b",
             "pytest.skip()": r"\bpytest\.(skip|xfail|importorskip)\s*\(",
             "unittest.skip": r"\bunittest\.(skip|skipIf|skipUnless|expectedFailure)\b",
             "skipTest": r"\bskipTest\s*\(|\bSkipTest\b",
@@ -1273,17 +1292,175 @@ def check_counts(
     return result
 
 
-def check_skips(project: Path, language: str) -> Result:
-    return check_counts(
+# ---------- пропуски по фактическому результату запуска тестов ----------
+
+SKIPPED_TRX = {"notexecuted", "inconclusive", "pending", "notrunnable"}
+FAILED_TRX = {"failed", "error", "timeout", "aborted"}
+SKIPPED_NUNIT = {"ignored", "skipped", "inconclusive", "notrun", "notrunnable", "pending"}
+FAILED_NUNIT = {"failure", "error"}
+SKIPPED_JEST = {"pending", "todo", "skipped", "disabled"}
+
+
+def local_name(tag: str) -> str:
+    return tag.split("}")[-1]
+
+
+def junit_outcomes(path: Path) -> dict[str, str]:
+    """JUnit XML (pytest --junitxml, Pester JUnitXml): исход каждого теста."""
+    outcomes: dict[str, str] = {}
+    for case in ElementTree.parse(path).getroot().iter("testcase"):
+        name = case.get("name", "")
+        classname = case.get("classname", "")
+        key = f"{classname}::{name}" if classname else name
+        children = {local_name(child.tag) for child in case}
+        state = "skipped" if "skipped" in children else "passed"
+        if children & {"failure", "error"}:
+            state = "failed"
+        outcomes[key] = state
+    return outcomes
+
+
+def nunit_outcomes(path: Path) -> dict[str, str]:
+    """NUnit 2.5 XML (Pester NUnitXml): исход каждого теста."""
+    outcomes: dict[str, str] = {}
+    for case in ElementTree.parse(path).getroot().iter("test-case"):
+        result = case.get("result", "").lower()
+        state = "passed"
+        if result in FAILED_NUNIT:
+            state = "failed"
+        elif result in SKIPPED_NUNIT or case.get("executed", "True").lower() == "false":
+            state = "skipped"
+        outcomes[case.get("name", "")] = state
+    return outcomes
+
+
+def pester_outcomes(path: Path) -> dict[str, str]:
+    root = ElementTree.parse(path).getroot()
+    return nunit_outcomes(path) if local_name(root.tag) == "test-results" else junit_outcomes(path)
+
+
+def trx_outcomes(path: Path) -> dict[str, str]:
+    """TRX (dotnet test --logger trx): исход каждого теста."""
+    outcomes: dict[str, str] = {}
+    for result in ElementTree.parse(path).getroot().iter():
+        if local_name(result.tag) != "UnitTestResult":
+            continue
+        outcome = result.get("outcome", "").lower()
+        state = "passed"
+        if outcome in FAILED_TRX:
+            state = "failed"
+        elif outcome in SKIPPED_TRX:
+            state = "skipped"
+        outcomes[result.get("testName", "")] = state
+    return outcomes
+
+
+def jest_json_outcomes(path: Path) -> dict[str, str]:
+    """JSON-отчёт Jest и Vitest (--json, --reporter=json): исход каждого теста."""
+    outcomes: dict[str, str] = {}
+    root = as_dict(json.loads(path.read_text(encoding="utf-8")))
+    for file_result in as_list(root.get("testResults")):
+        entry = as_dict(file_result)
+        file_name = PurePosixPath(str(entry.get("name", "")).replace("\\", "/")).name
+        for item in as_list(entry.get("assertionResults")):
+            test = as_dict(item)
+            status = str(test.get("status", ""))
+            state = "failed" if status == "failed" else "passed"
+            if status in SKIPPED_JEST:
+                state = "skipped"
+            outcomes[f"{file_name}::{test.get('fullName', test.get('title', ''))}"] = state
+    return outcomes
+
+
+REPORT_PARSERS: dict[str, Callable[[Path], dict[str, str]]] = {
+    "python": junit_outcomes,
+    "powershell": pester_outcomes,
+    "typescript": jest_json_outcomes,
+    "csharp": trx_outcomes,
+}
+
+
+def py_run_outcomes(project: Path) -> dict[str, str]:
+    """Запускает тесты и возвращает исход каждого из отчёта JUnit XML."""
+    report = project / ".parch-junit.xml"
+    report.unlink(missing_ok=True)
+    argv = [*python_tool("pytest"), "-q", "-p", "no:cacheprovider", "-o", "junit_family=xunit2"]
+    done = run([*argv, f"--junitxml={report.name}"], project)
+    try:
+        if not report.is_file():
+            raise ToolError("pytest не создал отчёт о запуске:\n" + tail(done))
+        return junit_outcomes(report)
+    finally:
+        report.unlink(missing_ok=True)
+
+
+def test_outcomes(project: Path, language: str, report: Path | None) -> dict[str, str] | None:
+    """Исходы тестов из отчёта запуска; None, если для языка отчёт нужен, а его не передали."""
+    if report is not None:
+        return REPORT_PARSERS[language](report)
+    if language == "python":
+        return py_run_outcomes(project)
+    return None
+
+
+def skipped_ids(outcomes: dict[str, str]) -> set[str]:
+    return {key for key, state in outcomes.items() if state == "skipped"}
+
+
+REPORT_HINT = {
+    "typescript": (
+        "Jest: jest --json --outputFile=отчёт.json; "
+        "Vitest: vitest run --reporter=json --outputFile=отчёт.json"
+    ),
+    "csharp": 'dotnet test --logger "trx;LogFileName=отчёт.trx"',
+    "powershell": "Pester: Invoke-Pester -Output None -CI (отчёт NUnitXml или JUnitXml)",
+}
+
+
+def check_skips(project: Path, language: str, report: Path | None = None) -> Result:
+    """Пропуски считаются по фактическому результату запуска, текстовый поиск идёт дополнительно."""
+    result = check_counts(
         project,
         language,
         "skips",
-        "Пропущенные тесты (skip, skipif, xfail, only, Ignore, -Skip)",
+        "Пропуски в тексте тестов (skip, skipif, xfail, only, Ignore, -Skip)",
         "Пропущенный тест не проверяет ничего: он считается удалённым. Почините тест или "
-        "удалите его "
-        "с решением владельца.",
+        "удалите его с решением владельца.",
         only_tests=True,
     )
+    outcomes = test_outcomes(project, language, report)
+    if outcomes is None:
+        result.fail(
+            f"Нет отчёта о запуске тестов для {language}: без него пропуски по фактическому "
+            "результату не посчитать (одного текстового поиска мало: псевдонимы и динамические "
+            "пропуски он не видит). Запустите тесты с отчётом и передайте --report ФАЙЛ.",
+            REPORT_HINT.get(language, ""),
+        )
+        return result
+    current = skipped_ids(outcomes)
+    baseline = Baseline(project)
+    known = baseline.strings("skipped_tests", language)
+    new = sorted(current - known)
+    if new:
+        result.fail(
+            f"Пропущено по фактическому результату запуска тестов ({len(new)} новых, в baseline "
+            "их нет; сюда входят skip, skipif, xfail, todo, NotExecuted, Ignored):",
+            *shown(new),
+            "Это видно по отчёту запуска, поэтому псевдонимы (`import pytest as pt`, "
+            "`from pytest import mark`) и пропуски внутри теста не обойти.",
+            "Если это решение владельца: python .github/parch/parch_ci.py baseline --update "
+            "--accept-skips",
+        )
+    else:
+        result.note(
+            f"Пропущенных тестов по результату запуска: {len(current)} (все известны из baseline)."
+        )
+        if not baseline.has("skipped_tests", language):
+            result.note(
+                "Внимание: в baseline нет списка пропущенных тестов. "
+                "Создайте его: baseline --update."
+            )
+    return result
 
 
 def check_suppressions(project: Path, language: str) -> Result:
@@ -1365,8 +1542,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--accept-skips", action="store_true")
     parser.add_argument("--accept-suppressions", action="store_true")
     parser.add_argument("--accept-config", action="store_true")
+    parser.add_argument("--report", default=None)
     args = parser.parse_args(argv)
     project = Path(args.project).resolve()
+    report = Path(args.report).resolve() if args.report else None
     try:
         if args.check == "baseline":
             if not args.update:
@@ -1378,13 +1557,15 @@ def main(argv: list[str] | None = None) -> int:
                 suppressions=args.accept_suppressions,
                 config=args.accept_config,
             )
-            result = update_baseline(project, args.language, accept)
+            result = update_baseline(project, args.language, accept, report)
         elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
             print(
                 f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка "
                 "ещё не реализована"
             )
             return 1
+        elif args.check == "skips":
+            result = check_skips(project, args.language, report)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:

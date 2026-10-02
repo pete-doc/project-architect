@@ -1,0 +1,70 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="1ca5e5fc-6d47-4c34-84b5-c0cb59299c03" name="user@host 2026-10-02 19:57:08" runUser="host\user" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-02T19:57:08.5926453+03:00" queuing="2026-10-02T19:57:08.5926456+03:00" start="2026-10-02T19:57:06.6451257+03:00" finish="2026-10-02T19:57:08.5968302+03:00" />
+  <TestSettings name="default" id="8d87efbc-7047-4dd3-b520-33d743a3b327">
+    <Deployment runDeploymentRoot="user_host_2026-10-02_19_57_08" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="f252709e-98e5-4076-987b-fa2399bd8ebc" testId="d2224fc3-d927-f257-5b83-030263334b0c" testName="Demo.UnitTest1.Th" computerName="host" duration="00:00:00.0010000" startTime="2026-10-02T19:57:08.5118669+03:00" endTime="2026-10-02T19:57:08.5118942+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f252709e-98e5-4076-987b-fa2399bd8ebc">
+      <Output>
+        <ErrorInfo>
+          <Message>x</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="f8b31948-a157-4e1b-9fba-527832ce1e82" testId="7a95fa54-1881-a1fe-c22c-46e0c6a4e01f" testName="Demo.UnitTest1.Ok" computerName="host" duration="00:00:00.3026042" startTime="2026-10-02T19:57:08.2110809+03:00" endTime="2026-10-02T19:57:08.5104886+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f8b31948-a157-4e1b-9fba-527832ce1e82" />
+    <UnitTestResult executionId="74ea7908-791b-4248-8260-5b487219f6ff" testId="5e8406b0-c49c-ddf5-b798-47c7f08bca5a" testName="Demo.UnitTest1.Later" computerName="host" duration="00:00:00.0010000" startTime="2026-10-02T19:57:08.2021356+03:00" endTime="2026-10-02T19:57:08.2035164+03:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="74ea7908-791b-4248-8260-5b487219f6ff">
+      <Output>
+        <ErrorInfo>
+          <Message>later</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Demo.UnitTest1.Th" storage="c:\users\user\appdata\local\temp\dn1\demo\bin\debug\net10.0\demo.dll" id="d2224fc3-d927-f257-5b83-030263334b0c">
+      <Execution id="f252709e-98e5-4076-987b-fa2399bd8ebc" />
+      <TestMethod codeBase="C:\Users\user\AppData\Local\Temp\dn1\Demo\bin\Debug\net10.0\Demo.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.UnitTest1" name="Th" />
+    </UnitTest>
+    <UnitTest name="Demo.UnitTest1.Later" storage="c:\users\user\appdata\local\temp\dn1\demo\bin\debug\net10.0\demo.dll" id="5e8406b0-c49c-ddf5-b798-47c7f08bca5a">
+      <Execution id="74ea7908-791b-4248-8260-5b487219f6ff" />
+      <TestMethod codeBase="C:\Users\user\AppData\Local\Temp\dn1\Demo\bin\Debug\net10.0\Demo.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.UnitTest1" name="Later" />
+    </UnitTest>
+    <UnitTest name="Demo.UnitTest1.Ok" storage="c:\users\user\appdata\local\temp\dn1\demo\bin\debug\net10.0\demo.dll" id="7a95fa54-1881-a1fe-c22c-46e0c6a4e01f">
+      <Execution id="f8b31948-a157-4e1b-9fba-527832ce1e82" />
+      <TestMethod codeBase="C:\Users\user\AppData\Local\Temp\dn1\Demo\bin\Debug\net10.0\Demo.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="Demo.UnitTest1" name="Ok" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="d2224fc3-d927-f257-5b83-030263334b0c" executionId="f252709e-98e5-4076-987b-fa2399bd8ebc" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7a95fa54-1881-a1fe-c22c-46e0c6a4e01f" executionId="f8b31948-a157-4e1b-9fba-527832ce1e82" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5e8406b0-c49c-ddf5-b798-47c7f08bca5a" executionId="74ea7908-791b-4248-8260-5b487219f6ff" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Список результатов" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="Все загруженные результаты" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="3" executed="1" passed="1" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.10)&#xD;
+[xUnit.net 00:00:00.65]   Discovering: Demo&#xD;
+[xUnit.net 00:00:00.69]   Discovered:  Demo&#xD;
+[xUnit.net 00:00:00.70]   Starting:    Demo&#xD;
+[xUnit.net 00:00:00.72]       later&#xD;
+[xUnit.net 00:00:01.03]       x&#xD;
+[xUnit.net 00:00:01.03]   Finished:    Demo&#xD;
+Тест "Demo.UnitTest1.Later" пропущен в тестовом запуске.&#xD;
+Тест "Demo.UnitTest1.Th" пропущен в тестовом запуске.&#xD;
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="host" outcome="Warning" timestamp="2026-10-02T19:57:08.2044670+03:00">
+        <Text>[xUnit.net 00:00:00.72]     Demo.UnitTest1.Later [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="host" outcome="Warning" timestamp="2026-10-02T19:57:08.5123870+03:00">
+        <Text>[xUnit.net 00:00:01.03]     Demo.UnitTest1.Th [SKIP]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

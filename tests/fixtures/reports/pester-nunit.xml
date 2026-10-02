@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<test-results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="nunit_schema_2.5.xsd" name="Pester" total="3" errors="0" failures="0" not-run="0" inconclusive="2" ignored="1" skipped="0" invalid="0" date="2026-10-02" time="19:57:25">
+  <environment user="user" machine-name="host" cwd="C:\Users\user\AppData\Local\Temp\ps1" user-domain="host" platform="Майкрософт Windows 11 Домашняя|C:\Windows|\Device\Harddisk0\Partition3" nunit-version="2.5.8.0" os-version="10.0.26200" clr-version="4.0.30319.42000" />
+  <culture-info current-culture="ru-RU" current-uiculture="en-US" />
+  <test-suite type="Powershell" name="Pester" executed="True" result="Ignored" success="True" time="0.6037" asserts="0">
+    <results>
+      <test-suite type="TestFixture" name="Tool" executed="True" result="Ignored" success="False" time="0.6037" asserts="0" description="Tool">
+        <results>
+          <test-case description="works" name="Tool.works" time="0.4827" asserts="0" success="True" result="Success" executed="True" />
+          <test-case description="skipped" name="Tool.skipped" time="0.0626" asserts="0" success="True" result="Ignored" executed="False" />
+          <test-case description="pending" name="Tool.pending" time="0.0034" asserts="0" success="True" result="Inconclusive" executed="True" />
+          <test-case description="inconclusive" name="Tool.inconclusive" time="0.055" asserts="0" success="False" result="Inconclusive" executed="True">
+            <reason>
+              <message>x</message>
+            </reason>
+          </test-case>
+        </results>
+      </test-suite>
+    </results>
+  </test-suite>
+</test-results>

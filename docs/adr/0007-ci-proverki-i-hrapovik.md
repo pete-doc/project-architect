@@ -1,6 +1,6 @@
 # ADR-0007. CI-проверки по языкам: общий скрипт, «храповик» по отпечаткам, честные «красные»
 
-- Статус: proposed
+- Статус: accepted (утверждено владельцем 2026-10-02)
 - Тип решения: необратимое (формат baseline и набор проверок закрепятся во всех подключённых проектах)
 - Дата: 2026-10-02
 
@@ -48,11 +48,20 @@
 Три способа «пройти» проверки, ничего не исправив, закрыты тем же «храповиком». Правила написаны сразу для Python,
 TypeScript, C# и PowerShell; полный CI для трёх последних появится в следующих PR, но сами правила и тесты на них уже есть.
 
-9. **Пропущенный тест считается удалённым** (проверка `skips`). Считаются: `pytest.mark.skip/skipif/xfail`, `pytest.skip()`,
-   `importorskip`, `unittest.skip*`, `skipTest`; TypeScript `it/test/describe.skip/todo/only/fails`, `xit/xdescribe`;
-   C# `Skip =`, `[Ignore]`, `[Explicit]`, `Assert.Ignore`, `Skip.If`; PowerShell `-Skip`, `Set-ItResult -Skipped`, `-Pending`.
-   Считается по файлам тестов: новый или лишний пропуск нарушает «храповик», записать его в baseline можно только флагом
-   владельца `--accept-skips`. В Python разбор идёт через `tokenize`: слова «skip» в строках и комментариях не считаются.
+9. **Пропущенный тест считается удалённым, и считается он по фактическому результату запуска** (проверка `skips`).
+   Основной источник: отчёт о запуске тестов с исходом каждого теста. Поиск по тексту (`pytest.mark.skip`, `it.skip`,
+   `[Fact(Skip=...)]`, `-Skip` и т. п.) оставлен дополнительным. Причина: текст обходится псевдонимами
+   (`import pytest as pt; @pt.mark.skip`, `from pytest import mark; @mark.skip`, `from pytest import skip as bail`) и
+   динамическими пропусками (`importorskip`, `skipif` с условием, `pytest.skip()` внутри теста), а результат запуска нет.
+   Отчёты: Python берёт исходы из `pytest --junitxml` (скрипт запускает тесты сам); TypeScript из JSON Jest (`--json`)
+   или Vitest (`--reporter=json`): статусы `skipped`, `pending`, `todo`, `disabled`; C# из TRX (`dotnet test --logger trx`):
+   исходы `NotExecuted`, `Inconclusive`; PowerShell из отчёта Pester в формате NUnitXml или JUnitXml: `Ignored`, `Skipped`,
+   `Inconclusive`, `NotRun`. Для TypeScript, C# и PowerShell отчёт передаётся ключом `--report ФАЙЛ`; без него проверка падает
+   (одного текстового поиска мало), поэтому CI-шаблон каждого языка обязан запускать тесты с отчётом. Парсеры проверены
+   на реальных отчётах, снятых с настоящих запусков (Vitest, `dotnet test` с xUnit, Pester). Новый пропущенный тест
+   нарушает «храповик»; записать его в baseline можно только флагом владельца `--accept-skips`. Известная особенность
+   Vitest: `it.fails` в отчёте выглядит как «прошёл», его ловит дополнительный поиск по тексту. Для Python текстовый
+   поиск разбирает код через `tokenize`: слова «skip» в строках и комментариях не считаются.
 10. **Подавляющие комментарии не растут** (проверка `suppressions`). Python: `# type: ignore`, `# pyright: ignore`,
     `# pyright: basic/off`, `# noqa`, `# ruff: noqa`, `# pragma: no cover`, `# mypy: ignore-errors`; TypeScript: `@ts-ignore`,
     `@ts-expect-error`, `@ts-nocheck`, `eslint-disable`, `biome-ignore`, `prettier-ignore`, `istanbul/c8/v8 ignore`;
