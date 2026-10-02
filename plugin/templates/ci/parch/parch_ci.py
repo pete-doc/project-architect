@@ -250,6 +250,85 @@ def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
     return sorted({line for line in lines if PY_TEST_ID.match(line)})
 
 
+# ---------- тесты, которых нет в отчёте запуска ----------
+
+TS_TEST_CALL = re.compile(r"\b(it|test)(\.\w+)*\s*[(`]")
+CS_TEST_ATTRIBUTE = re.compile(r"\[\s*(Fact|Theory|Test|TestCase|TestMethod|DataTestMethod)\b")
+CS_CLASS = re.compile(r"\bclass\s+(\w+)")
+GAP_HINT = (
+    "Тест, который есть в коде или в baseline, но отсутствует в отчёте запуска, считается не "
+    "запущенным: урезанный отчёт или фильтр (-k, --filter) ничего не доказывает. "
+    "Запустите все тесты."
+)
+
+
+def py_report_key(test_id: str) -> str:
+    """Идентификатор pytest `tests/a.py::Класс::имя[пар]` в виде ключа отчёта JUnit."""
+    head, bracket, params = test_id.partition("[")
+    parts = head.split("::")
+    module = parts[0].removesuffix(".py").replace("\\", "/").replace("/", ".")
+    classname = ".".join([module, *parts[1:-1]])
+    return f"{classname}::{parts[-1]}{bracket}{params}"
+
+
+def ts_files_without_results(project: Path, reported: set[str]) -> set[str]:
+    rules = RULES["typescript"]
+    in_report = {key.split("::")[0] for key in reported}
+    gaps: set[str] = set()
+    for path in walk_files(project, TS_EXTENSIONS):
+        rel = rel_of(project, path)
+        if not is_test_file(rules, rel):
+            continue
+        code, _ = blank_ts_comments_and_strings(path.read_text(encoding="utf-8", errors="replace"))
+        if TS_TEST_CALL.search(code) and path.name not in in_report:
+            gaps.add(f"{rel} (файл с тестами, в отчёте его нет)")
+    return gaps
+
+
+def cs_classes_without_results(project: Path, reported: set[str]) -> set[str]:
+    rules = RULES["csharp"]
+    in_report = {parts[-2] for key in reported if len(parts := key.split("(")[0].split(".")) >= 2}
+    gaps: set[str] = set()
+    for path in walk_files(project, (".cs",)):
+        rel = rel_of(project, path)
+        if not is_test_file(rules, rel):
+            continue
+        code, _ = blank_cs_comments_and_strings(path.read_text(encoding="utf-8-sig"))
+        starts = [(m.start(), m.group(1)) for m in CS_CLASS.finditer(code)]
+        for index, (start, name) in enumerate(starts):
+            end = starts[index + 1][0] if index + 1 < len(starts) else len(code)
+            if CS_TEST_ATTRIBUTE.search(code[start:end]) and name not in in_report:
+                gaps.add(f"{rel}: класс {name} (тесты класса в отчёте не найдены)")
+    return gaps
+
+
+def report_gaps(
+    project: Path, language: str, outcomes: dict[str, str], baseline: Baseline
+) -> list[str]:
+    """Тесты из кода и из baseline, которых нет в отчёте запуска."""
+    reported = set(outcomes)
+    known = baseline.strings("tests", language)
+    if language == "python":
+        found = set(py_test_ids(project)) | known
+        return sorted(t for t in found if py_report_key(t) not in reported)
+    gaps = {t for t in known if t not in reported}
+    if language == "typescript":
+        gaps |= ts_files_without_results(project, reported)
+    if language == "csharp":
+        gaps |= cs_classes_without_results(project, reported)
+    return sorted(gaps)
+
+
+def fail_on_gaps(result: Result, gaps: list[str]) -> bool:
+    if gaps:
+        result.fail(
+            f"В отчёте запуска нет {len(gaps)} тестов, которые есть в коде или в baseline:",
+            *shown(gaps),
+            GAP_HINT,
+        )
+    return bool(gaps)
+
+
 def check_tests(project: Path, language: str, report: Path | None = None) -> Result:
     result = Result()
     current = set(COLLECTORS[language].test_ids(project, report))
@@ -269,6 +348,12 @@ def check_tests(project: Path, language: str, report: Path | None = None) -> Res
             "--accept-removed",
         )
         return result
+    if report is not None:
+        outcomes = test_outcomes(project, language, report)
+        if outcomes is not None and fail_on_gaps(
+            result, report_gaps(project, language, outcomes, baseline)
+        ):
+            return result
     result.note(f"Тестов: {len(current)} (в baseline {len(known)}, новых {len(current - known)}).")
     if not baseline.has("tests", language):
         result.note(
@@ -814,6 +899,8 @@ def update_baseline(
         )
         return result
     skipped_now = skipped_ids(outcomes)
+    if report is not None:
+        fail_on_gaps(result, report_gaps(project, language, outcomes, baseline))
     new_skipped = sorted(skipped_now - known_skipped(baseline, language))
     if has_skipped_list(baseline, language) and new_skipped and not accept.skips:
         result.fail(
@@ -1626,6 +1713,8 @@ def check_skips(project: Path, language: str, report: Path | None = None) -> Res
         return result
     current = skipped_ids(outcomes)
     baseline = Baseline(project)
+    if report is not None:
+        fail_on_gaps(result, report_gaps(project, language, outcomes, baseline))
     known = known_skipped(baseline, language)
     new = sorted(current - known)
     if new:
