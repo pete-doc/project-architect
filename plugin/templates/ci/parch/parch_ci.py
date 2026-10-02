@@ -126,7 +126,11 @@ def run(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, **(env or {})},
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                **(env or {}),
+            },  # UTF-8 в дочерних Python (Windows)
             check=False,
             timeout=900,
         )
