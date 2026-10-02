@@ -5,3 +5,6 @@ __pycache__/
 .ruff_cache/
 **/.claude/settings.local.json
 **/.claude/audit/
+node_modules/
+coverage/
+test-report.json

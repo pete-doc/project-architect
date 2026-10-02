@@ -1,0 +1,48 @@
+{
+  "forbidden": [
+    {
+      "name": "ui-not-db",
+      "comment": "UI не обращается к хранилищу напрямую",
+      "severity": "error",
+      "from": { "path": "^src/ui/" },
+      "to": { "path": "^src/db/" }
+    },
+    {
+      "name": "orders-not-ui",
+      "severity": "error",
+      "from": { "path": "^src/orders/" },
+      "to": { "path": "^src/ui/" }
+    },
+    {
+      "name": "pricing-is-pure",
+      "comment": "Цены не зависят от хранилища, заказов и интерфейса",
+      "severity": "error",
+      "from": { "path": "^src/pricing/" },
+      "to": { "path": "^src/(db|orders|ui)/" }
+    },
+    {
+      "name": "leaf-modules",
+      "comment": "Хранилище и общие функции ни от кого не зависят",
+      "severity": "error",
+      "from": { "path": "^src/(db|util)/" },
+      "to": { "path": "^src/(orders|pricing|ui)/" }
+    },
+    {
+      "name": "no-entry-import",
+      "comment": "Внутри пакета нельзя импортировать публичный вход",
+      "severity": "error",
+      "from": { "path": "^src/(db|orders|pricing|ui|util)/" },
+      "to": { "path": "^src/index\\.ts$" }
+    },
+    {
+      "name": "no-circular",
+      "severity": "error",
+      "from": {},
+      "to": { "circular": true }
+    }
+  ],
+  "options": {
+    "doNotFollow": { "path": "node_modules" },
+    "tsConfig": { "fileName": "tsconfig.json" }
+  }
+}

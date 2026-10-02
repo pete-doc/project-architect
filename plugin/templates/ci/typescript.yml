@@ -1,0 +1,49 @@
+name: ci-typescript
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      # Отчёт о запуске тестов формирует сам CI: без него проверки ниже красные.
+      - run: npm test
+      - run: python .github/parch/parch_ci.py settings --language typescript
+      - run: python .github/parch/parch_ci.py tests --language typescript --report test-report.json
+      - run: python .github/parch/parch_ci.py skips --language typescript --report test-report.json
+      - run: python .github/parch/parch_ci.py suppressions --language typescript
+      - run: python .github/parch/parch_ci.py modules --language typescript
+      - run: python .github/parch/parch_ci.py deps --language typescript
+      - run: python .github/parch/parch_ci.py architecture --language typescript
+      - run: python .github/parch/parch_ci.py dead-code --language typescript
+      - run: python .github/parch/parch_ci.py duplicates --language typescript
+      - run: python .github/parch/parch_ci.py coverage --language typescript

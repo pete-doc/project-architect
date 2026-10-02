@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ def run_hook(
     payload: dict[str, Any] | str,
     project: Path,
     role: str | None = None,
+    path_prefix: Path | None = None,
     **extra: Any,
 ) -> HookResult:
     """Запускает hook так же, как Claude Code: JSON на stdin, переменная CLAUDE_PROJECT_DIR."""
@@ -57,9 +59,10 @@ def run_hook(
             del data["permission_mode"]
         body = json.dumps(data)
     interpreter_dir = str(Path(sys.executable).parent)  # `python` в hooks = интерпретатор тестов
+    prefix = (str(path_prefix) + os.pathsep) if path_prefix else ""
     env = {
         **os.environ,
-        "PATH": interpreter_dir + os.pathsep + os.environ.get("PATH", ""),
+        "PATH": prefix + interpreter_dir + os.pathsep + os.environ.get("PATH", ""),
         "CLAUDE_PROJECT_DIR": str(project),
         "PYTHONIOENCODING": "utf-8",
     }
@@ -108,3 +111,74 @@ def project(tmp_path: Path) -> Path:
 def bare_project(tmp_path: Path) -> Path:
     """Проект без CONSTITUTION.md: ProjectArchitect к нему не подключён."""
     return tmp_path
+
+
+JSCPD_VERSION = "5.4.0"
+TS_SHOP = Path(__file__).resolve().parent / "projects" / "ts_shop"
+
+
+def npm_command() -> list[str]:
+    """npm без обёрток .cmd: через node и npm-cli.js (одинаково на всех системах)."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("нужен Node.js")
+    npm_cli = Path(node).parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    return [node, str(npm_cli)] if npm_cli.is_file() else [shutil.which("npm") or "npm"]
+
+
+@pytest.fixture(scope="session")
+def jscpd(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """jscpd той же версии, что в CI-шаблоне, установленный во временную папку."""
+    folder = tmp_path_factory.mktemp("jscpd")
+    (folder / "package.json").write_text('{"private": true}', encoding="utf-8")
+    done = subprocess.run(
+        [*npm_command(), "install", f"jscpd@{JSCPD_VERSION}", "--no-audit", "--no-fund"],
+        cwd=folder,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    entry = folder / "node_modules" / "jscpd" / "run-jscpd.js"
+    node = shutil.which("node") or "node"
+    return f'"{node}" "{entry}"'.replace("\\", "/")
+
+
+@pytest.fixture(scope="session")
+def ts_node_modules(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """node_modules тестового TypeScript-проекта, установленные один раз по его lock-файлу."""
+    folder = tmp_path_factory.mktemp("tsdeps")
+    for name in ("package.json", "package-lock.json"):
+        shutil.copyfile(TS_SHOP / name, folder / name)
+    done = subprocess.run(
+        [*npm_command(), "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=folder,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=600,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    return folder / "node_modules"
+
+
+def link_directory(link: Path, target: Path) -> None:
+    """Ссылка на папку: junction на Windows (не требует прав), symlink на остальных системах."""
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            check=True,
+        )
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def unlink_directory(link: Path) -> None:
+    """Удаляет только ссылку, не содержимое того, на что она указывает."""
+    if os.path.lexists(link):
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "reports"

@@ -2,6 +2,7 @@
 
 import fnmatch
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -291,3 +292,26 @@ def test_carve_out_listed_before_its_rule_is_detected_as_broken() -> None:
     broken = ["Read(!.env.example)", "Read(.env.*)"]
     assert not carve_out_is_effective(broken)
     assert not carve_out_is_effective(["Read(!.env.example)"])
+
+
+def test_stop_gate_finds_commands_through_path_lookup(project: Path, tmp_path: Path) -> None:
+    """npm и другие `.cmd` на Windows запускаются только через поиск по PATH, а не по имени."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    if os.name == "nt":
+        (bindir / "mytool.cmd").write_text("@echo broken\r\n@exit /b 1\r\n", encoding="ascii")
+    else:
+        tool = bindir / "mytool"
+        tool.write_text("#!/bin/sh\necho broken\nexit 1\n", encoding="utf-8")
+        tool.chmod(0o755)
+    set_checks(project, "- mytool")
+    result = run_hook(
+        "stop_gate.py",
+        {"hook_event_name": "Stop"},
+        project,
+        stop_hook_active=False,
+        path_prefix=bindir,
+    )
+    assert result.blocked, result.stderr
+    assert "(код 1)" in result.stderr  # команда нашлась и сама вернула ошибку
+    assert "не удалось выполнить" not in result.stderr

@@ -14,11 +14,11 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from conftest import JSCPD_VERSION
 
 REPO = Path(__file__).resolve().parent.parent
 SHOP = REPO / "tests" / "projects" / "python_shop"
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
-JSCPD_VERSION = "5.4.0"
 
 DUPLICATE_BODY = """
 
@@ -47,29 +47,6 @@ def report_{n}(items: dict[str, int], limit: int) -> list[str]:
     rows.append("limit=" + str(limit))
     return rows
 """
-
-
-@pytest.fixture(scope="session")
-def jscpd(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """jscpd той же версии, что в CI-шаблоне, установленный во временную папку."""
-    folder = tmp_path_factory.mktemp("jscpd")
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("нужен Node.js для jscpd")
-    npm_cli = Path(node).parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
-    npm = [node, str(npm_cli)] if npm_cli.is_file() else [shutil.which("npm") or "npm"]
-    (folder / "package.json").write_text('{"private": true}', encoding="utf-8")
-    done = subprocess.run(
-        [*npm, "install", f"jscpd@{JSCPD_VERSION}", "--no-audit", "--no-fund"],
-        cwd=folder,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-    assert done.returncode == 0, done.stdout + done.stderr
-    entry = folder / "node_modules" / "jscpd" / "run-jscpd.js"
-    return f'"{node}" "{entry}"'.replace("\\", "/")
 
 
 class Shop:

@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tokenize
@@ -54,7 +55,7 @@ CONSTITUTIONS = ("docs/CONSTITUTION.md", "CONSTITUTION.md")
 SKIP_DIRS = {
     ".git", ".github", ".claude", ".venv", "venv", "env", "node_modules", "__pycache__",
     "build", "dist", "docs", "state", "tests", "test", "tools", "analysis", ".tox",
-    ".mypy_cache", ".ruff_cache", ".pytest_cache", "site-packages",
+    ".mypy_cache", ".ruff_cache", ".pytest_cache", "site-packages", "coverage",
 }  # fmt: skip
 MAX_SHOWN = 20
 ECOSYSTEM_ALIASES = {
@@ -232,7 +233,9 @@ def py_has_sources(project: Path) -> bool:
 # ---------- tests ----------
 
 
-def py_test_ids(project: Path) -> list[str]:
+def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
+    """Тесты Python собираются самим pytest; отчёт не нужен."""
+    del report
     argv = [*python_tool("pytest"), "--collect-only", "-q", "-p", "no:cacheprovider"]
     done = run(argv, project)
     if done.returncode not in (0, 5):
@@ -241,9 +244,9 @@ def py_test_ids(project: Path) -> list[str]:
     return sorted({line for line in lines if "::" in line and " " not in line})
 
 
-def check_tests(project: Path, language: str) -> Result:
+def check_tests(project: Path, language: str, report: Path | None = None) -> Result:
     result = Result()
-    current = set(COLLECTORS[language].test_ids(project))
+    current = set(COLLECTORS[language].test_ids(project, report))
     baseline = Baseline(project)
     known = baseline.strings("tests", language)
     if not current:
@@ -505,8 +508,17 @@ def jscpd_command() -> list[str]:
     return shlex.split(override) if override else ["npx", "--yes", f"jscpd@{JSCPD_VERSION}"]
 
 
+def source_roots(project: Path, language: str) -> list[str]:
+    """Корни кода проекта для языка (для остальных языков пока весь проект)."""
+    if language == "python":
+        return py_source_roots(project)
+    if language == "typescript":
+        return ts_source_roots(project)
+    return ["."]
+
+
 def jscpd_args(project: Path, language: str) -> list[str]:
-    roots = [r for r in py_source_roots(project) if (project / r).exists()]
+    roots = [r for r in source_roots(project, language) if (project / r).exists()]
     ignored = ["tests", ".github", "docs", "state", "node_modules", ".venv", "__pycache__"]
     ignore = ",".join(f"**/{name}/**" for name in ignored)
     return [
@@ -641,9 +653,12 @@ def unresolved_modules(project: Path, names: list[str]) -> list[str]:
 
 
 def check_architecture(project: Path, language: str) -> Result:
+    return COLLECTORS[language].architecture(project)
+
+
+def py_architecture(project: Path) -> Result:
     result = Result()
-    collector = COLLECTORS[language]
-    names = collector.module_names(project) if collector.has_sources(project) else []
+    names = py_module_names(project) if py_has_sources(project) else []
     if not names:
         result.note("Кода пока нет, проверка архитектуры пропущена.")
         return result
@@ -822,7 +837,7 @@ def update_baseline(
     tests: set[str] = set()
     dead: set[str] = set()
     if collected is not None:
-        tests = set(collected.test_ids(project))
+        tests = set(collected.test_ids(project, report))
         removed = sorted(baseline.strings("tests", language) - tests)
         if removed and not accept.removed:
             result.fail(
@@ -883,6 +898,7 @@ class LanguageRules:
     suppression_patterns: dict[str, str]  # вид подавления -> регулярное выражение
     config_files: tuple[str, ...]  # файлы настроек проверок целиком (fnmatch по имени файла)
     container_files: tuple[str, ...]  # файлы, где настройки проверок лежат в разделах
+    code_kinds: tuple[str, ...] = ()  # виды подавлений, которые ищутся в коде, а не в комментариях
 
 
 RULES: dict[str, LanguageRules] = {
@@ -935,19 +951,27 @@ RULES: dict[str, LanguageRules] = {
         ),  # fmt: skip
         skip_patterns={
             "it/test/describe.skip": (
-                r"\b(it|test|describe|suite|context)\."
-                r"(skip|skipIf|todo|only|fails|failing)\b"
+                r"\b(it|test|describe|suite|context)(\.concurrent|\.sequential)?\."
+                r"(skip|skipIf|todo|only)\b"
             ),
             "xit/xtest/xdescribe": r"\b(xit|xtest|xdescribe|fit|fdescribe)\s*\(",
+            # В отчёте Vitest тест `it.fails` выглядит как «прошёл»: считаем его пропуском сами.
+            "it.fails/test.fails": r"\b(it|test)(\.concurrent|\.sequential)?\.(fails|failing)\b",
         },
         suppression_patterns={
-            "@ts-ignore": r"@ts-(ignore|expect-error|nocheck)\b",
+            "ts-ignore/expect-error/nocheck": r"@ts-(ignore|expect-error|nocheck)\b",
             "eslint-disable": r"\beslint-disable",
             "biome-ignore": r"\bbiome-ignore\b",
             "prettier-ignore": r"\bprettier-ignore\b",
             "coverage ignore": r"\b(istanbul|c8|v8)\s+ignore\b",
             "knip-ignore": r"@public\b|\bknip-ignore\b",
+            # `any` главный способ «заглушить» типы: явные any считаются как подавления.
+            "explicit any": (
+                r":\s*any\b|\bas\s+any\b|<\s*any\s*>|[<,]\s*any\s*[,>\[]|\bany\s*\[\s*\]"
+                r"|=>\s*any\b|\bsatisfies\s+any\b"
+            ),
         },
+        code_kinds=("explicit any",),
         config_files=(
             "tsconfig*.json",
             ".eslintrc*",
@@ -1042,8 +1066,12 @@ SETUP_CFG_PREFIXES = (
     "isort",
     "mypy",
 )
-PACKAGE_JSON_KEYS = ("jest", "vitest", "eslintConfig", "prettier", "c8", "nyc", "mocha", "ava")
-PACKAGE_JSON_SCRIPTS = re.compile(r"^(test|lint|typecheck|type-check|check|coverage|format)")
+PACKAGE_JSON_KEYS = (
+    "jest", "vitest", "eslintConfig", "prettier", "c8", "nyc", "mocha", "ava", "parch", "knip",
+)  # fmt: skip
+PACKAGE_JSON_SCRIPTS = re.compile(
+    r"^(test|lint|typecheck|type-check|check|coverage|format|arch|deadcode|knip)"
+)
 CSPROJ_ELEMENTS = {
     "Nullable", "TreatWarningsAsErrors", "WarningsAsErrors", "WarningsNotAsErrors", "NoWarn",
     "AnalysisMode", "AnalysisLevel", "EnforceCodeStyleInBuild", "LangVersion", "IsTestProject",
@@ -1211,6 +1239,50 @@ def blank_python_comments_and_strings(text: str) -> tuple[str, list[str]]:
     return "\n".join(lines), comments
 
 
+def blank_ts_comments_and_strings(text: str) -> tuple[str, str]:
+    """Код без комментариев и содержимого строк, а также склеенный текст комментариев.
+
+    Небольшой разбор вместо регулярных выражений: слово `it.skip` или `any` в строке или в
+    комментарии пропуском и `any` не считается; подавления (`@ts-ignore`) ищутся в комментариях.
+    Литералы регулярных выражений не разбираются (редкое ложное срабатывание допустимо).
+    """
+    out: list[str] = []
+    comments: list[str] = []
+    blank = re.compile(r"[^\n]")
+    i, n = 0, len(text)
+    while i < n:
+        char, following = text[i], text[i + 1] if i + 1 < n else ""
+        if char == "/" and following == "/":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            comments.append(text[i:end])
+            out.append(" " * (end - i))
+            i = end
+        elif char == "/" and following == "*":
+            end = text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            comments.append(text[i:end])
+            out.append(blank.sub(" ", text[i:end]))
+            i = end
+        elif char in "'\"`":
+            j = i + 1
+            while j < n and text[j] != char:
+                if text[j] == "\\":
+                    j += 1
+                elif text[j] == "\n" and char != "`":
+                    break
+                j += 1
+            end = min(j + 1, n)
+            closed = end - i > 1 and text[end - 1] == char
+            body = text[i + 1 : end - 1] if closed else text[i + 1 : end]
+            out.append(char + blank.sub(" ", body) + (char if closed else ""))
+            i = end
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out), "\n".join(comments)
+
+
 def is_test_file(rules: LanguageRules, rel: str) -> bool:
     return matches_any(PurePosixPath(rel).name, rules.test_file_patterns) or any(
         fnmatch.fnmatch(rel.lower(), p.lower()) for p in rules.test_file_patterns if "/" in p
@@ -1236,12 +1308,17 @@ def scan_counts(
         if only_tests and not is_test_file(rules, rel):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        scope = text
+        code_scope, comment_scope = text, text
         if language == "python":
-            code, comments = blank_python_comments_and_strings(text)
-            scope = "\n".join(comments) if in_comments else code
+            code_scope, comments = blank_python_comments_and_strings(text)
+            comment_scope = "\n".join(comments)
+        elif language == "typescript":
+            code_scope, comment_scope = blank_ts_comments_and_strings(text)
+        flags = re.MULTILINE | (re.IGNORECASE if language in ("python", "powershell") else 0)
         for kind, pattern in patterns.items():
-            found = len(re.findall(pattern, scope, flags=re.MULTILINE | re.IGNORECASE))
+            comment_kind = in_comments and kind not in rules.code_kinds
+            scope = comment_scope if comment_kind else code_scope
+            found = len(re.findall(pattern, scope, flags=flags))
             if found:
                 counts[f"{rel}|{kind}"] = counts.get(f"{rel}|{kind}", 0) + found
     return counts
@@ -1475,6 +1552,337 @@ def check_suppressions(project: Path, language: str) -> Result:
     )
 
 
+# ---------- TypeScript ----------
+
+TS_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
+TS_COVERAGE_SUMMARY = "coverage/coverage-summary.json"
+KNIP_CONFIGS = ("knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc")
+DEPCRUISE_CONFIGS = (
+    ".dependency-cruiser.json",
+    ".dependency-cruiser.cjs",
+    ".dependency-cruiser.js",
+    ".dependency-cruiser.mjs",
+)
+DEPCRUISE_EXAMPLE = (
+    "Пример .dependency-cruiser.json в корне проекта:\n"
+    '  {"forbidden": [{"name": "ui-not-db", "severity": "error",\n'
+    '     "from": {"path": "^src/ui/"}, "to": {"path": "^src/db/"}}],\n'
+    '   "options": {"doNotFollow": {"path": "node_modules"},'
+    ' "tsConfig": {"fileName": "tsconfig.json"}}}'
+)
+
+
+def node_exe() -> str:
+    return shutil.which("node") or "node"
+
+
+def node_bin(project: Path, package: str, binary: str | None = None) -> list[str]:
+    """Запуск пакета из node_modules напрямую через node, без обёрток .cmd (одинаково везде)."""
+    manifest = project / "node_modules" / package / "package.json"
+    if not manifest.is_file():
+        raise ToolError(f"пакет {package} не установлен: выполните npm ci")
+    bins = read_json(manifest).get("bin")
+    mapping = {package.split("/")[-1]: str(bins)} if isinstance(bins, str) else as_dict(bins)
+    entry = mapping.get(binary or package.split("/")[-1]) or next(iter(mapping.values()), None)
+    if not entry:
+        raise ToolError(f"у пакета {package} нет исполняемого файла")
+    return [node_exe(), str((manifest.parent / str(entry)).resolve())]
+
+
+def ts_source_roots(project: Path) -> list[str]:
+    parch = as_dict(read_json(project / "package.json").get("parch"))
+    configured = as_strings(parch.get("sourceRoots"))
+    if configured:
+        return [normalize_path(x) for x in configured]
+    return ["src"] if (project / "src").is_dir() else ["."]
+
+
+def ts_is_source(name: str) -> bool:
+    lower = name.lower()
+    if not lower.endswith(TS_EXTENSIONS) or lower.endswith(".d.ts"):
+        return False
+    return not any(marker in lower for marker in (".test.", ".spec.", ".config."))
+
+
+def ts_modules(project: Path) -> list[str]:
+    """Модули: папки и одиночные файлы кода прямо в корне кода (пути от корня проекта)."""
+    modules: list[str] = []
+    for root in ts_source_roots(project):
+        base = project / root
+        if not base.is_dir():
+            continue
+        for entry in sorted(base.iterdir()):
+            rel = normalize_path(entry.relative_to(project).as_posix())
+            if entry.is_dir():
+                if entry.name in SKIP_DIRS or entry.name.startswith("."):
+                    continue
+                if any(ts_is_source(f.name) for f in entry.rglob("*") if f.is_file()):
+                    modules.append(rel)
+            elif ts_is_source(entry.name):
+                modules.append(rel)
+    return modules
+
+
+def ts_module_names(project: Path) -> list[str]:
+    return [PurePosixPath(m).stem if PurePosixPath(m).suffix else PurePosixPath(m).name
+            for m in ts_modules(project)]  # fmt: skip
+
+
+def ts_has_sources(project: Path) -> bool:
+    return bool(ts_modules(project))
+
+
+def ts_test_ids(project: Path, report: Path | None) -> list[str]:
+    if report is None:
+        raise ToolError(
+            "для TypeScript нужен отчёт о запуске тестов (--report ФАЙЛ): "
+            "список тестов берётся из него. " + REPORT_HINT["typescript"]
+        )
+    return sorted(jest_json_outcomes(report))
+
+
+NON_REGISTRY_SPEC = re.compile(r"^(git\+|git:|https?:|file:|github:|link:|[\w.-]+/[\w.-]+$)")
+
+
+def ts_manifest_packages(project: Path) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for path in walk_files(project, ("package.json",)):
+        rel = rel_of(project, path)
+        data = read_json(path)
+        for section in (
+            "dependencies",
+            "devDependencies",
+            "peerDependencies",
+            "optionalDependencies",
+        ):
+            for name, spec in as_dict(data.get(section)).items():
+                found.append((rel, name))
+                if isinstance(spec, str) and NON_REGISTRY_SPEC.match(spec):
+                    found.append(
+                        (rel, f"{name}@{spec}")
+                    )  # источник вне реестра: отдельное нарушение
+    return found
+
+
+def knip_config_file(project: Path) -> tuple[str, dict[str, object]] | None:
+    for name in KNIP_CONFIGS:
+        path = project / name
+        if path.is_file():
+            text = re.sub(
+                r"/\*.*?\*/|^\s*//.*$", "", path.read_text(encoding="utf-8"), flags=re.S | re.M
+            )
+            try:
+                return name, as_dict(json.loads(text))
+            except ValueError:
+                return name, {"__unparseable__": True}
+    package = as_dict(read_json(project / "package.json").get("knip"))
+    return ("package.json", package) if package else None
+
+
+def is_broad_pattern(pattern: str) -> bool:
+    """Исключение, которое закрывает почти весь код: `**`, `src/**`, `**/*.ts`, `*`."""
+    text = pattern.strip().removeprefix("./").removeprefix("!")
+    if not any(ch in text for ch in "*?["):
+        return False
+    literal: list[str] = []
+    for segment in text.split("/"):
+        if any(ch in segment for ch in "*?["):
+            break
+        literal.append(segment)
+    return len(literal) <= 1
+
+
+def knip_ignore_patterns(config: dict[str, object]) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for key, value in config.items():
+        if key == "workspaces":
+            for sub in as_dict(value).values():
+                found += knip_ignore_patterns(as_dict(sub))
+        elif key.startswith("ignore"):
+            if as_dict(value):
+                found += [(key, str(pattern)) for pattern in as_dict(value)]
+            else:
+                found += [(key, pattern) for pattern in as_strings(value)]
+    return found
+
+
+def knip_broad_findings(project: Path) -> set[str]:
+    loaded = knip_config_file(project)
+    if loaded is None:
+        return set()
+    name, config = loaded
+    if config.get("__unparseable__"):
+        return {f"knip-config|{name}|unparseable|"}
+    return {
+        f"knip-config|{name}|{key}|{pattern}"
+        for key, pattern in knip_ignore_patterns(config)
+        if is_broad_pattern(pattern)
+    }
+
+
+def knip_findings(project: Path) -> set[str]:
+    done = run([*node_bin(project, "knip"), "--reporter", "json"], project)
+    if done.returncode not in (0, 1):
+        raise ToolError("knip не отработал:\n" + tail(done))
+    try:
+        data = as_dict(json.loads(done.stdout))
+    except ValueError as error:
+        raise ToolError("knip вернул не JSON:\n" + tail(done)) from error
+    found: set[str] = set()
+    for item in as_list(data.get("issues")):
+        entry = as_dict(item)
+        file = normalize_path(str(entry.get("file", "")))
+        for category, values in entry.items():
+            if category == "file":
+                continue
+            for value in as_list(values):
+                found.add(f"knip|{file}|{category}|{as_dict(value).get('name', '')}")
+    return found
+
+
+def ts_dead_code(project: Path) -> set[str]:
+    broad = knip_broad_findings(project)
+    try:
+        return knip_findings(project) | broad
+    except ToolError:
+        if broad:  # knip мог упасть как раз из-за такой настройки: показываем причину
+            return broad
+        raise
+
+
+def ts_coverage(project: Path) -> float:
+    path = project / TS_COVERAGE_SUMMARY
+    if not path.is_file():
+        raise ToolError(
+            f"нет {TS_COVERAGE_SUMMARY}: тесты нужно запускать с покрытием "
+            "(vitest run --coverage, отчёт json-summary)"
+        )
+    total = as_dict(as_dict(read_json(path).get("total")).get("lines"))
+    pct = total.get("pct")
+    if not isinstance(pct, (int, float)):
+        raise ToolError(f"в {TS_COVERAGE_SUMMARY} нет total.lines.pct")
+    return float(pct)
+
+
+def depcruise_config(project: Path) -> tuple[Path, dict[str, object]] | None:
+    for name in DEPCRUISE_CONFIGS:
+        path = project / name
+        if not path.is_file():
+            continue
+        if path.suffix == ".json":
+            return path, read_json(path)
+        loader = (
+            "import(require('url').pathToFileURL(process.argv[1]).href)"
+            ".then(m => console.log(JSON.stringify(m.default ?? m)))"
+        )
+        done = run([node_exe(), "-e", loader, str(path)], project)
+        if done.returncode != 0:
+            raise ToolError(f"не удалось прочитать {name}:\n" + tail(done))
+        return path, as_dict(json.loads(done.stdout))
+    return None
+
+
+def rule_patterns(rule: dict[str, object]) -> list[tuple[str, str]]:
+    """Регулярные выражения путей из правила: (откуда `from` или куда `to`, шаблон)."""
+    found: list[tuple[str, str]] = []
+    for side in ("from", "to"):
+        node = as_dict(rule.get(side))
+        value = node.get("path")
+        patterns = as_strings(value) if as_list(value) else ([str(value)] if value else [])
+        found += [(side, pattern) for pattern in patterns]
+    return found
+
+
+def ts_architecture(project: Path) -> Result:
+    result = Result()
+    names = ts_module_names(project)
+    if not names:
+        result.note("Кода пока нет, проверка архитектуры пропущена.")
+        return result
+    loaded = depcruise_config(project)
+    if loaded is None:
+        result.fail(
+            "Для модулей кода нет правил архитектуры (.dependency-cruiser.json).", DEPCRUISE_EXAMPLE
+        )
+        return result
+    config_path, config = loaded
+    rules = [as_dict(r) for key in ("forbidden", "allowed") for r in as_list(config.get(key))]
+    path_rules = [r for r in rules if rule_patterns(r)]
+    if not path_rules:
+        result.fail(
+            "В правилах dependency-cruiser нет ни одного правила с путями (from.path / to.path): "
+            "правило, которого нет, ничего не проверяет.",
+            DEPCRUISE_EXAMPLE,
+        )
+        return result
+    roots = [r for r in ts_source_roots(project) if (project / r).exists()]
+    argv = [*node_bin(project, "dependency-cruiser", "depcruise"), *roots]
+    argv += ["--config", config_path.name, "--output-type", "json"]
+    done = run(argv, project)
+    try:
+        report = as_dict(json.loads(done.stdout))
+    except ValueError as error:
+        raise ToolError("dependency-cruiser вернул не JSON:\n" + tail(done)) from error
+    modules = as_list(report.get("modules"))
+    if not modules:
+        result.fail(
+            "dependency-cruiser не проанализировал ни одного файла: правила «пусто-зелёные». "
+            "Частая причина: несовместимая версия TypeScript или неверный путь к коду.",
+            *tail(done, 600).splitlines()[-5:],
+        )
+        return result
+    universe: set[str] = set()
+    for module in modules:
+        entry = as_dict(module)
+        universe.add(str(entry.get("source", "")))
+        universe.update(
+            str(as_dict(d).get("resolved", "")) for d in as_list(entry.get("dependencies"))
+        )
+    empty: list[str] = []
+    covered: set[str] = set()
+    for rule in path_rules:
+        for side, pattern in rule_patterns(rule):
+            try:
+                matched = {name for name in universe if re.search(pattern, name)}
+            except re.error as error:
+                empty.append(
+                    f"{rule.get('name', '?')}: {side}.path «{pattern}» не разобран ({error})"
+                )
+                continue
+            if not matched:
+                empty.append(
+                    f"{rule.get('name', '?')}: {side}.path «{pattern}» не находит ни одного файла"
+                )
+            covered |= matched
+    if empty:
+        result.fail(
+            "Правила архитектуры ничего не охватывают (опечатка в пути?). "
+            "Такое правило «проходит», "
+            "ничего не проверяя, поэтому оно считается ошибкой:",
+            *shown(empty),
+        )
+        return result
+    uncovered = [m for m in ts_modules(project) if not any(c.startswith(m) for c in covered)]
+    if uncovered:
+        result.fail(
+            "Эти модули не охвачены ни одним правилом архитектуры (нет в from.path и to.path):",
+            *shown(uncovered),
+        )
+        return result
+    summary = as_dict(report.get("summary"))
+    violations = [as_dict(v) for v in as_list(summary.get("violations"))]
+    errors = [v for v in violations if as_dict(v.get("rule")).get("severity") == "error"]
+    if errors:
+        lines = [
+            f"{as_dict(v.get('rule')).get('name')}: {v.get('from')} -> {v.get('to')}"
+            for v in errors
+        ]
+        result.fail("Правила архитектуры нарушены:", *shown(lines))
+    else:
+        result.note(f"Правила архитектуры соблюдены (правил с путями: {len(path_rules)}).")
+    return result
+
+
 # ---------- адаптеры языков ----------
 
 
@@ -1482,13 +1890,14 @@ def check_suppressions(project: Path, language: str) -> Result:
 class Collector:
     ecosystem: str
     jscpd_format: str
-    test_ids: Callable[[Path], list[str]]
+    test_ids: Callable[[Path, Path | None], list[str]]
     modules: Callable[[Path], list[str]]
     module_names: Callable[[Path], list[str]]
     manifest_packages: Callable[[Path], list[tuple[str, str]]]
     dead_code: Callable[[Path], set[str]]
     coverage: Callable[[Path], float]
     has_sources: Callable[[Path], bool]
+    architecture: Callable[[Path], Result]
 
 
 COLLECTORS: dict[str, Collector] = {
@@ -1502,6 +1911,19 @@ COLLECTORS: dict[str, Collector] = {
         py_dead_code,
         py_coverage,
         py_has_sources,
+        py_architecture,
+    ),
+    "typescript": Collector(
+        "npm",
+        "typescript,tsx",
+        ts_test_ids,
+        ts_modules,
+        ts_module_names,
+        ts_manifest_packages,
+        ts_dead_code,
+        ts_coverage,
+        ts_has_sources,
+        ts_architecture,
     ),
 }
 
@@ -1564,12 +1986,17 @@ def main(argv: list[str] | None = None) -> int:
                 "ещё не реализована"
             )
             return 1
+        elif args.check == "tests":
+            result = check_tests(project, args.language, report)
         elif args.check == "skips":
             result = check_skips(project, args.language, report)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:
         print(f"[parch:{args.check}] ПРОВАЛ: {error}")
+        return 1
+    except (ValueError, OSError, ElementTree.ParseError) as error:
+        print(f"[parch:{args.check}] ПРОВАЛ: не удалось прочитать данные или настройки: {error}")
         return 1
     print(f"[parch:{args.check}] {'ok' if result.ok else 'ПРОВАЛ'}")
     for line in result.lines:
