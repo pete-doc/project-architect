@@ -49,6 +49,9 @@
       "Edit(global.json)",
       "Edit(stylecop.json)",
       "Edit(coverlet.runsettings)",
+      "Edit(nuget.config)",
+      "Edit(NuGet.Config)",
+      "Edit(NuGet.config)",
       "Edit(PSScriptAnalyzerSettings.psd1)",
       "Edit(PesterConfiguration*)",
       "Edit(pester.config.*)"

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -65,6 +66,18 @@ TS_SCRIPTS = {
 TS_CHECK_FLAGS = "--language typescript --report test-report.json"
 TS_LOCAL_CI_CHECKS = ("settings", "tests", "skips", "modules", "deps", "dead-code", "architecture")
 
+# C#: версии пакетов лежат в шаблонах (plugin/templates/csharp) и в lock-файлах; .NET SDK
+# закреплён в global.json точной версией (rollForward: disable).
+CS_PACKAGES = (
+    "Microsoft.NET.Test.Sdk, xunit, xunit.runner.visualstudio, coverlet.collector, "
+    "TngTech.ArchUnitNET.xUnit, Roslynator.Analyzers"
+)
+CS_TEST_COMMAND = (
+    'dotnet test --logger trx --results-directory test-results --collect "XPlat Code Coverage"'
+)
+CS_CHECK_FLAGS = "--language csharp --report test-results"
+CS_LOCAL_CI_CHECKS = ("settings", "tests", "skips", "modules", "deps", "dead-code", "architecture")
+
 LANGUAGES = {
     "python": Language(
         "Python 3.12+ (ruff, pyright, pytest, import-linter, vulture, deptry, jscpd)",
@@ -90,10 +103,15 @@ LANGUAGES = {
         ),
     ),
     "csharp": Language(
-        "C# (.NET, nullable, warnings as errors, xUnit)",
+        "C# (.NET 10, nullable, warnings as errors, анализаторы, ArchUnitNET, xUnit, jscpd)",
         "nuget",
-        "xunit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk, coverlet.collector",
-        (),
+        CS_PACKAGES,
+        (
+            "dotnet build -warnaserror",
+            "dotnet format --verify-no-changes",
+            CS_TEST_COMMAND,
+            *(f"python {CI_SCRIPT} {check} {CS_CHECK_FLAGS}" for check in CS_LOCAL_CI_CHECKS),
+        ),
     ),
     "powershell": Language(
         "PowerShell (PSScriptAnalyzer, Pester)",
@@ -102,8 +120,16 @@ LANGUAGES = {
         (),
     ),
 }
-CI_TEMPLATES = {"python": "python.yml", "typescript": "typescript.yml"}
+CI_TEMPLATES = {
+    "python": "python.yml",
+    "typescript": "typescript.yml",
+    "csharp": "csharp.yml",
+}
 GITIGNORE_LINES = [".claude/audit/", ".claude/settings.local.json"]
+GITIGNORE_BY_LANGUAGE = {
+    "typescript": ["node_modules/", "coverage/", "test-report.json"],
+    "csharp": ["bin/", "obj/", "test-results/", "TestResults/"],
+}
 
 PYPROJECT = """[tool.ruff]
 line-length = 100
@@ -140,6 +166,7 @@ def initial_baseline(project: Path, languages: list[str]) -> dict[str, Any]:
     first_tests = {
         "python": ["tests/test_smoke.py::test_smoke"],
         "typescript": ["smoke.test.ts::smoke"],
+        "csharp": ["App.Tests.SmokeTests.Smoke"],
     }
     baseline: dict[str, Any] = {
         "version": 1,
@@ -252,10 +279,14 @@ def merge_permissions(report: Report) -> None:
         report.skipped.append(rel)
 
 
-def update_gitignore(report: Report) -> None:
+def update_gitignore(report: Report, languages: list[str]) -> None:
     path = report.project / ".gitignore"
     existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    missing = [line for line in GITIGNORE_LINES if line not in existing]
+    wanted = [
+        *GITIGNORE_LINES,
+        *(x for lang in languages for x in GITIGNORE_BY_LANGUAGE.get(lang, [])),
+    ]
+    missing = [line for line in wanted if line not in existing]
     if not missing:
         return
     text = "\n".join([*existing, *missing]) + "\n"
@@ -308,6 +339,47 @@ def create_typescript_files(project: Path, report: Report, name: str) -> None:
         )
 
 
+def create_csharp_files(project: Path, report: Report) -> None:
+    """Файлы C#-проекта; решение и lock-файлы создаются, если доступен dotnet."""
+    for template, target in (
+        ("global.json", "global.json"),
+        ("Directory.Build.props", "Directory.Build.props"),
+        ("editorconfig", ".editorconfig"),
+        ("App.Tests.csproj", "tests/App.Tests/App.Tests.csproj"),
+        ("smoke.cs.txt", "tests/App.Tests/SmokeTests.cs"),
+    ):
+        report.copy(f"csharp/{template}", target)
+    dotnet = shutil.which("dotnet")
+    if dotnet is None:
+        report.notes.append(
+            "dotnet не найден: установите .NET SDK версии из global.json, затем выполните "
+            "`dotnet new sln -n App --format sln`, "
+            "`dotnet sln add tests/App.Tests/App.Tests.csproj` и `dotnet restore`, "
+            "закоммитьте решение и packages.lock.json "
+            "(CI восстанавливает пакеты с --locked-mode)."
+        )
+        return
+    env = {**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en", "DOTNET_NOLOGO": "1"}
+    steps = (
+        [dotnet, "new", "sln", "-n", "App", "--format", "sln"],
+        [dotnet, "sln", "add", "tests/App.Tests/App.Tests.csproj"],
+        [dotnet, "restore"],
+    )
+    if (project / "App.sln").exists():
+        steps = steps[2:]
+    for step in steps:
+        done = subprocess.run(
+            step, cwd=project, capture_output=True, env=env, check=False, timeout=600
+        )
+        if done.returncode != 0:
+            report.notes.append(
+                f"Не удалось выполнить `{' '.join(step[1:])}`: сделайте это вручную и "
+                "закоммитьте App.sln и packages.lock.json."
+            )
+            return
+    report.created.extend(["App.sln", "tests/App.Tests/packages.lock.json"])
+
+
 def init_project(
     project: Path, name: str, languages: list[str], description: str, priorities: str
 ) -> dict[str, Any]:
@@ -330,7 +402,9 @@ def init_project(
         report.write("tests/test_smoke.py", SMOKE_TEST)
     if "typescript" in languages:
         create_typescript_files(project, report, name)
-    if "python" in languages or "typescript" in languages:
+    if "csharp" in languages:
+        create_csharp_files(project, report)
+    if any(lang in CI_TEMPLATES for lang in languages):
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
         report.write(
             "state/baseline.json", json.dumps(initial_baseline(project, languages), indent=2) + "\n"
@@ -345,7 +419,7 @@ def init_project(
                 "в CONSTITUTION.md."
             )
     merge_permissions(report)
-    update_gitignore(report)
+    update_gitignore(report, languages)
     adr.build_index(project)
     report.created.append("docs/adr/README.md (индекс решений)")
     report.write(

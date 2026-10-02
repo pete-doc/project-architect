@@ -115,6 +115,7 @@ def bare_project(tmp_path: Path) -> Path:
 
 JSCPD_VERSION = "5.4.0"
 TS_SHOP = Path(__file__).resolve().parent / "projects" / "ts_shop"
+CS_SHOP = Path(__file__).resolve().parent / "projects" / "cs_shop"
 
 
 def npm_command() -> list[str]:

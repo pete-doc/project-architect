@@ -363,6 +363,29 @@ def test_ts_expect_error_and_other_suppressions_count_too(shop: TsShop, snippet:
     assert "src/util/index.ts" in out
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "export const a = 'x' as unknown as number;",
+        "export const b = 'x' as never as number;",
+        "export const c = 'x' as unknown\n  as number;",
+    ],
+)
+def test_double_cast_counts_as_a_suppression(shop: TsShop, line: str) -> None:
+    shop.append("src/util/index.ts", f"\n{line}\n")
+    out = shop.fails("suppressions")
+    assert "double cast" in out
+    assert "--accept-suppressions" in out
+
+
+def test_double_cast_in_comments_and_strings_is_not_counted(shop: TsShop) -> None:
+    shop.append(
+        "src/util/index.ts",
+        "\n// приведение as unknown as T в комментарии\nexport const note = 'v as unknown as T';\n",
+    )
+    shop.passes("suppressions")
+
+
 def test_any_in_comments_strings_and_words_is_not_counted(shop: TsShop) -> None:
     shop.append(
         "src/util/index.ts",

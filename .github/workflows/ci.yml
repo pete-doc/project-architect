@@ -22,8 +22,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # Тесты C# запускают настоящий dotnet; версия SDK закреплена точно в global.json тестового проекта.
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: tests/projects/cs_shop/global.json
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
       - run: pyright
-      - run: pytest -v
+      - run: pytest -v --junitxml=test-report.xml
+      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
+      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+      - run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+      - run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml

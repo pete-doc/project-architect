@@ -8,3 +8,8 @@ __pycache__/
 node_modules/
 coverage/
 test-report.json
+bin/
+obj/
+TestResults/
+test-results/
+test-report.xml
