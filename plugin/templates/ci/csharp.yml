@@ -1,0 +1,39 @@
+name: ci-csharp
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    # C# проверяется на Windows: именно там чаще запускают .NET-проекты.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Точная версия .NET SDK берётся из global.json (rollForward: disable).
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Версии пакетов зафиксированы lock-файлами; расхождение с ними ломает восстановление.
+      - run: dotnet restore --locked-mode
+      - run: dotnet build --no-restore -warnaserror
+      - run: dotnet format --verify-no-changes --no-restore
+      # Отчёт о запуске тестов (trx) и покрытие формирует сам CI: без них проверки ниже красные.
+      - run: dotnet test --no-build --logger trx --results-directory test-results --collect "XPlat Code Coverage"
+      - run: python .github/parch/parch_ci.py settings --language csharp
+      - run: python .github/parch/parch_ci.py tests --language csharp --report test-results
+      - run: python .github/parch/parch_ci.py skips --language csharp --report test-results
+      - run: python .github/parch/parch_ci.py suppressions --language csharp
+      - run: python .github/parch/parch_ci.py modules --language csharp
+      - run: python .github/parch/parch_ci.py deps --language csharp
+      - run: python .github/parch/parch_ci.py architecture --language csharp
+      - run: python .github/parch/parch_ci.py dead-code --language csharp
+      - run: python .github/parch/parch_ci.py duplicates --language csharp
+      - run: python .github/parch/parch_ci.py coverage --language csharp

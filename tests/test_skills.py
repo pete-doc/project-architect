@@ -160,13 +160,12 @@ def test_init_keeps_existing_ci_and_merges_permissions(tmp_path: Path) -> None:
 
 
 def test_init_for_languages_without_ci_template_says_so(tmp_path: Path) -> None:
-    result = init(tmp_path, languages=["csharp", "powershell"])
+    result = init(tmp_path, languages=["powershell"])
     assert not (tmp_path / ".github").exists()
     assert not (tmp_path / "tests").exists()
-    assert any("csharp" in note and "фазе D" in note for note in result["notes"])
+    assert any("powershell" in note and "фазе D" in note for note in result["notes"])
     constitution = (tmp_path / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert "- psgallery: Pester, PSScriptAnalyzer" in constitution
-    assert "- nuget: xunit" in constitution
     assert "появятся вместе с CI-шаблоном" in constitution
 
 

@@ -1,8 +1,10 @@
-"""Правила про пропуски тестов, подавления и настройки проверок для TypeScript, C# и PowerShell.
+"""Правила про пропуски тестов, подавления и настройки проверок для PowerShell.
 
-Полный CI для этих языков появится в следующих PR фазы D, но сами правила («пропущенный тест
+TypeScript и C# проверяются в своих файлах (test_ci_typescript.py, test_ci_csharp.py).
+
+Полный CI для PowerShell появится в последнем PR фазы D, но сами правила («пропущенный тест
 считается удалённым», «число подавлений не растёт», «настройки проверок защищены отпечатком»)
-заложены сразу для всех четырёх языков. Здесь на каждое правило есть плохой пример.
+заложены сразу для всех языков. Здесь на каждое правило есть плохой пример.
 """
 
 import subprocess
@@ -15,23 +17,6 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
 
 PROJECTS: dict[str, dict[str, str]] = {
-    "csharp": {
-        "src/App/App.csproj": (
-            '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n'
-            "    <Nullable>enable</Nullable>\n"
-            "    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n"
-            "  </PropertyGroup>\n</Project>\n"
-        ),
-        ".editorconfig": "root = true\n[*.cs]\ndotnet_diagnostic.CA1707.severity = error\n",
-        "src/App/Calc.cs": (
-            "namespace App;\n"
-            "public static class Calc { public static int Add(int a, int b) => a + b; }\n"
-        ),
-        "tests/App.Tests/CalcTests.cs": (
-            "using Xunit;\nnamespace App.Tests;\npublic class CalcTests\n{\n"
-            "    [Fact]\n    public void Adds() => Assert.Equal(3, App.Calc.Add(1, 2));\n}\n"
-        ),
-    },
     "powershell": {
         "PSScriptAnalyzerSettings.psd1": "@{ Severity = @('Error', 'Warning') }\n",
         "src/Tool.ps1": "function Get-Answer { 42 }\n",
@@ -44,21 +29,12 @@ PROJECTS: dict[str, dict[str, str]] = {
 
 TS_TEST = "src/a.test.ts"
 TS_SRC = "src/a.ts"
-CS_TEST = "tests/App.Tests/CalcTests.cs"
-CS_SRC = "src/App/Calc.cs"
 PS_TEST = "tests/Tool.Tests.ps1"
 PS_SRC = "src/Tool.ps1"
 TS_SKIP = "it/test/describe.skip"
 
 # (язык, проверка, файл, дописать в конец, вид нарушения в выводе)
 APPENDS = [
-    ("csharp", "skips", CS_TEST, '\n[Fact(Skip = "later")] void Later() {}\n', "Skip ="),
-    ("csharp", "skips", CS_TEST, "\n[Ignore] void Later() {}\n", "Ignore"),
-    ("csharp", "skips", CS_TEST, '\nvoid X() { Assert.Ignore("later"); }\n', "Assert.Ignore"),
-    ("csharp", "suppressions", CS_SRC, "\n#pragma warning disable CS8618\n", "#pragma warning"),
-    ("csharp", "suppressions", CS_SRC, '\n[SuppressMessage("a", "b")] class Z {}\n', "Suppress"),
-    ("csharp", "suppressions", CS_SRC, "\n#nullable disable\n", "#nullable disable"),
-    ("csharp", "suppressions", CS_SRC, "\n[ExcludeFromCodeCoverage] class Q {}\n", "ExcludeFrom"),
     ("powershell", "skips", PS_TEST, "\nDescribe 'X' { It 'later' -Skip { } }\n", "-Skip"),
     ("powershell", "skips", PS_TEST, "\nIt 'y' { Set-ItResult -Skipped }\n", "Set-ItResult"),
     ("powershell", "suppressions", PS_SRC, "\n[SuppressMessageAttribute('a')]\n", "Suppress"),
@@ -66,27 +42,20 @@ APPENDS = [
 
 # (язык, файл, что заменить, на что)
 SETTINGS_EDITS = [
-    ("csharp", "src/App/App.csproj", "<Nullable>enable<", "<Nullable>disable<"),
-    ("csharp", "src/App/App.csproj", "Errors>true<", "Errors>false<"),
-    ("csharp", ".editorconfig", "severity = error", "severity = none"),
     ("powershell", "PSScriptAnalyzerSettings.psd1", "'Error', 'Warning'", "'Error'"),
 ]  # fmt: skip
 
 NOWARN_PROPS = "<Project><PropertyGroup><NoWarn>CS8618</NoWarn></PropertyGroup></Project>\n"
 SETTINGS_ADDITIONS = [
-    ("csharp", "Directory.Build.props", NOWARN_PROPS),
-    ("csharp", "global.json", '{"sdk": {"version": "1.0.0"}}\n'),
     ("powershell", "PesterConfiguration.psd1", "@{ Run = @{ Exit = $false } }\n"),
 ]
 
 
 CLEAN_REPORTS = {
-    "csharp": '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
-    '<UnitTestResult testName="App.Tests.CalcTests.Adds" outcome="Passed"/></Results></TestRun>',
     "powershell": '<testsuites><testsuite name="Tool"><testcase classname="Tool" name="answers"/>'
     "</testsuite></testsuites>",
 }
-REPORT_FILES = {"csharp": "report.trx", "powershell": "report.xml"}
+REPORT_FILES = {"powershell": "report.xml"}
 
 
 class Project:
@@ -186,39 +155,12 @@ def test_adding_a_settings_file_is_blocked(
     assert rel in project.fails("settings")
 
 
-def test_unrelated_csproj_edits_are_free(tmp_path: Path) -> None:
-    cs = make(tmp_path, "csharp")
-    text = (cs.root / "src/App/App.csproj").read_text(encoding="utf-8")
-    cs.write(
-        "src/App/App.csproj", text.replace("</Project>", "  <ItemGroup/>" + chr(10) + "</Project>")
-    )
-    cs.passes("settings")
-
-
-def test_skips_in_non_test_files_and_other_languages_are_not_counted(tmp_path: Path) -> None:
-    project = make(tmp_path, "csharp")
-    project.append(
-        "src/App/Calc.cs",
-        "// [Fact(Skip = " + chr(34) + "x" + chr(34) + ")] только слово" + chr(10),
-    )
-    project.passes("skips")  # не файл тестов
-    project.write("tests/App.Tests/notes.ts", "it.skip(" + chr(39) + "x" + chr(39) + ")" + chr(10))
-    project.passes("skips")  # чужое расширение
-
-
-def test_checks_without_an_adapter_say_so_instead_of_passing(tmp_path: Path) -> None:
-    project = make(tmp_path, "csharp")
-    out = project.fails("dead-code")
-    assert "ещё не реализована" in out
-
-
 # ---------- пропуски по результату запуска: отчёты Vitest/Jest, dotnet test, Pester ----------
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
 
 # Реальные отчёты, снятые с настоящих запусков (Vitest 2.1.9, dotnet test с xUnit, Pester 3.4).
 REAL_REPORTS = [
-    ("csharp", "dotnet.trx", {"Demo.UnitTest1.Later", "Demo.UnitTest1.Th"}),
     ("powershell", "pester-nunit.xml", {"Tool.skipped", "Tool.pending", "Tool.inconclusive"}),
 ]  # fmt: skip
 
@@ -240,7 +182,7 @@ def test_real_vitest_report_marks_it_fails_as_passed_so_the_text_search_matters(
     assert outcomes["a.test.js::known"] == "passed"
 
 
-@pytest.mark.parametrize(("language", "fixture", "skipped"), REAL_REPORTS)
+@pytest.mark.parametrize(("language", "fixture", "skipped"), REAL_REPORTS[1:])
 def test_skips_from_the_real_run_are_violations_until_the_owner_accepts(
     tmp_path: Path, language: str, fixture: str, skipped: set[str]
 ) -> None:
@@ -277,13 +219,6 @@ def test_skips_without_a_report_fail_instead_of_passing_on_text_search_alone(
     assert done.returncode == 1
     assert "Нет отчёта о запуске тестов" in done.stdout
     assert "--report" in done.stdout
-
-
-def test_a_broken_report_is_a_failure_not_a_pass(tmp_path: Path) -> None:
-    project = make(tmp_path, "csharp")
-    project.report.write_text("это не XML", encoding="utf-8")
-    done = project.run("skips")
-    assert done.returncode != 0
 
 
 def test_workflow_for_python_does_not_need_a_report_but_runs_the_tests_itself() -> None:

@@ -37,6 +37,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tokenize
 import tomllib
 from collections.abc import Callable
@@ -475,7 +476,9 @@ def py_dead_code(project: Path) -> set[str]:
 
 
 def describe_finding(fingerprint: str) -> str:
-    parts = fingerprint.split("|")
+    parts = fingerprint.split("|", 3)
+    if parts[0] == "roslyn":
+        return f"{parts[2]}: {parts[1]} {parts[3]}"
     if parts[0] == "vulture":
         return f"{parts[1]}: неиспользуемый {parts[2]} «{parts[3]}»"
     return f"{parts[1] or 'манифест'}: {parts[2]}, зависимость «{parts[3]}»"
@@ -514,12 +517,17 @@ def source_roots(project: Path, language: str) -> list[str]:
         return py_source_roots(project)
     if language == "typescript":
         return ts_source_roots(project)
+    if language == "csharp":
+        return cs_source_roots(project)
     return ["."]
 
 
 def jscpd_args(project: Path, language: str) -> list[str]:
     roots = [r for r in source_roots(project, language) if (project / r).exists()]
-    ignored = ["tests", ".github", "docs", "state", "node_modules", ".venv", "__pycache__"]
+    ignored = [
+        "tests", ".github", "docs", "state", "node_modules", ".venv", "__pycache__", "bin", "obj",
+        CS_REPORT_DIR,
+    ]  # fmt: skip
     ignore = ",".join(f"**/{name}/**" for name in ignored)
     return [
         *roots,
@@ -970,8 +978,10 @@ RULES: dict[str, LanguageRules] = {
                 r":\s*any\b|\bas\s+any\b|<\s*any\s*>|[<,]\s*any\s*[,>\[]|\bany\s*\[\s*\]"
                 r"|=>\s*any\b|\bsatisfies\s+any\b"
             ),
+            # Двойное приведение обходит проверку типов так же, как any.
+            "double cast": r"\bas\s+(unknown|never)\s+as\b",
         },
-        code_kinds=("explicit any",),
+        code_kinds=("explicit any", "double cast"),
         config_files=(
             "tsconfig*.json",
             ".eslintrc*",
@@ -1010,7 +1020,15 @@ RULES: dict[str, LanguageRules] = {
             "ReSharper disable": r"//\s*(ReSharper|noinspection)\b",
             "#nullable disable": r"#nullable\s+disable",
             "ExcludeFromCodeCoverage": r"\bExcludeFromCodeCoverage\b",
+            "ArchUnit WithoutRequiringPositiveResults": r"\bWithoutRequiringPositiveResults\b",
         },
+        code_kinds=(
+            "#pragma warning disable",
+            "SuppressMessage",
+            "#nullable disable",
+            "ExcludeFromCodeCoverage",
+            "ArchUnit WithoutRequiringPositiveResults",
+        ),
         config_files=(
             ".editorconfig",
             "Directory.Build.props",
@@ -1023,6 +1041,9 @@ RULES: dict[str, LanguageRules] = {
             "stylecop.json",
             ".jscpd.json",
             "coverlet.runsettings",
+            "nuget.config",
+            "NuGet.Config",
+            "NuGet.config",
         ),  # fmt: skip
         container_files=("*.csproj",),
     ),
@@ -1072,10 +1093,13 @@ PACKAGE_JSON_KEYS = (
 PACKAGE_JSON_SCRIPTS = re.compile(
     r"^(test|lint|typecheck|type-check|check|coverage|format|arch|deadcode|knip)"
 )
+ANALYZER_PACKAGE = re.compile(r"analyzers?\b|roslynator|stylecop|sonar", re.IGNORECASE)
 CSPROJ_ELEMENTS = {
     "Nullable", "TreatWarningsAsErrors", "WarningsAsErrors", "WarningsNotAsErrors", "NoWarn",
     "AnalysisMode", "AnalysisLevel", "EnforceCodeStyleInBuild", "LangVersion", "IsTestProject",
-    "CollectCoverage", "Threshold", "ThresholdType",
+    "CollectCoverage", "Threshold", "ThresholdType", "RunAnalyzers", "RunAnalyzersDuringBuild",
+    "WarningLevel", "CodeAnalysisRuleSet", "ExcludeByAttribute", "ExcludeByFile", "Exclude",
+    "GenerateDocumentationFile", "TargetFramework", "TargetFrameworks",
 }  # fmt: skip
 
 
@@ -1147,6 +1171,14 @@ def container_settings(rel: str, text: str) -> dict[str, str]:
                     values.setdefault(tag, []).append((element.text or "").strip())
             for tag, items in values.items():
                 found[f"{rel}#{tag}"] = digest_value(items)
+            analyzers = sorted(
+                (e.get("Include") or e.get("Update") or "")
+                for e in ElementTree.fromstring(text).iter()
+                if e.tag.split("}")[-1] == "PackageReference"
+                and ANALYZER_PACKAGE.search(e.get("Include") or e.get("Update") or "")
+            )
+            if analyzers:
+                found[f"{rel}#анализаторы"] = digest_value(analyzers)
     except (ValueError, ElementTree.ParseError, configparser.Error):
         found[f"{rel}#НЕ-РАЗОБРАН"] = digest(text)
     return found
@@ -1314,6 +1346,8 @@ def scan_counts(
             comment_scope = "\n".join(comments)
         elif language == "typescript":
             code_scope, comment_scope = blank_ts_comments_and_strings(text)
+        elif language == "csharp":
+            code_scope, comment_scope = blank_cs_comments_and_strings(text)
         flags = re.MULTILINE | (re.IGNORECASE if language in ("python", "powershell") else 0)
         for kind, pattern in patterns.items():
             comment_kind = in_comments and kind not in rules.code_kinds
@@ -1432,6 +1466,23 @@ def trx_outcomes(path: Path) -> dict[str, str]:
     return outcomes
 
 
+def cs_trx_files(report: Path) -> list[Path]:
+    if report.is_dir():
+        return sorted(report.glob("*.trx"))
+    return [report]
+
+
+def trx_report_outcomes(report: Path) -> dict[str, str]:
+    """Исходы тестов из файла TRX или из папки с файлами TRX (по одному на тестовый проект)."""
+    files = cs_trx_files(report)
+    if not files:
+        raise ToolError(f"в {report} нет ни одного файла .trx. " + REPORT_HINT["csharp"])
+    outcomes: dict[str, str] = {}
+    for path in files:
+        outcomes.update(trx_outcomes(path))
+    return outcomes
+
+
 def jest_json_outcomes(path: Path) -> dict[str, str]:
     """JSON-отчёт Jest и Vitest (--json, --reporter=json): исход каждого теста."""
     outcomes: dict[str, str] = {}
@@ -1453,7 +1504,7 @@ REPORT_PARSERS: dict[str, Callable[[Path], dict[str, str]]] = {
     "python": junit_outcomes,
     "powershell": pester_outcomes,
     "typescript": jest_json_outcomes,
-    "csharp": trx_outcomes,
+    "csharp": trx_report_outcomes,
 }
 
 
@@ -1883,6 +1934,423 @@ def ts_architecture(project: Path) -> Result:
     return result
 
 
+# ---------- адаптер C# ----------
+
+CS_REPORT_DIR = "test-results"
+CS_PACKAGE_ELEMENTS = {
+    "PackageReference",
+    "PackageVersion",
+    "GlobalPackageReference",
+    "DotNetCliToolReference",
+}
+CS_NOT_MODULE_FILES = {"globalusings.cs", "assemblyinfo.cs", "globalsuppressions.cs"}
+CS_DEAD_CODES = (
+    "IDE0051", "IDE0052", "IDE0060", "IDE0005", "CS0169", "CS0219", "CS0414", "CS8019", "CA1823",
+)  # fmt: skip
+CS_WARNING = re.compile(
+    r"^(?P<file>.+?)\(\d+,\d+\): warning (?P<code>[A-Z]+\d+): (?P<message>.*?)"
+    r"(?: \(https?://[^)]*\))?(?: \[[^\]]+\])?$"
+)
+CS_NAMESPACE = re.compile(r"^\s*namespace\s+([\w.]+)\s*[;{]?\s*$", re.MULTILINE)
+CS_RULE_CALL = re.compile(
+    r"\b(?P<method>(?:DoNot|Not)?ResideInNamespace(?:Matching)?)\s*\(\s*"
+    r"(?P<arg>@?\"(?:[^\"\\]|\\.)*\"|[^,)]*)"
+)
+CS_ARCH_EXAMPLE = (
+    "Пример правила в тестовом проекте (ArchUnitNET):\n"
+    '  Types().That().ResideInNamespace("Shop.Ui")\n'
+    '      .Should().NotDependOnAny(Types().That().ResideInNamespace("Shop.Db")).Check(arch);'
+)
+DOTNET_ENV = {
+    "DOTNET_CLI_UI_LANGUAGE": "en",
+    "DOTNET_NOLOGO": "1",
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+    "DOTNET_CLI_USE_MSBUILD_SERVER": "0",
+}
+DOTNET_FLAGS = ["-nodeReuse:false", "-p:UseSharedCompilation=false"]
+
+
+def blank_cs_comments_and_strings(text: str, keep_strings: bool = False) -> tuple[str, str]:
+    """Код C# без комментариев (и без содержимого строк, если keep_strings=False).
+
+    Второе значение: склеенный текст комментариев. Строки: обычные, буквальные `@"..."`,
+    интерполированные `$"..."` (как обычные) и «сырые» (три кавычки); символьные литералы.
+    Директивы препроцессора (`#pragma`) остаются кодом.
+    """
+    out: list[str] = []
+    comments: list[str] = []
+    blank = re.compile(r"[^\n]")
+    i, n = 0, len(text)
+
+    def hide(chunk: str) -> str:
+        return chunk if keep_strings else blank.sub(" ", chunk)
+
+    while i < n:
+        char, following = text[i], text[i + 1] if i + 1 < n else ""
+        if char == "/" and following == "/":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            comments.append(text[i:end])
+            out.append(" " * (end - i))
+            i = end
+        elif char == "/" and following == "*":
+            end = text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            comments.append(text[i:end])
+            out.append(blank.sub(" ", text[i:end]))
+            i = end
+        elif text.startswith('"""', i):
+            quotes = len(text[i:]) - len(text[i:].lstrip('"'))
+            end = text.find('"' * quotes, i + quotes)
+            end = n if end == -1 else end + quotes
+            out.append(text[i : i + quotes] + hide(text[i + quotes : end - quotes]) + '"' * quotes)
+            i = end
+        elif char == '"' or (char in "@$" and re.match(r'[@$]{1,2}"', text[i : i + 3])):
+            prefix = re.match(r"[@$]{0,2}", text[i:])
+            marker = prefix.group(0) if prefix else ""
+            verbatim = "@" in marker
+            j = i + len(marker) + 1
+            while j < n:
+                if verbatim and text[j] == '"' and text[j + 1 : j + 2] == '"':
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                if not verbatim and text[j] == "\\":
+                    j += 1
+                elif not verbatim and text[j] == "\n":
+                    break
+                j += 1
+            end = min(j + 1, n)
+            closed = end - i > len(marker) + 1 and text[end - 1] == '"'
+            body = (
+                text[i + len(marker) + 1 : end - 1] if closed else text[i + len(marker) + 1 : end]
+            )
+            out.append(marker + '"' + hide(body) + ('"' if closed else ""))
+            i = end
+        elif char == "'":
+            j = i + 1
+            while j < n and text[j] != "'" and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            end = min(j + 1, n)
+            out.append("'" + blank.sub(" ", text[i + 1 : end - 1]) + "'")
+            i = end
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out), "\n".join(comments)
+
+
+def cs_source_roots(project: Path) -> list[str]:
+    return ["src"] if (project / "src").is_dir() else ["."]
+
+
+def cs_is_source(name: str) -> bool:
+    lower = name.lower()
+    return (
+        lower.endswith(".cs")
+        and not lower.endswith((".g.cs", ".designer.cs", ".generated.cs"))
+        and lower not in CS_NOT_MODULE_FILES
+    )
+
+
+def cs_skipped_dir(name: str) -> bool:
+    return (
+        name in SKIP_DIRS
+        or name in {"bin", "obj", CS_REPORT_DIR, "TestResults"}
+        or name.startswith(".")
+    )
+
+
+def cs_has_code(folder: Path) -> bool:
+    for _current, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not cs_skipped_dir(d)]
+        if any(cs_is_source(f) for f in files):
+            return True
+    return False
+
+
+def cs_modules(project: Path) -> list[str]:
+    """Модули: папки внутри проекта .csproj и файлы кода рядом с ним (пути от корня проекта).
+
+    Если папка внутри корня кода содержит .csproj, модулями считаются её подпапки и её файлы
+    .cs, иначе сама папка.
+    """
+    modules: list[str] = []
+
+    def add(entry: Path) -> None:
+        modules.append(normalize_path(entry.relative_to(project).as_posix()))
+
+    for root in cs_source_roots(project):
+        base = project / root
+        if not base.is_dir():
+            continue
+        for entry in sorted(base.iterdir()):
+            if entry.is_dir():
+                if cs_skipped_dir(entry.name):
+                    continue
+                if any(entry.glob("*.csproj")):
+                    for inner in sorted(entry.iterdir()):
+                        if inner.is_dir():
+                            if not cs_skipped_dir(inner.name) and cs_has_code(inner):
+                                add(inner)
+                        elif cs_is_source(inner.name):
+                            add(inner)
+                elif cs_has_code(entry):
+                    add(entry)
+            elif cs_is_source(entry.name):
+                add(entry)
+    return modules
+
+
+def cs_module_names(project: Path) -> list[str]:
+    return [PurePosixPath(m).stem if m.endswith(".cs") else PurePosixPath(m).name
+            for m in cs_modules(project)]  # fmt: skip
+
+
+def cs_has_sources(project: Path) -> bool:
+    return bool(cs_modules(project))
+
+
+def cs_test_ids(project: Path, report: Path | None) -> list[str]:
+    if report is None:
+        raise ToolError(
+            "для C# нужен отчёт о запуске тестов (--report ФАЙЛ_ИЛИ_ПАПКА): "
+            "список тестов берётся из него. " + REPORT_HINT["csharp"]
+        )
+    return sorted(trx_report_outcomes(report))
+
+
+def cs_manifest_packages(project: Path) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for path in walk_files(project, (".csproj", ".props", ".targets", ".vbproj", ".fsproj")):
+        rel = rel_of(project, path)
+        for element in ElementTree.fromstring(path.read_text(encoding="utf-8-sig")).iter():
+            if element.tag.split("}")[-1] not in CS_PACKAGE_ELEMENTS:
+                continue
+            name = element.get("Include") or element.get("Update")
+            if name:
+                found.append((rel, name))
+    return found
+
+
+def dotnet_exe() -> str:
+    return shutil.which("dotnet") or "dotnet"
+
+
+def cs_entry_point(project: Path) -> list[str]:
+    """Решение или проект, который собирают: решение в корне, иначе единственный проект."""
+    solutions = sorted([*project.glob("*.sln"), *project.glob("*.slnx")])
+    if len(solutions) == 1:
+        return [solutions[0].name]
+    projects = sorted(project.glob("*.csproj"))
+    if not solutions and len(projects) == 1:
+        return [projects[0].name]
+    raise ToolError(
+        "в корне проекта должен быть ровно один файл решения (.sln) или проекта (.csproj), "
+        f"найдено решений {len(solutions)}, проектов {len(projects)}"
+    )
+
+
+def dotnet_run(project: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return run([dotnet_exe(), *args, *DOTNET_FLAGS], project, DOTNET_ENV)
+
+
+def cs_dead_code(project: Path) -> set[str]:
+    """Находки анализаторов мёртвого кода (IDE0051/0052/0060/0005, CS0169/0414 и др.).
+
+    Сборка идёт заново (`--no-incremental`): иначе анализаторы на неизменённом коде молчат и
+    проверка была бы «зелёной» ничего не проверив. Предупреждения не считаются ошибками только
+    здесь; обычная сборка проекта их ошибками считает (TreatWarningsAsErrors).
+    """
+    entry = cs_entry_point(project)
+    args = ["build", *entry, "--no-incremental", "-p:TreatWarningsAsErrors=false",
+            "-p:WarningsAsErrors=", "-v:q", "-clp:NoSummary"]  # fmt: skip
+    done = dotnet_run(project, args)
+    if done.returncode != 0:
+        raise ToolError("dotnet build не прошёл (мёртвый код оценить нельзя):\n" + tail(done))
+    findings: set[str] = set()
+    for line in (done.stdout + "\n" + done.stderr).splitlines():
+        match = CS_WARNING.match(line.strip())
+        if not match or match["code"] not in CS_DEAD_CODES:
+            continue
+        file = Path(match["file"])
+        try:
+            rel = file.resolve().relative_to(project.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel = normalize_path(match["file"])
+        findings.add(f"roslyn|{match['code']}|{rel}|{match['message']}")
+    return findings
+
+
+def cs_coverage(project: Path) -> float:
+    covered = valid = 0
+    files = [
+        p
+        for p in (project / CS_REPORT_DIR).rglob("coverage.cobertura.xml")
+        if "In" not in p.relative_to(project / CS_REPORT_DIR).parts
+    ]
+    if not files:
+        raise ToolError(
+            f"нет файлов coverage.cobertura.xml в {CS_REPORT_DIR}/: тесты нужно запускать с "
+            f'покрытием (dotnet test --collect "XPlat Code Coverage" --results-directory '
+            f"{CS_REPORT_DIR})"
+        )
+    for path in files:
+        root = ElementTree.parse(path).getroot()
+        covered += int(root.attrib.get("lines-covered", "0"))
+        valid += int(root.attrib.get("lines-valid", "0"))
+    return 100.0 * covered / valid if valid else 100.0
+
+
+def cs_declared_namespaces(project: Path, files: list[Path]) -> dict[str, set[str]]:
+    declared: dict[str, set[str]] = {}
+    for path in files:
+        code, _ = blank_cs_comments_and_strings(path.read_text(encoding="utf-8-sig"))
+        declared[rel_of(project, path)] = set(CS_NAMESPACE.findall(code))
+    return declared
+
+
+def cs_module_files(project: Path, module: str) -> list[Path]:
+    target = project / module
+    if target.is_file():
+        return [target]
+    return [
+        p for p in walk_files(project, (".cs",)) if target in p.parents and cs_is_source(p.name)
+    ]
+
+
+def cs_rule_calls(project: Path, result: Result) -> tuple[list[tuple[str, str, bool]], list[str]]:
+    """Файлы с правилами ArchUnitNET и все шаблоны пространств имён из их вызовов."""
+    rules = RULES["csharp"]
+    rule_files: list[Path] = []
+    patterns: list[tuple[str, str, bool]] = []
+    classes: list[str] = []
+    for path in walk_files(project, (".cs",)):
+        rel = rel_of(project, path)
+        if not is_test_file(rules, rel):
+            continue
+        code, _ = blank_cs_comments_and_strings(path.read_text(encoding="utf-8-sig"), True)
+        if "ArchRuleDefinition" not in code:
+            continue
+        rule_files.append(path)
+        classes.extend(re.findall(r"\bclass\s+(\w+)", code))
+        for call in CS_RULE_CALL.finditer(code):
+            arg = call["arg"].strip()
+            if not (arg.startswith('"') or arg.startswith('@"')):
+                result.fail(
+                    f"{rel}: в {call['method']}(...) не строка-литерал ({arg or 'пусто'}). "
+                    "Имя пространства имён должно быть написано строкой, иначе проверить, что "
+                    "правило находит типы, нельзя."
+                )
+                continue
+            literal = cs_string_value(arg)
+            patterns.append((rel, literal, call["method"].endswith("Matching")))
+    return patterns, sorted(set(classes))
+
+
+CS_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
+
+
+def cs_string_value(literal: str) -> str:
+    """Значение строкового литерала C#: обычного или буквального (@"a""b")."""
+    if literal.startswith("@"):
+        return literal[2:-1].replace('""', '"')
+    return re.sub(r"\\(.)", lambda m: CS_ESCAPES.get(m.group(1), m.group(0)), literal[1:-1])
+
+
+def cs_pattern_matches(pattern: str, regex: bool, namespace: str) -> bool:
+    if not regex:
+        return pattern == namespace
+    try:
+        return re.search(pattern, namespace) is not None
+    except re.error:
+        return False
+
+
+def cs_architecture(project: Path) -> Result:
+    result = Result()
+    names = cs_module_names(project)
+    if not names:
+        result.note("Кода пока нет, правила архитектуры не проверяются.")
+        return result
+    patterns, classes = cs_rule_calls(project, result)
+    if not result.ok:
+        return result
+    if not patterns:
+        result.fail(
+            "Нет ни одного правила архитектуры: в тестах не найдено ArchRuleDefinition с "
+            'ResideInNamespace("..."). Правило без охвата не бывает зелёным.',
+            CS_ARCH_EXAMPLE,
+        )
+        return result
+    modules = cs_modules(project)
+    declared = {
+        rel: ns
+        for rel, ns in cs_declared_namespaces(
+            project, [p for m in modules for p in cs_module_files(project, m)]
+        ).items()
+    }
+    every = sorted({ns for found in declared.values() for ns in found})
+    dead = [
+        f'{rel}: ResideInNamespace{"Matching" if regex else ""}("{pattern}"): '
+        "такого пространства имён нет в коде (опечатка?). Такое правило ничего не проверяет."
+        for rel, pattern, regex in patterns
+        if not any(cs_pattern_matches(pattern, regex, ns) for ns in every)
+    ]
+    if dead:
+        result.fail(
+            "Правила архитектуры ссылаются на несуществующие пространства имён:", *shown(dead)
+        )
+        return result
+    uncovered: list[str] = []
+    for module in modules:
+        if module.endswith(".cs"):
+            continue
+        spaces = {
+            ns for p in cs_module_files(project, module) for ns in declared[rel_of(project, p)]
+        }
+        if spaces and not any(
+            cs_pattern_matches(pattern, regex, ns)
+            for _, pattern, regex in patterns
+            for ns in spaces
+        ):
+            uncovered.append(f"{module} (пространства имён: {', '.join(sorted(spaces))})")
+    if uncovered:
+        result.fail(
+            "Эти модули не охвачены ни одним правилом архитектуры:",
+            *shown(uncovered),
+            "Добавьте правило, где модуль указан через ResideInNamespace.",
+        )
+        return result
+    return cs_run_architecture_tests(project, classes, len(patterns), result)
+
+
+def cs_run_architecture_tests(
+    project: Path, classes: list[str], patterns: int, result: Result
+) -> Result:
+    """Запускает именно тесты-правила и требует, чтобы хотя бы одно из них реально выполнилось."""
+    entry = cs_entry_point(project)
+    flt = "|".join(f"FullyQualifiedName~{name}" for name in classes)
+    with tempfile.TemporaryDirectory() as tmp:
+        args = ["test", *entry, "--filter", flt, "--logger", "trx", "--results-directory", tmp]
+        done = dotnet_run(project, args)
+        outcomes = trx_report_outcomes(Path(tmp)) if list(Path(tmp).glob("*.trx")) else {}
+    if not outcomes:
+        raise ToolError("тесты-правила архитектуры не запустились:\n" + tail(done))
+    failed = sorted(name for name, state in outcomes.items() if state == "failed")
+    if failed:
+        result.fail("Правила архитектуры нарушены (тесты упали):", *shown(failed), tail(done, 1200))
+        return result
+    ran = sorted(name for name, state in outcomes.items() if state == "passed")
+    if not ran:
+        result.fail("Ни одно тестовое правило архитектуры не выполнилось (все пропущены).")
+        return result
+    result.note(f"Правил архитектуры (тестов): {len(ran)}; шаблонов пространств имён: {patterns}.")
+    return result
+
+
 # ---------- адаптеры языков ----------
 
 
@@ -1924,6 +2392,18 @@ COLLECTORS: dict[str, Collector] = {
         ts_coverage,
         ts_has_sources,
         ts_architecture,
+    ),
+    "csharp": Collector(
+        "nuget",
+        "csharp",
+        cs_test_ids,
+        cs_modules,
+        cs_module_names,
+        cs_manifest_packages,
+        cs_dead_code,
+        cs_coverage,
+        cs_has_sources,
+        cs_architecture,
     ),
 }
 
