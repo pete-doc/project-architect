@@ -1,14 +1,19 @@
 name: ci-csharp
 
+# Раннеры: только ubuntu-latest (dotnet и PowerShell 7 работают на нём так же, как на Windows).
+# Другие раннеры, матрицы и запуск не по pull_request добавляются только через ADR с оценкой
+# стоимости (к квоте Windows считается x2, macOS x10).
 on:
   pull_request:
-  push:
-    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    # C# проверяется на Windows: именно там чаще запускают .NET-проекты.
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       # Точная версия .NET SDK берётся из global.json (rollForward: disable).

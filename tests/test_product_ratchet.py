@@ -58,7 +58,9 @@ def test_repository_ci_runs_the_ratchet_on_the_product_itself() -> None:
     for check in ("tests", "skips"):
         line = f"parch_ci.py {check} --language python --report test-report.xml"
         assert line in workflow, check
-    assert workflow.index("pytest -v") < workflow.index("parch_ci.py tests")
+    assert workflow.index("pytest -v") < workflow.index(
+        "parch_ci.py tests --language python --report"
+    )
 
 
 def test_repository_baseline_exists_and_lists_the_product_tests() -> None:

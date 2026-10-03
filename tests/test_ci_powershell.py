@@ -581,7 +581,8 @@ def test_ps_lexer_can_keep_strings_for_counting_lines() -> None:
 
 def test_workflow_pins_the_analyzer_and_runs_on_windows() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "windows-latest" in text
+    # имя теста историческое: шаблон теперь идёт на Ubuntu (ADR-0011)
+    assert "ubuntu-latest" in text and "windows-latest" not in text
     assert f"-RequiredVersion {PSA_VERSION}" in text
     for check in ("psscriptanalyzer", "thin", "suppressions", "settings"):
         assert f"parch_ci.py {check} --language powershell" in text
