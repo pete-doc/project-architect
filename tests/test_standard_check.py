@@ -287,7 +287,7 @@ def test_no_timeout_above_sixty_minutes_is_ever_allowed(tmp_path: Path) -> None:
 
 
 def test_the_product_check_timeout_is_25_and_is_recorded_in_adr_0011() -> None:
-    workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    workflow = (REPO / ".github" / "workflows" / "full.yml").read_text(encoding="utf-8")
     assert "    timeout-minutes: 25\n" in workflow
     adr = (REPO / "docs" / "adr" / "0011-ci-ubuntu-po-umolchaniyu.md").read_text(encoding="utf-8")
     assert "`timeout-minutes: 25`" in adr

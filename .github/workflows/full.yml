@@ -1,0 +1,101 @@
+name: full
+
+# Полный прогон перед слиянием (ADR-0013): все тесты; единственная проверка `full-run`, которую требует
+# ruleset перед слиянием. Запускается, когда PR переводят из черновика в «готов к проверке»
+# (`gh pr ready`): правки закончены, быстрая часть зелёная. Других событий здесь нет, поэтому
+# проверка full-run появляется только после этого и её нельзя получить пропуском задания (пропущенное
+# по условию задание GitHub считает успешным). После новой отправки полный прогон для нового коммита
+# запрашивают заново: `gh pr ready --undo`, затем `gh pr ready`.
+on:
+  pull_request:
+    types: [ready_for_review]
+
+concurrency:
+  group: full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-run:
+    runs-on: ubuntu-latest
+    # 25, а не 20: скорость раннера GitHub плавает почти вдвое (ADR-0011, изменение 2026-10-03).
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      # PR без кода: тесты не нужны, но проверка full-run обязана появиться и пройти.
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if files=$(gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only); then
+            echo "$files" | python3 .github/scope.py | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "Не удалось получить список файлов PR: идёт полный прогон."
+            python3 .github/scope.py --unknown | tee -a "$GITHUB_OUTPUT"
+          fi
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python plugin/templates/ci/parch/parch_ci.py standard
+      - name: Структура (PR без кода)
+        if: steps.scope.outputs.code != 'true'
+        run: >
+          pytest -q tests/test_plugin_manifest.py tests/test_style_gate.py
+          tests/test_skills.py::test_product_adr_index_is_up_to_date
+      - name: Согласованность baseline (PR без кода)
+        if: steps.scope.outputs.code != 'true'
+        run: python plugin/templates/ci/parch/parch_ci.py tests --language python
+      - if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/projects/ts_shop/package-lock.json
+      # Тесты C# запускают настоящий dotnet; версия SDK закреплена точно в global.json тестового проекта.
+      - if: steps.scope.outputs.code == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.dotnet
+          key: dotnet-sdk-${{ runner.os }}-${{ hashFiles('tests/projects/cs_shop/global.json') }}
+      - if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: tests/projects/cs_shop/global.json
+          cache: true
+          cache-dependency-path: tests/projects/cs_shop/**/packages.lock.json
+      # Тесты PowerShell запускают настоящий PSScriptAnalyzer; версия та же, что в шаблоне CI.
+      - id: psa-cache
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: psscriptanalyzer-${{ runner.os }}-1.25.0
+      - name: Install PSScriptAnalyzer
+        if: steps.scope.outputs.code == 'true' && steps.psa-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+      - if: steps.scope.outputs.code == 'true'
+        run: pyright
+      # Полный прогон (-m "" снимает фильтр медленных тестов).
+      - if: steps.scope.outputs.code == 'true'
+        run: pytest -v -m "" --junitxml=test-report.xml
+      # Отчёт нужен и для табло, и для проверки baseline: пропуски и падения берутся из него.
+      - if: always() && steps.scope.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.xml
+          retention-days: 14
+      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
+      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+      - if: steps.scope.outputs.code == 'true'
+        run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+      - if: steps.scope.outputs.code == 'true'
+        run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml

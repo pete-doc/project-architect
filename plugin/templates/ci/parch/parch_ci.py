@@ -305,6 +305,40 @@ def cs_classes_without_results(project: Path, reported: set[str]) -> set[str]:
     return gaps
 
 
+PARTIAL_SUITE = "parch-partial"
+PARTIAL_HINT = (
+    "Урезанный прогон помечается при запуске: pytest -o junit_suite_name=parch-partial. "
+    "Полный прогон подтверждает слияние, урезанный нет."
+)
+
+
+def report_is_partial(report: Path | None) -> bool:
+    """True, если отчёт помечен как урезанный (JUnit XML с именем набора parch-partial)."""
+    if report is None or report.is_dir():
+        return False
+    text = report.read_text(encoding="utf-8-sig", errors="replace")
+    if not text.lstrip().startswith("<"):
+        return False
+    root = ElementTree.fromstring(text)
+    return any(
+        el.get("name") == PARTIAL_SUITE for el in root.iter() if local_name(el.tag) == "testsuite"
+    )
+
+
+def partial_mismatch(report: Path | None, partial: bool) -> str:
+    """Не даёт выдать урезанный отчёт за полный и наоборот: храповик различает режимы."""
+    marked = report_is_partial(report)
+    if marked and not partial:
+        return (
+            "Отчёт помечен как урезанный (parch-partial), а проверяется полный прогон: такой "
+            "отчёт не подтверждает, что все тесты запущены и прошли. Нужен полный прогон. "
+            + PARTIAL_HINT
+        )
+    if partial and report is not None and not marked:
+        return "Режим --partial требует отчёт урезанного прогона с пометкой. " + PARTIAL_HINT
+    return ""
+
+
 def report_gaps(
     project: Path,
     language: str,
@@ -339,8 +373,14 @@ def fail_on_gaps(result: Result, gaps: list[str]) -> bool:
     return bool(gaps)
 
 
-def check_tests(project: Path, language: str, report: Path | None = None) -> Result:
+def check_tests(
+    project: Path, language: str, report: Path | None = None, partial: bool = False
+) -> Result:
     result = Result()
+    mismatch = partial_mismatch(report, partial)
+    if mismatch:
+        result.fail(mismatch)
+        return result
     current = set(COLLECTORS[language].test_ids(project, report))
     baseline = Baseline(project)
     known = baseline.strings("tests", language)
@@ -358,7 +398,17 @@ def check_tests(project: Path, language: str, report: Path | None = None) -> Res
             "--accept-removed",
         )
         return result
-    if report is not None:
+    if report is not None and partial:
+        outcomes = test_outcomes(project, language, report) or {}
+        failed = sorted(k for k, v in outcomes.items() if v == "failed")
+        if failed:
+            result.fail(f"Упавших тестов в урезанном прогоне: {len(failed)}.", *shown(failed))
+            return result
+        result.note(
+            f"ЧАСТИЧНЫЙ прогон: запущено {len(outcomes)} из {len(current)} тестов, упавших нет. "
+            "Это не полный прогон: права на слияние он не даёт, baseline по нему не обновляется."
+        )
+    elif report is not None:
         outcomes = test_outcomes(project, language, report)
         if outcomes is not None and fail_on_gaps(
             result, report_gaps(project, language, outcomes, baseline)
@@ -910,6 +960,11 @@ def update_baseline(
             "для baseline --only-tests нужен --report test-report.xml: пропуски и падения берутся "
             "из отчёта CI (артефакт test-report), а не из локального прогона. Скачайте отчёт: "
             "gh run download ИДЕНТИФИКАТОР -n test-report"
+        )
+    if report_is_partial(report):
+        raise ToolError(
+            "отказ: отчёт помечен как урезанный (parch-partial). baseline обновляется только по "
+            'полному прогону: pytest -m "" --junitxml=test-report.xml'
         )
     outcomes = test_outcomes(project, language, report)
     if outcomes is None and language == "powershell":
@@ -1748,8 +1803,15 @@ def has_skipped_list(baseline: Baseline, language: str, platform: str | None = N
     )
 
 
-def check_skips(project: Path, language: str, report: Path | None = None) -> Result:
+def check_skips(
+    project: Path, language: str, report: Path | None = None, partial: bool = False
+) -> Result:
     """Пропуски считаются по фактическому результату запуска, текстовый поиск идёт дополнительно."""
+    mismatch = partial_mismatch(report, partial)
+    if mismatch:
+        failed = Result()
+        failed.fail(mismatch)
+        return failed
     result = check_counts(
         project,
         language,
@@ -1770,7 +1832,7 @@ def check_skips(project: Path, language: str, report: Path | None = None) -> Res
         return result
     current = skipped_ids(outcomes)
     baseline = Baseline(project)
-    if report is not None:
+    if report is not None and not partial:
         fail_on_gaps(result, report_gaps(project, language, outcomes, baseline))
     known = known_skipped(baseline, language)
     new = sorted(current - known)
@@ -3311,6 +3373,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--accept-config", action="store_true")
     parser.add_argument("--report", default=None)
     parser.add_argument(
+        "--partial",
+        action="store_true",
+        help="tests, skips: отчёт урезанного прогона (с пометкой parch-partial); слияния не даёт",
+    )
+    parser.add_argument(
         "--only-tests",
         action="store_true",
         help="baseline --update: только списки тестов и пропусков (остальное не трогать)",
@@ -3347,9 +3414,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка {reason}")
             return 1
         elif args.check == "tests":
-            result = check_tests(project, args.language, report)
+            result = check_tests(project, args.language, report, args.partial)
         elif args.check == "skips":
-            result = check_skips(project, args.language, report)
+            result = check_skips(project, args.language, report, args.partial)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:

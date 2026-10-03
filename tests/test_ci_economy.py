@@ -11,6 +11,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 PRODUCT = REPO / ".github" / "workflows" / "ci.yml"
+FULL = REPO / ".github" / "workflows" / "full.yml"  # полный прогон перед слиянием (ADR-0013)
+SCOPE = REPO / ".github" / "scope.py"  # какие языки и проверки нужны PR
 # state.yml (пересчёт табло после слияния, ADR-0012) устроен иначе: см. tests/test_status.py
 ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml"))
 TEMPLATES = [p for p in ALL_TEMPLATES if p.name != "state.yml"]
@@ -66,12 +68,26 @@ def test_every_product_job_has_a_timeout() -> None:
     workflow = text(PRODUCT)
     for name, minutes in (("scope", 3), ("check", 25), ("windows-hooks", 15)):
         assert f"timeout-minutes: {minutes}\n" in job_block(workflow, name), name
+    assert "timeout-minutes: 25\n" in job_block(text(FULL), "full-run")
 
 
 def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
-    workflow = text(PRODUCT)
-    block = job_block(workflow, "check")
+    # быстрая часть (ci.yml) идёт на каждую отправку и помечает свой отчёт как урезанный
+    block = job_block(text(PRODUCT), "check")
     assert "runs-on: ubuntu-latest" in block
+    for step in (
+        "ruff check .", "ruff format --check .", "pyright",
+        "-o junit_suite_name=parch-partial",
+        "parch_ci.py tests --language python --partial --report test-report-partial.xml",
+        "parch_ci.py skips --language python --partial --report test-report-partial.xml",
+        "Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0",
+        "global-json-file: tests/projects/cs_shop/global.json", "actions/setup-node@v4",
+    ):  # fmt: skip
+        assert step in block, step
+    assert 'pytest -v -m ""' not in block  # полный прогон только в full.yml
+    # полный прогон перед слиянием: все шаги прежнего check и статус для слияния
+    full = job_block(text(FULL), "full-run")
+    assert "runs-on: ubuntu-latest" in full
     for step in (
         "ruff check .", "ruff format --check .", "pyright",
         'pytest -v -m "" --junitxml=test-report.xml',
@@ -80,9 +96,10 @@ def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
         "Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0",
         "global-json-file: tests/projects/cs_shop/global.json", "actions/setup-node@v4",
     ):  # fmt: skip
-        assert step in block, step
+        assert step in full, step
     ratchet = "parch_ci.py tests --language python --report"
-    assert block.index("pytest -v -m") < block.index(ratchet)
+    assert full.index("pytest -v -m") < full.index(ratchet)
+    assert "--partial" not in full  # полный прогон не принимает урезанный отчёт
 
 
 def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
@@ -96,8 +113,8 @@ def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
 
 def test_a_docs_and_state_only_pr_runs_only_the_structure_checks() -> None:
     workflow = text(PRODUCT)
-    scope = job_block(workflow, "scope")
-    assert "docs/*|state/*) ;;" in scope  # эти пути не делают PR «кодовым»
+    scope_text = text(SCOPE)  # только эти пути не делают PR «кодовым»; baseline.json и прочее код
+    assert '"state/incidents/*"' in scope_text and '"state/baseline.json"' not in scope_text
     block = job_block(workflow, "check")
     assert block.count("if: needs.scope.outputs.code != 'true'") == 2
     heavy = re.findall(r"if: needs\.scope\.outputs\.code == 'true'(?: && [^\n]+)?\n", block)
@@ -108,8 +125,10 @@ def test_a_docs_and_state_only_pr_runs_only_the_structure_checks() -> None:
 
 def test_if_the_pr_files_cannot_be_read_everything_runs() -> None:
     scope = job_block(text(PRODUCT), "scope")
-    assert "Не удалось получить список файлов PR: идут полные проверки." in scope
-    assert scope.count("code=true") >= 2 and "hooks=true" in scope
+    assert "Не удалось получить список файлов PR: идут проверки всех языков." in scope
+    assert (
+        "scope.py --unknown" in scope
+    )  # скрипт при неизвестном списке включает всё (test_ci_split)
 
 
 def test_windows_runs_only_the_hooks_tests_and_only_when_hooks_change() -> None:
@@ -120,8 +139,8 @@ def test_windows_runs_only_the_hooks_tests_and_only_when_hooks_change() -> None:
     assert "pytest -v " + " ".join(HOOK_TESTS) in block
     for slow in ("dotnet", "pwsh", "pyright", "setup-node"):
         assert slow not in block, slow
-    scope = job_block(workflow, "scope")
-    assert "plugin/hooks/*|plugin/templates/*|.github/*) hooks=true" in scope
+    hooks = 'HOOKS = ("plugin/hooks/*", "plugin/templates/*", ".github/*")'
+    assert hooks in text(SCOPE)
 
 
 def test_windows_is_used_by_the_hooks_job_alone() -> None:

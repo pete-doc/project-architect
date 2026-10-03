@@ -319,6 +319,7 @@ def render(
     previous: int | None,
     prs: list[dict[str, Any]],
     source: ReportSource,
+    ci_runs: list[dict[str, Any]] | None = None,
 ) -> str:
     out = [f"# Прогресс: {headline(board) if board.blocks else 'блоков пока нет'}"]
     out.append(
@@ -386,11 +387,7 @@ def render(
             "",
         ]
     out += tests_section(outcomes, previous, source, commit)
-    out += [
-        "## Расход CI",
-        "Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), [бюджеты](https://github.com/settings/billing/budgets).",
-        "",
-    ]
+    out += ci_section(ci_runs, date)
     if board.problems:
         out += ["## Замечания к плану"] + [f"- {x}" for x in board.problems] + [""]
     out += [
@@ -450,6 +447,85 @@ def plan_table(board: Board) -> list[str]:
     return rows
 
 
+BILLING_LINKS = (
+    "Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), "
+    "[бюджеты](https://github.com/settings/billing/budgets)."
+)
+CI_WEEK_DAYS = 7
+CI_TABLE_ROWS = 8
+RUNNER_MULTIPLIER = (("windows", 2), ("macos", 10))  # как GitHub считает квоту: Linux x1
+WASTED = {"failure", "cancelled", "timed_out"}
+
+
+def parse_time(value: object) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def run_minutes(run: dict[str, Any]) -> int:
+    """Минуты квоты одного прогона: каждое задание округляется вверх, Windows x2, macOS x10."""
+    total = 0
+    for raw in cast("list[object]", run.get("jobs", [])):
+        job = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+        start, end = parse_time(job.get("started_at")), parse_time(job.get("completed_at"))
+        if start is None or end is None or end < start:
+            continue
+        labels = " ".join(str(x).lower() for x in cast("list[object]", job.get("labels", [])))
+        factor = next((f for key, f in RUNNER_MULTIPLIER if key in labels), 1)
+        total += -(-int((end - start).total_seconds()) // 60) * factor
+    return total
+
+
+def ci_section(runs: list[dict[str, Any]] | None, date: str) -> list[str]:
+    """Раздел «Расход CI»: минуты за неделю и на один PR по данным о прогонах Actions."""
+    if runs is None:
+        return ["## Расход CI", BILLING_LINKS, ""]
+    end = datetime.datetime.fromisoformat(date).replace(tzinfo=datetime.UTC) + datetime.timedelta(
+        days=1
+    )
+    since = end - datetime.timedelta(days=CI_WEEK_DAYS)
+    week: list[tuple[dict[str, Any], int]] = []
+    for run in runs:
+        created = parse_time(run.get("created"))
+        if created is not None and since <= created < end:
+            week.append((run, run_minutes(run)))
+    total = sum(m for _, m in week)
+    wasted = [(r, m) for r, m in week if r.get("conclusion") in WASTED]
+    out = [
+        "## Расход CI",
+        f"- За {CI_WEEK_DAYS} дней: **{total}** минут квоты в {len(week)} прогонах "
+        f"(Windows считается x2). Впустую, то есть упало или отменено: **{sum(m for _, m in wasted)}** "
+        f"минут в {len(wasted)} прогонах.",
+    ]
+    per_pr: dict[int, list[int]] = {}
+    for run, minutes in week:
+        number = run.get("pr")
+        if isinstance(number, int):
+            row = per_pr.setdefault(number, [0, 0, 0])
+            row[0] += 1
+            row[1] += minutes
+            row[2] += run.get("conclusion") in WASTED
+    other = sum(m for r, m in week if not isinstance(r.get("pr"), int))
+    if per_pr:
+        average = round(sum(r[1] for r in per_pr.values()) / len(per_pr))
+        worst = max(per_pr, key=lambda n: per_pr[n][1])
+        out.append(
+            f"- На один PR: в среднем **{average}** минут (PR за неделю: {len(per_pr)}); больше всего у "
+            f"PR #{worst}: {per_pr[worst][1]} минут."
+        )
+        out += ["", "| PR | Прогонов | Минут | Из них впустую |", "|---|---|---|---|"]
+        for number in sorted(per_pr, reverse=True)[:CI_TABLE_ROWS]:
+            count, minutes, bad = per_pr[number]
+            out.append(f"| #{number} | {count} | {minutes} | {bad} |")
+        out.append("")
+    else:
+        out.append("- На один PR: за неделю PR с прогонами не было.")
+    out.append(f"- Вне PR (после слияния, табло): {other} минут.")
+    return [*out, BILLING_LINKS, ""]
+
+
 def report_warning(outcomes: dict[str, str], source: ReportSource, commit: str) -> str:
     """Предупреждение, если отчёт тестов снят не с содержимого текущего коммита ("" = всё в порядке)."""
     if not outcomes:
@@ -505,6 +581,7 @@ def build(
     previous: Path | None,
     prs: list[dict[str, Any]],
     source: ReportSource | None = None,
+    ci_runs: list[dict[str, Any]] | None = None,
 ) -> str:
     name, approved, criteria = read_goal(project)
     blocks, problems = read_blocks(project, criteria)
@@ -513,7 +590,7 @@ def build(
     compute(board, outcomes, incident_counts(project))
     return render(
         board, project, outcomes, commit, date, previous_total(previous), prs,
-        source or ReportSource(),
+        source or ReportSource(), ci_runs,
     )  # fmt: skip
 
 
@@ -536,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
         default="no",
         help="yes, если содержимое коммита отчёта совпадает с текущим коммитом",
     )
+    parser.add_argument(
+        "--ci-runs", default=None, help="JSON с прогонами Actions за неделю: расход CI на табло"
+    )
     parser.add_argument("--prs", default=None, help="JSON со списком открытых PR")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
@@ -545,11 +625,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.prs:
         raw = cast("list[dict[str, Any]]", json.loads(Path(args.prs).read_text(encoding="utf-8")))
         prs = [normalize_pr(item) for item in raw]
+    ci_runs: list[dict[str, Any]] | None = None
+    if args.ci_runs and Path(args.ci_runs).is_file():
+        ci_runs = cast(
+            "list[dict[str, Any]]", json.loads(Path(args.ci_runs).read_text(encoding="utf-8"))
+        )
     try:
         text = build(
             project, Path(args.report) if args.report else None, args.commit, date,
             Path(args.previous) if args.previous else None, prs,
             ReportSource(args.report_commit, args.report_same_tree == "yes"),
+            ci_runs,
         )  # fmt: skip
     except (ValueError, OSError, json.JSONDecodeError) as error:
         sys.stderr.write(f"[parch:status] ПРОВАЛ: {error}\n")

@@ -1,8 +1,11 @@
 name: ci
 
+# Быстрая часть на каждую отправку (ADR-0013): проверки, быстрые тесты и медленные тесты только тех
+# языков, чьи файлы изменил PR. Такой прогон помечен как урезанный и права на слияние не даёт:
+# слияние подтверждает полный прогон (full.yml, проверка full-run: `gh pr ready`).
 # Раннеры: Ubuntu по умолчанию. Другие раннеры, матрицы и запуск не по pull_request добавляются
-# только через ADR с оценкой минут квоты за один прогон (ADR-0011): Windows считается как x2,
-# macOS как x10. Прогона на push в main нет: ветка main защищена, в неё попадает только проверенное.
+# только через ADR с оценкой минут квоты (ADR-0011): Windows считается как x2, macOS как x10.
+# Прогона на push в main нет: ветка main защищена, в неё попадает только проверенное.
 on:
   pull_request:
 
@@ -11,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Что изменил PR: определяет, нужны ли полные проверки и проверка hooks на Windows.
+  # Что изменил PR: нужны ли тесты, hooks на Windows и какие языки менялись.
   scope:
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -21,37 +24,30 @@ jobs:
     outputs:
       code: ${{ steps.files.outputs.code }}
       hooks: ${{ steps.files.outputs.hooks }}
+      node: ${{ steps.files.outputs.node }}
+      csharp: ${{ steps.files.outputs.csharp }}
+      powershell: ${{ steps.files.outputs.powershell }}
+      selector: ${{ steps.files.outputs.selector }}
     steps:
+      - uses: actions/checkout@v4
       - id: files
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          code=false
-          hooks=false
-          if ! files=$(gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only); then
-            echo "Не удалось получить список файлов PR: идут полные проверки."
-            code=true
-            hooks=true
+          if files=$(gh pr diff "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --name-only); then
+            echo "$files" | python3 .github/scope.py | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "Не удалось получить список файлов PR: идут проверки всех языков."
+            python3 .github/scope.py --unknown | tee -a "$GITHUB_OUTPUT"
           fi
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            case "$file" in
-              docs/*|state/*) ;;
-              *) code=true ;;
-            esac
-            case "$file" in
-              plugin/hooks/*|plugin/templates/*|.github/*) hooks=true ;;
-            esac
-          done <<< "$files"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "hooks=$hooks" >> "$GITHUB_OUTPUT"
-          echo "PR меняет код или тесты: $code; hooks, шаблоны или .github: $hooks"
 
   check:
     needs: scope
     runs-on: ubuntu-latest
-    # 25, а не 20: скорость раннера GitHub плавает почти вдвое (ADR-0011, изменение 2026-10-03).
+    # 25: если PR меняет общий код или сам CI, идут тесты всех языков и прогон не короче полного.
     timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,20 +72,20 @@ jobs:
         if: needs.scope.outputs.code != 'true'
         run: python plugin/templates/ci/parch/parch_ci.py tests --language python
 
-      # Полные проверки: PR меняет код, тесты, плагин или настройки.
-      - if: needs.scope.outputs.code == 'true'
+      # Урезанный прогон: PR меняет код, тесты, плагин или настройки.
+      - if: needs.scope.outputs.code == 'true' && needs.scope.outputs.node == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: tests/projects/ts_shop/package-lock.json
       # Тесты C# запускают настоящий dotnet; версия SDK закреплена точно в global.json тестового проекта.
-      - if: needs.scope.outputs.code == 'true'
+      - if: needs.scope.outputs.code == 'true' && needs.scope.outputs.csharp == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.dotnet
           key: dotnet-sdk-${{ runner.os }}-${{ hashFiles('tests/projects/cs_shop/global.json') }}
-      - if: needs.scope.outputs.code == 'true'
+      - if: needs.scope.outputs.code == 'true' && needs.scope.outputs.csharp == 'true'
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: tests/projects/cs_shop/global.json
@@ -97,33 +93,35 @@ jobs:
           cache-dependency-path: tests/projects/cs_shop/**/packages.lock.json
       # Тесты PowerShell запускают настоящий PSScriptAnalyzer; версия та же, что в шаблоне CI.
       - id: psa-cache
-        if: needs.scope.outputs.code == 'true'
+        if: needs.scope.outputs.code == 'true' && needs.scope.outputs.powershell == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.local/share/powershell/Modules
           key: psscriptanalyzer-${{ runner.os }}-1.25.0
       - name: Install PSScriptAnalyzer
-        if: needs.scope.outputs.code == 'true' && steps.psa-cache.outputs.cache-hit != 'true'
+        if: needs.scope.outputs.code == 'true' && needs.scope.outputs.powershell == 'true' && steps.psa-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
       - if: needs.scope.outputs.code == 'true'
         run: pyright
-      # Полный прогон (-m "" снимает фильтр медленных тестов): единственное место, где он идёт обязательно.
-      - if: needs.scope.outputs.code == 'true'
-        run: pytest -v -m "" --junitxml=test-report.xml
-      # Отчёт нужен и для обновления baseline: пропуски и падения берутся из него, а не из локального прогона.
+      # Метка parch-partial в отчёте: храповик не примет его за полный прогон.
+      - name: Урезанный прогон тестов
+        if: needs.scope.outputs.code == 'true'
+        env:
+          SELECTOR: ${{ needs.scope.outputs.selector }}
+        run: pytest -v -m "$SELECTOR" -o junit_suite_name=parch-partial --junitxml=test-report-partial.xml
       - if: always() && needs.scope.outputs.code == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: test-report
-          path: test-report.xml
-          retention-days: 14
-      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
-      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+          name: test-report-partial
+          path: test-report-partial.xml
+          retention-days: 7
+      # «Храповик» в режиме --partial: упавшие, новые пропуски и удалённые тесты останавливают и
+      # урезанный прогон, но он сообщает, что слияния не даёт.
       - if: needs.scope.outputs.code == 'true'
-        run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+        run: python plugin/templates/ci/parch/parch_ci.py tests --language python --partial --report test-report-partial.xml
       - if: needs.scope.outputs.code == 'true'
-        run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml
+        run: python plugin/templates/ci/parch/parch_ci.py skips --language python --partial --report test-report-partial.xml
 
   # Целевая платформа продукта Windows 11: hooks и запускающий файл проверяются на Windows,
   # но только если PR их меняет (Windows считается как x2 к квоте).

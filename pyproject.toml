@@ -25,4 +25,8 @@ addopts = "-n auto --dist loadgroup -m 'not slow'"
 markers = [
     "slow: запускает dotnet, pwsh, node или PSScriptAnalyzer; обычный pytest такие тесты пропускает",
     "xdist_group: тесты группы идут на одном процессе pytest-xdist",
+    "lang_python: тесты языка Python (CI выбирает их при изменении файлов языка)",
+    "lang_typescript: тесты языка TypeScript",
+    "lang_csharp: тесты языка C#",
+    "lang_powershell: тесты языка PowerShell",
 ]
