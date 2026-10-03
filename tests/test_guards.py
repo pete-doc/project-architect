@@ -108,6 +108,8 @@ def test_recursive_delete_in_system_temp_outside_project_is_allowed(project: Pat
     scratch = Path(tempfile.gettempdir()) / "parch-scratch" / "report"
     allowed = run_hook("guard_destructive.py", bash(f'rm -rf "{scratch}"'), project)
     assert allowed.code == 0
+    short = Path(tempfile.gettempdir()) / "RUNNER~1" / "x"  # короткие имена Windows содержат ~
+    assert run_hook("guard_destructive.py", bash(f'rm -rf "{short}"'), project).code == 0
     ps = powershell(f"Remove-Item {scratch} -Recurse -Force")
     assert run_hook("guard_destructive.py", ps, project).code == 0
 
@@ -120,6 +122,7 @@ def test_a_variable_in_the_target_blocks_even_inside_system_temp(project: Path) 
         "rm -rf ${TMPDIR}/x",
         "rm -rf $TMP/x",
         "rm -rf $VAR/x",
+        "rm -rf ~/x",
         "rm -rf %TEMP%/x",
     ]
     for command in bad_bash:

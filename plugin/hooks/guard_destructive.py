@@ -47,7 +47,7 @@ _SECRET_DIRS = {".ssh", ".gnupg"}
 _PS_RECURSE = re.compile(r"^-r(e(c(u(r(se?)?)?)?)?)?$", re.IGNORECASE)
 _PS_FORCE = re.compile(r"^-fo(r(ce?)?)?$", re.IGNORECASE)
 _PS_REMOVE = {"remove-item", "ri", "del", "erase", "rd", "rmdir", "rm"}
-_UNRESOLVED = set("$%*?[]~`{}")
+_UNRESOLVED = set("$%*?[]`{}")
 
 
 def is_secret_path(path: str) -> bool:
@@ -97,7 +97,7 @@ def _deletes_recursively_and_forcibly(tokens: list[str]) -> bool:
 def _inside_system_temp(target: str, project: Path) -> bool:
     """True, если путь заведомо лежит внутри системной временной папки и не задевает проект."""
     temp = Path(tempfile.gettempdir()).resolve()
-    if _UNRESOLVED & set(target):
+    if _UNRESOLVED & set(target) or target.startswith("~"):
         return False  # только буквальные пути: переменную hook и оболочка раскрыли бы по-разному
     text = target
     if os.name == "nt" and re.match(r"^/[a-zA-Z]/", text):
