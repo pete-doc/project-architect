@@ -3156,6 +3156,31 @@ def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
     return problems
 
 
+TARGET_OS_HEADING = re.compile(r"^#{1,6}\s*целевая ос\s*$", re.IGNORECASE)
+
+
+def target_os_problem(project: Path) -> str | None:
+    """В CONSTITUTION.md должна быть записана целевая ОС (STANDARD.md, 7.2, правило 2)."""
+    constitution = next((project / c for c in CONSTITUTIONS if (project / c).is_file()), None)
+    if constitution is None:
+        return None
+    inside = False
+    for line in constitution.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if TARGET_OS_HEADING.match(stripped):
+            inside = True
+        elif inside and re.match(r"^#{1,6}\s", stripped):
+            break
+        elif inside and stripped and not stripped.startswith((">", "(", "{{")):
+            return None
+    return (
+        f"{constitution.name}: не записана целевая ОС (раздел «Целевая ОС»). На ней работает "
+        "исполнитель и проверяет проект бесплатно, а CI на Linux проверяет переносимость; без "
+        "записи непонятно, какую систему считать главной. Спросите владельца и запишите "
+        "(Windows 11, macOS или Linux)."
+    )
+
+
 def check_standard(project: Path, language: str) -> Result:
     """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
     del language
@@ -3165,6 +3190,9 @@ def check_standard(project: Path, language: str) -> Result:
     adr_text = accepted_adr_text(project)
     for path in workflows:
         problems.extend(standard_workflow_problems(path, adr_text))
+    os_problem = target_os_problem(project)
+    if os_problem:
+        problems.append(os_problem)
     agents = project / "AGENTS.md"
     if agents.is_file():
         size = len(agents.read_text(encoding="utf-8").splitlines())
@@ -3178,7 +3206,7 @@ def check_standard(project: Path, language: str) -> Result:
         return result
     result.note(
         f"Стандарт {STANDARD_VERSION}: проверено workflow {len(workflows)} (таймауты, отмена, "
-        "триггеры, раннеры, матрицы) и размер AGENTS.md."
+        "триггеры, раннеры, матрицы), целевая ОС в CONSTITUTION.md и размер AGENTS.md."
     )
     result.note(f"Пока не проверяется: {STANDARD_NOT_YET}.")
     return result

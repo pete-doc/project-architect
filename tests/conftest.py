@@ -14,6 +14,10 @@ HOOKS = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 
 CONSTITUTION = """# CONSTITUTION
 
+## Целевая ОС
+
+Windows 11
+
 ## Разрешённые пакеты
 - pip: requests, pydantic
 - npm: react, @types/node
@@ -123,6 +127,16 @@ SLOW_GROUPS = {
     "test_ci_csharp": "csharp",
     "test_ci_typescript": "typescript",
     "test_ci_powershell": "powershell",
+}
+# Ответы владельца, которые обязательны для /parch:init-project: целевая ОС и цель продукта.
+INIT_ANSWERS: dict[str, Any] = {
+    "target_os": "windows",
+    "goal": {
+        "summary": "Считает заказы магазина.",
+        "audience": "Продавцы небольшого магазина.",
+        "criteria": ["Сумма заказа считается верно", "Заказ можно посмотреть по номеру"],
+        "out_of_scope": ["Оплата"],
+    },
 }
 
 

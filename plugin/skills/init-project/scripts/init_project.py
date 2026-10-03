@@ -20,7 +20,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 TEMPLATES = PLUGIN_ROOT / "templates"
@@ -238,6 +238,78 @@ def bullets(text: str, fallback: str) -> str:
     return "\n".join(f"- {line}" for line in lines) if lines else fallback
 
 
+TARGET_OS = {"windows": "Windows 11", "macos": "macOS", "linux": "Linux"}
+BUDGET_NOTE = (
+    "Бюджет на GitHub Actions: задайте небольшой, но не нулевой (например, 5 долларов) на странице "
+    "https://github.com/settings/billing/budgets. Нулевой бюджет останавливает CI посреди работы "
+    "без предупреждения, а без бюджета об ошибке настройки вы узнаете только из счёта."
+)
+NO_GOAL_YET = "(владелец пока не назвал)"
+
+
+@dataclass(frozen=True)
+class Goal:
+    summary: str
+    audience: str
+    criteria: tuple[str, ...]
+    out_of_scope: tuple[str, ...]
+
+
+def normalize_target_os(value: object) -> str:
+    """Целевая ОС: на ней работает исполнитель; CI всё равно на Linux (STANDARD.md, 7.2)."""
+    text = str(value or "").strip().lower()
+    for key, name in TARGET_OS.items():
+        if text.startswith(key) or text.startswith(key[:3]):
+            return name
+    raise ValueError(
+        f"target_os: выберите одну из систем ({', '.join(TARGET_OS.values())}); получено «{value}»"
+    )
+
+
+def text_list(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"goal.{field_name}: нужен список строк")
+    items = [str(item).strip() for item in cast("list[object]", value)]
+    return tuple(item for item in items if item)
+
+
+def parse_goal(raw: object) -> Goal:
+    """Цель продукта из разговора с владельцем: без неё планирование не начинается (6.5)."""
+    if not isinstance(raw, dict):
+        raise ValueError("нужна цель продукта (goal): что это, для кого, критерии готовности")
+    data = cast("dict[str, object]", raw)
+    summary = str(data.get("summary", "")).strip()
+    audience = str(data.get("audience", "")).strip()
+    criteria = text_list(data.get("criteria"), "criteria")
+    if not summary:
+        raise ValueError("goal.summary: опишите, что это за продукт")
+    if not audience:
+        raise ValueError("goal.audience: назовите, для кого продукт")
+    if not criteria:
+        raise ValueError(
+            "goal.criteria: нужен хотя бы один проверяемый критерий готовности продукта"
+        )
+    return Goal(summary, audience, criteria, text_list(data.get("out_of_scope"), "out_of_scope"))
+
+
+def render_goal(name: str, goal: Goal) -> str:
+    template = (TEMPLATES / "docs" / "GOAL.md").read_text(encoding="utf-8")
+    criteria = "\n".join(f"- **G{i}.** {text}" for i, text in enumerate(goal.criteria, start=1))
+    out = "\n".join(f"- {text}" for text in goal.out_of_scope) or f"- {NO_GOAL_YET}"
+    values = {
+        "{{PROJECT_NAME}}": name,
+        "{{SUMMARY}}": goal.summary,
+        "{{AUDIENCE}}": goal.audience,
+        "{{CRITERIA}}": criteria,
+        "{{OUT_OF_SCOPE}}": out,
+    }
+    for key, value in values.items():
+        template = template.replace(key, value)
+    return template
+
+
 TS_NODE_VERSION = "22.14.0"
 CS_EXTRA_PACKAGES = {"TngTech.ArchUnitNET.xUnit": "0.13.4"}
 PACKAGE_VERSION = re.compile(r'Include="([^"]+)"\s+Version="([^"]+)"')
@@ -268,7 +340,9 @@ def tool_versions_text(languages: list[str]) -> str:
     return "\n".join(lines)
 
 
-def render_constitution(name: str, description: str, priorities: str, languages: list[str]) -> str:
+def render_constitution(
+    name: str, description: str, priorities: str, languages: list[str], target_os: str
+) -> str:
     template = (TEMPLATES / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     chosen = [LANGUAGES[lang] for lang in languages]
     stack = "\n".join(f"- {item.title}" for item in chosen)
@@ -286,6 +360,7 @@ def render_constitution(name: str, description: str, priorities: str, languages:
         "{{CHECK_COMMANDS}}": check_text,
         "{{TOOL_VERSIONS}}": tool_versions_text(languages),
         "{{STANDARD_VERSION}}": parch_ci.STANDARD_VERSION,
+        "{{TARGET_OS}}": target_os,
     }
     for key, value in values.items():
         template = template.replace(key, value)
@@ -429,7 +504,13 @@ def create_csharp_files(project: Path, report: Report) -> None:
 
 
 def init_project(
-    project: Path, name: str, languages: list[str], description: str, priorities: str
+    project: Path,
+    name: str,
+    languages: list[str],
+    description: str,
+    priorities: str,
+    target_os: str,
+    goal: Goal,
 ) -> dict[str, Any]:
     unknown = [lang for lang in languages if lang not in LANGUAGES]
     if unknown or not languages:
@@ -443,6 +524,9 @@ def init_project(
     report.copy("docs/adr/0000-template.md", "docs/adr/0000-template.md")
     report.copy("state/features.json", "state/features.json")
     report.copy("state/STATUS.md", "state/STATUS.md")
+    report.write("docs/GOAL.md", render_goal(name, goal))
+    report.write("docs/specs/.gitkeep", "")
+    report.write("state/incidents/.gitkeep", "")
     if "python" in languages:
         report.write("pyproject.toml", PYPROJECT)
         report.write("requirements.txt", REQUIREMENTS)
@@ -468,8 +552,10 @@ def init_project(
     adr.build_index(project)
     report.created.append("docs/adr/README.md (индекс решений)")
     report.write(
-        "docs/CONSTITUTION.md", render_constitution(name, description, priorities, languages)
+        "docs/CONSTITUTION.md",
+        render_constitution(name, description, priorities, languages, target_os),
     )
+    report.notes.append(BUDGET_NOTE)
     return {
         "project": str(project),
         "created": report.created,
@@ -490,6 +576,8 @@ def main() -> None:
         languages,
         str(request.get("description", "")),
         str(request.get("priorities", "")),
+        normalize_target_os(request.get("target_os")),
+        parse_goal(request.get("goal")),
     )
     sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
 

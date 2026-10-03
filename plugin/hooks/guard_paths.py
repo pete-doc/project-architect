@@ -2,8 +2,9 @@
 
 1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок.
 2. Защищённые пути (настройки Claude и hooks, CI-файлы, файлы state/ проверок, CONSTITUTION.md,
-   принятые ADR): блокировка для всех. Снять её может только владелец, подтвердив запрос,
-   который Claude Code показывает ему (решение «ask»). Агент подтвердить запрос не может.
+   docs/GOAL.md, принятые ADR): блокировка для всех. Снять её может только владелец,
+   подтвердив запрос, который Claude Code показывает ему (решение «ask»). Агент подтвердить
+   запрос не может.
    Когда запрос показать некому (режимы bypassPermissions и dontAsk, фоновый запуск), действие
    запрещается совсем.
 3. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений).
@@ -129,6 +130,8 @@ def _gated_reason(rel: str, project: Path) -> str | None:
         )
     if name == "constitution.md":
         return "CONSTITUTION.md (стек, список пакетов) утверждает только владелец"
+    if name == "goal.md" and len(parts) >= 2 and parts[-2] == "docs":
+        return "GOAL.md (цель продукта) меняет и утверждает только владелец"
     if len(parts) >= 3 and parts[-3:-1] == ("docs", "adr") and name.endswith(".md"):
         if _is_accepted_adr(rel, project):
             return "принятый ADR неизменяем: решение пересматривается новым ADR"

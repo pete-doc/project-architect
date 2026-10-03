@@ -26,7 +26,7 @@ def load_init() -> Any:
 
 
 def section(languages: list[str]) -> str:
-    text: str = load_init().render_constitution("Демо", "d", "p", languages)
+    text: str = load_init().render_constitution("Демо", "d", "p", languages, "Windows 11")
     match = re.search(r"## Версии инструментов\n(.*?)\n## ", text, re.S)
     assert match is not None, "в CONSTITUTION.md нет раздела «Версии инструментов»"
     return match.group(1)
@@ -109,7 +109,7 @@ def test_every_version_in_the_section_is_exact() -> None:
 def test_the_constitution_template_names_the_standard_version() -> None:
     from parch_ci import STANDARD_VERSION
 
-    text: str = load_init().render_constitution("Демо", "d", "p", ["python"])
+    text: str = load_init().render_constitution("Демо", "d", "p", ["python"], "Windows 11")
     assert f"ProjectArchitect {STANDARD_VERSION}" in text
     assert "{{" not in text  # все места подстановки заполнены
 
