@@ -655,7 +655,7 @@ def test_generated_powershell_project_is_green_and_catches_a_fat_script(tmp_path
 def test_python_and_powershell_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "powershell"])
     workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-powershell.yml", "ci.yml"]
+    assert workflows == ["ci-powershell.yml", "ci.yml", "state.yml"]
     constitution = (tmp_path / "both" / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert constitution.count("## Пороги тонкости PowerShell") == 1
 

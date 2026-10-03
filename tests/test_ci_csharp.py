@@ -812,6 +812,6 @@ def test_generated_csharp_ci_catches_violations(generated: CsShop) -> None:
 def test_python_and_csharp_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "csharp"])
     workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-csharp.yml", "ci.yml"]
+    assert workflows == ["ci-csharp.yml", "ci.yml", "state.yml"]
     baseline = json.loads((tmp_path / "both" / "state" / "baseline.json").read_text("utf-8"))
     assert set(baseline["tests"]) == {"python", "csharp"}
