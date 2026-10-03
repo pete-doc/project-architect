@@ -745,3 +745,107 @@ def test_unlisted_packages_are_still_blocked_next_to_redirections(
     command: str, project: Path
 ) -> None:
     assert run_hook("guard_packages.py", bash(command), project).blocked
+
+
+# ---------- pre_push: проверка standard до push (STANDARD.md 7.2, правило 3) ----------
+
+GOOD_WORKFLOW = (
+    "name: ci\n\non:\n  pull_request:\n\nconcurrency:\n  group: ci-${{ github.ref }}\n"
+    "  cancel-in-progress: true\n\njobs:\n  check:\n    runs-on: ubuntu-latest\n"
+    "    timeout-minutes: 20\n    steps:\n      - run: echo hi\n"
+)
+
+
+def with_workflow(project: Path, text: str) -> Path:
+    folder = project / ".github" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "ci.yml").write_text(text, encoding="utf-8", newline="\n")
+    return project
+
+
+def test_push_is_stopped_when_standard_finds_a_costly_workflow(project: Path) -> None:
+    bad = GOOD_WORKFLOW.replace("    timeout-minutes: 20\n", "")
+    with_workflow(project, bad)
+    result = run_hook("pre_push.py", bash("git push origin feature"), project)
+    assert_blocked(result, "pre_push", "Push остановлен", "timeout-minutes не задан", "квоту")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push",
+        "git push -u origin feature",
+        "git -C . push origin feature",
+        "git commit -m x && git push",
+        'bash -c "git push origin feature"',
+    ],
+)
+def test_every_form_of_push_is_checked(project: Path, command: str) -> None:
+    with_workflow(project, GOOD_WORKFLOW.replace("ubuntu-latest", "macos-latest"))
+    result = run_hook("pre_push.py", bash(command), project)
+    assert_blocked(result, "pre_push", "macos-latest")
+
+
+def test_push_through_powershell_is_checked_too(project: Path) -> None:
+    with_workflow(project, GOOD_WORKFLOW.replace("pull_request:", "pull_request:\n  push:"))
+    result = run_hook("pre_push.py", powershell("git push origin feature"), project)
+    assert_blocked(result, "pre_push", "pull_request")
+
+
+def test_push_is_allowed_when_standard_is_satisfied(project: Path) -> None:
+    with_workflow(project, GOOD_WORKFLOW)
+    result = run_hook("pre_push.py", bash("git push origin feature"), project)
+    assert result.code == 0, result.stderr
+
+
+def test_other_git_commands_are_not_checked(project: Path) -> None:
+    with_workflow(project, GOOD_WORKFLOW.replace("    timeout-minutes: 20\n", ""))
+    for command in (
+        "git status", "git commit -m push", "git log --oneline", "echo git push",
+        "git -C push status", "git commit -m 'git push'",
+    ):  # fmt: skip
+        result = run_hook("pre_push.py", bash(command), project)
+        assert result.code == 0, (command, result.stderr)
+
+
+def test_push_is_not_checked_outside_managed_projects(bare_project: Path) -> None:
+    with_workflow(bare_project, GOOD_WORKFLOW.replace("    timeout-minutes: 20\n", ""))
+    result = run_hook("pre_push.py", bash("git push"), bare_project)
+    assert result.code == 0, result.stderr
+
+
+def test_the_product_repository_itself_is_checked_before_push(bare_project: Path) -> None:
+    (bare_project / ".claude-plugin").mkdir()
+    (bare_project / ".claude-plugin" / "marketplace.json").write_text("{}", encoding="utf-8")
+    (bare_project / "plugin" / "hooks").mkdir(parents=True)
+    (bare_project / "plugin" / "hooks" / "hooks.json").write_text("{}", encoding="utf-8")
+    with_workflow(bare_project, GOOD_WORKFLOW.replace("    timeout-minutes: 20\n", ""))
+    result = run_hook("pre_push.py", bash("git push"), bare_project)
+    assert_blocked(result, "pre_push", "timeout-minutes не задан")
+
+
+def test_push_is_stopped_when_the_check_itself_breaks(project: Path) -> None:
+    folder = project / ".github" / "workflows"
+    folder.mkdir(parents=True)
+    (folder / "ci.yml").write_bytes(b"\xff\xfe name: \x00 broken")
+    result = run_hook("pre_push.py", bash("git push"), project)
+    assert result.blocked, result.stderr  # упавший охранник блокирует, а не пропускает
+
+
+def test_pre_push_hook_is_registered_for_both_shell_tools_and_runs_through_the_launcher() -> None:
+    hooks = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    groups = [g for g in hooks if "pre_push.py" in " ".join(h["command"] for h in g["hooks"])]
+    assert len(groups) == 1
+    assert groups[0]["matcher"] == "Bash|PowerShell"
+    assert "run-hook.cmd" in groups[0]["hooks"][0]["command"]
+
+
+def test_push_with_global_git_options_is_still_a_push(project: Path) -> None:
+    with_workflow(project, GOOD_WORKFLOW.replace("ubuntu-latest", "macos-latest"))
+    for command in (
+        "git -c user.name=x push",
+        "git -C . -c core.x=1 push origin f",
+        "git --no-pager push",
+    ):
+        result = run_hook("pre_push.py", bash(command), project)
+        assert_blocked(result, "pre_push", "macos-latest")

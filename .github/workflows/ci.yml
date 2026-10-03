@@ -61,6 +61,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      # Стоимость CI и бюджет текста (STANDARD.md, 7.2 и 12): таймауты, отмена, триггеры, раннеры.
+      - run: python plugin/templates/ci/parch/parch_ci.py standard
 
       # PR только с docs/** и state/**: тестов нет, проверяется структура (манифесты плагина,
       # индекс ADR, чистота стиля) и согласованность baseline с тестами.

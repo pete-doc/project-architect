@@ -1,5 +1,5 @@
 {
-  "description": "Hooks ProjectArchitect: охрана путей, пакетов и опасных команд, проверка после правки, ворота остановки, журнал. Запуск через run-hook.cmd, который сам находит Python.",
+  "description": "Hooks ProjectArchitect: охрана путей, пакетов и опасных команд, проверка стандарта перед push, проверка после правки, ворота остановки, журнал. Запуск через run-hook.cmd, который сам находит Python.",
   "hooks": {
     "PreToolUse": [
       {
@@ -29,6 +29,16 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" guard_packages.py",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" pre_push.py",
+            "timeout": 30
           }
         ]
       },
