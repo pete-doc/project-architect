@@ -1,0 +1,178 @@
+# Прогресс: 12 из 18 блоков готово · G1 — 3 из 4 · G2 — 6 из 9 · критерий G3 выполнен · G4 не начат · критерий G5 выполнен · G6 — 1 из 5
+Обновлено: 2026-10-03, коммит `7d95806` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`
+
+## Нужно ваше решение
+- **F17 «Пилот на реальном проекте»** ждёт владельца
+
+## В работе
+- ничего не открыто
+
+## План
+| Критерий | Блок | Что это | Статус | Зависит от | Инциденты |
+|---|---|---|---|---|---|
+| G1 Проект на любом из четырёх языков подключает… | F1 | Скелет и CI самого продукта | ✅ готово | — | 0 |
+| G1 Проект на любом из четырёх языков подключает…, G6 ИИ не теряет нить проекта: петли обнаруживаю… | F3 | Шаблоны, init-project, adr, doctor | ✅ готово | F2 | 0 |
+| G1 Проект на любом из четырёх языков подключает… | F11 | Цель, целевая ОС и бюджет Actions в init | ✅ готово | F9 | 0 |
+| G1 Проект на любом из четырёх языков подключает… | F17 | Пилот на реальном проекте | 🙋 ждёт владельца | F15 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F2 | Hooks защиты | ✅ готово | F1 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F4 | CI Python с храповиком | ✅ готово | F3 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F5 | CI TypeScript | ✅ готово | F4 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F6 | CI C# (ArchUnitNET) | ✅ готово | F5 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F7 | Облегчённый CI PowerShell | ✅ готово | F6 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые … | F9 | Стандарт 1.3 и проверка standard | ✅ готово | F8 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые …, G6 ИИ не теряет нить проекта: петли обнаруживаю… | F13 | Инциденты и статус «застрял» | ⏳ впереди | F12 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые …, G6 ИИ не теряет нить проекта: петли обнаруживаю… | F14 | Полная проверка standard (раздел 11) | ⏳ впереди | F11 | 0 |
+| G2 ИИ не может «заглушить» проверки: удалённые …, G6 ИИ не теряет нить проекта: петли обнаруживаю… | F16 | Janitor и ревью | ⏳ впереди | F13 | 0 |
+| G3 Владелец видит состояние проекта на одной ст… | F12 | Табло STATUS.md | ✅ готово | F11 | 0 |
+| G4 Существующий проект можно проверить и привес… | F15 | /parch:analyze-existing | ⏳ впереди | F14 | 0 |
+| G5 CI не тратит квоту впустую | F8 | Экономия CI: Ubuntu, таймауты, отмена | ✅ готово | F4 | 0 |
+| G5 CI не тратит квоту впустую | F10 | Быстрый режим тестов | ✅ готово | F9 | 0 |
+| G6 ИИ не теряет нить проекта: петли обнаруживаю… | F18 | Прослеживаемость цели до кода | ⏳ впереди | F14 | 0 |
+
+## Зависимости блоков
+По одной небольшой диаграмме на критерий готовности. Пунктирные блоки относятся к другому критерию и показаны только как «от чего зависит».
+
+### G1 Проект на любом из четырёх языков подключается одной командой, и результат проверен на живом проекте: 3 из 4 блоков готово
+```mermaid
+graph LR
+  F1["F1 Скелет и CI самого продукта"]
+  F3["F3 Шаблоны, init-project, adr, d…"]
+  F11["F11 Цель, целевая ОС и бюджет Act…"]
+  F17["F17 Пилот на реальном проекте"]
+  F2["F2 Hooks защиты"]
+  F9["F9 Стандарт 1.3 и проверка stand…"]
+  F15["F15 /parch:analyze-existing"]
+  F2 --> F3
+  F9 --> F11
+  F15 --> F17
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F1,F3,F11,F2,F9 done
+  class F17 blocked
+  class F15 later
+  class F2,F9,F15 outside
+```
+
+### G2 ИИ не может «заглушить» проверки: удалённые и пропущенные тесты, дубли, мёртвый код и нарушения границ ловятся на всех четырёх языках: 6 из 9 блоков готово
+```mermaid
+graph LR
+  F2["F2 Hooks защиты"]
+  F4["F4 CI Python с храповиком"]
+  F5["F5 CI TypeScript"]
+  F6["F6 CI C# (ArchUnitNET)"]
+  F7["F7 Облегчённый CI PowerShell"]
+  F9["F9 Стандарт 1.3 и проверка stand…"]
+  F13["F13 Инциденты и статус «застрял»"]
+  F14["F14 Полная проверка standard (раз…"]
+  F16["F16 Janitor и ревью"]
+  F1["F1 Скелет и CI самого продукта"]
+  F3["F3 Шаблоны, init-project, adr, d…"]
+  F8["F8 Экономия CI: Ubuntu, таймауты…"]
+  F12["F12 Табло STATUS.md"]
+  F11["F11 Цель, целевая ОС и бюджет Act…"]
+  F1 --> F2
+  F3 --> F4
+  F4 --> F5
+  F5 --> F6
+  F6 --> F7
+  F8 --> F9
+  F12 --> F13
+  F11 --> F14
+  F13 --> F16
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F2,F4,F5,F6,F7,F9,F1,F3,F8,F12,F11 done
+  class F13,F14,F16 later
+  class F1,F3,F8,F12,F11 outside
+```
+
+### G3 Владелец видит состояние проекта на одной странице и не читает код: 1 из 1 блоков готово
+```mermaid
+graph LR
+  F12["F12 Табло STATUS.md"]
+  F11["F11 Цель, целевая ОС и бюджет Act…"]
+  F11 --> F12
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F12,F11 done
+  class F11 outside
+```
+
+### G4 Существующий проект можно проверить и привести к стандарту: 0 из 1 блоков готово
+```mermaid
+graph LR
+  F15["F15 /parch:analyze-existing"]
+  F14["F14 Полная проверка standard (раз…"]
+  F14 --> F15
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F15,F14 later
+  class F14 outside
+```
+
+### G5 CI не тратит квоту впустую: 2 из 2 блоков готово
+```mermaid
+graph LR
+  F8["F8 Экономия CI: Ubuntu, таймауты…"]
+  F10["F10 Быстрый режим тестов"]
+  F4["F4 CI Python с храповиком"]
+  F9["F9 Стандарт 1.3 и проверка stand…"]
+  F4 --> F8
+  F9 --> F10
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F8,F10,F4,F9 done
+  class F4,F9 outside
+```
+
+### G6 ИИ не теряет нить проекта: петли обнаруживаются, решения и уроки не забываются, цель прослеживается до кода: 1 из 5 блоков готово
+```mermaid
+graph LR
+  F3["F3 Шаблоны, init-project, adr, d…"]
+  F13["F13 Инциденты и статус «застрял»"]
+  F14["F14 Полная проверка standard (раз…"]
+  F16["F16 Janitor и ревью"]
+  F18["F18 Прослеживаемость цели до кода"]
+  F2["F2 Hooks защиты"]
+  F12["F12 Табло STATUS.md"]
+  F11["F11 Цель, целевая ОС и бюджет Act…"]
+  F2 --> F3
+  F12 --> F13
+  F11 --> F14
+  F13 --> F16
+  F14 --> F18
+  classDef done fill:#d4f4dd,stroke:#2e8b57
+  classDef work fill:#fff3c4,stroke:#c79100
+  classDef blocked fill:#ffd6d6,stroke:#c0392b
+  classDef later fill:#eeeeee,stroke:#999999
+  classDef outside stroke-dasharray: 4 3
+  class F3,F2,F12,F11 done
+  class F13,F14,F16,F18 later
+  class F2,F12,F11 outside
+```
+
+## Тесты
+- Всего **1231**.
+- Упавших: **0**. Пропущенных: **9**.
+- Источник: отчёт прогона CI на коммите `7a0fd1f` (то же содержимое, что у табло).
+
+## Расход CI
+Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), [бюджеты](https://github.com/settings/billing/budgets).
+
+## Соответствие стандарту
+Карточка пунктов P1–P13 появится вместе с полной проверкой `standard`.
