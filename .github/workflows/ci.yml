@@ -107,8 +107,16 @@ jobs:
         run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
       - if: needs.scope.outputs.code == 'true'
         run: pyright
+      # Полный прогон (-m "" снимает фильтр медленных тестов): единственное место, где он идёт обязательно.
       - if: needs.scope.outputs.code == 'true'
-        run: pytest -v --junitxml=test-report.xml
+        run: pytest -v -m "" --junitxml=test-report.xml
+      # Отчёт нужен и для обновления baseline: пропуски и падения берутся из него, а не из локального прогона.
+      - if: always() && needs.scope.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.xml
+          retention-days: 14
       # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
       # пропущенные тесты останавливают CI (baseline в state/baseline.json).
       - if: needs.scope.outputs.code == 'true'

@@ -29,10 +29,12 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: pyright
-      - run: pytest -v
+      # Отчёт о запуске формирует сам CI: проверки tests и skips берут пропуски из него и не запускают
+      # тесты второй раз.
+      - run: pytest -v --junitxml=test-report.xml
       - run: python .github/parch/parch_ci.py settings
-      - run: python .github/parch/parch_ci.py tests
-      - run: python .github/parch/parch_ci.py skips
+      - run: python .github/parch/parch_ci.py tests --report test-report.xml
+      - run: python .github/parch/parch_ci.py skips --report test-report.xml
       - run: python .github/parch/parch_ci.py suppressions
       - run: python .github/parch/parch_ci.py modules
       - run: python .github/parch/parch_ci.py deps

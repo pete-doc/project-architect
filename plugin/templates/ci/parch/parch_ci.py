@@ -241,7 +241,10 @@ PY_TEST_ID = re.compile(r"^[^\s:]+\.py::\S")
 def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
     """Тесты Python собираются самим pytest; отчёт не нужен."""
     del report
+    # `-o addopts=`: настройки по умолчанию (параллельный запуск, фильтр медленных тестов) не должны
+    # скрывать тесты от учёта: число тестов всегда считается по полному сбору.
     argv = [*python_tool("pytest"), "--collect-only", "-q", "-p", "no:cacheprovider"]
+    argv += ["-o", "addopts="]
     done = run(argv, project)
     if done.returncode not in (0, 5):
         raise ToolError("pytest не смог собрать тесты:\n" + tail(done))
@@ -893,10 +896,21 @@ def update_baseline(
     accept: Accept,
     report: Path | None = None,
     only_tests: bool = False,
+    platform: str | None = None,
 ) -> Result:
-    """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта)."""
+    """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта).
+
+    platform: система, на которой снят отчёт (windows или posix); по умолчанию система этого
+    компьютера. Отчёт CI всегда снят на Linux, то есть posix.
+    """
     result = Result()
     baseline = Baseline(project)
+    if only_tests and report is None and language == "python":
+        raise ToolError(
+            "для baseline --only-tests нужен --report test-report.xml: пропуски и падения берутся "
+            "из отчёта CI (артефакт test-report), а не из локального прогона. Скачайте отчёт: "
+            "gh run download ИДЕНТИФИКАТОР -n test-report"
+        )
     outcomes = test_outcomes(project, language, report)
     if outcomes is None and language == "powershell":
         outcomes = {}  # PowerShell: тесты Pester не требуются (ADR-0010)
@@ -919,8 +933,8 @@ def update_baseline(
     if report is not None:
         gaps = report_gaps(project, language, outcomes, baseline, include_known=not accept.removed)
         fail_on_gaps(result, gaps)
-    new_skipped = sorted(skipped_now - known_skipped(baseline, language))
-    if has_skipped_list(baseline, language) and new_skipped and not accept.skips:
+    new_skipped = sorted(skipped_now - known_skipped(baseline, language, platform))
+    if has_skipped_list(baseline, language, platform) and new_skipped and not accept.skips:
         result.fail(
             "Отказ: появились тесты, пропущенные по фактическому результату запуска, "
             "записывать их в baseline нельзя (--accept-skips):",
@@ -992,7 +1006,7 @@ def update_baseline(
     baseline.set("skips", language, skips)
     if not baseline.has("skipped_tests", language):
         baseline.set("skipped_tests", language, [])
-    baseline.set("skipped_tests", platform_key(language), sorted(skipped_now))
+    baseline.set("skipped_tests", platform_key(language, platform), sorted(skipped_now))
     if not only_tests:
         baseline.set("suppressions", language, suppressions)
         baseline.set("config", language, config)
@@ -1562,12 +1576,16 @@ def with_tests(outcomes: dict[str, str], path: Path) -> dict[str, str]:
     return outcomes
 
 
+XDIST_GROUP_SUFFIX = re.compile(r"@[A-Za-z0-9_]+$")
+
+
 def junit_outcomes(path: Path) -> dict[str, str]:
     """JUnit XML (pytest --junitxml, Pester JUnitXml): исход каждого теста."""
     outcomes: dict[str, str] = {}
     root = parsed_root(path, {"testsuites", "testsuite"}, "JUnit XML")
     for case in root.iter("testcase"):
-        name = case.get("name", "")
+        # pytest-xdist с --dist loadgroup дописывает к имени `@группа`: это не часть имени теста
+        name = XDIST_GROUP_SUFFIX.sub("", case.get("name", ""))
         classname = case.get("classname", "")
         key = f"{classname}::{name}" if classname else name
         children = {local_name(child.tag) for child in case}
@@ -1694,21 +1712,21 @@ REPORT_HINT = {
 }
 
 
-def platform_key(language: str) -> str:
+def platform_key(language: str, platform: str | None = None) -> str:
     """Ключ baseline для пропусков, зависящих от системы (тест только для Windows и т.п.)."""
-    return f"{language}@{'windows' if os.name == 'nt' else 'posix'}"
+    return f"{language}@{platform or ('windows' if os.name == 'nt' else 'posix')}"
 
 
-def known_skipped(baseline: Baseline, language: str) -> set[str]:
+def known_skipped(baseline: Baseline, language: str, platform: str | None = None) -> set[str]:
     """Пропущенные тесты, известные для всех систем и для этой системы."""
     return baseline.strings("skipped_tests", language) | baseline.strings(
-        "skipped_tests", platform_key(language)
+        "skipped_tests", platform_key(language, platform)
     )
 
 
-def has_skipped_list(baseline: Baseline, language: str) -> bool:
+def has_skipped_list(baseline: Baseline, language: str, platform: str | None = None) -> bool:
     return baseline.has("skipped_tests", language) or baseline.has(
-        "skipped_tests", platform_key(language)
+        "skipped_tests", platform_key(language, platform)
     )
 
 
@@ -3212,6 +3230,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="baseline --update: только списки тестов и пропусков (остальное не трогать)",
     )
+    parser.add_argument(
+        "--report-platform",
+        choices=["windows", "posix"],
+        default=None,
+        help="baseline --update: на какой системе снят отчёт (отчёт CI всегда posix)",
+    )
     args = parser.parse_args(argv)
     project = Path(args.project).resolve()
     report = Path(args.report).resolve() if args.report else None
@@ -3226,7 +3250,9 @@ def main(argv: list[str] | None = None) -> int:
                 suppressions=args.accept_suppressions,
                 config=args.accept_config,
             )
-            result = update_baseline(project, args.language, accept, report, args.only_tests)
+            result = update_baseline(
+                project, args.language, accept, report, args.only_tests, args.report_platform
+            )
         elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
             reason = (
                 "не применяется (ADR-0010: PowerShell только тонкий клей)"
