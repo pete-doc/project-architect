@@ -2747,6 +2747,11 @@ foreach ($file in $files) {
                     $entry.Loops++; $entry.Details += "loop:$line"
                 }
                 if ($conditionCommands -contains $name) { $entry.Conditions++ }
+                if ($name -eq 'workflow') {
+                    # В PowerShell 7 `workflow` не ключевое слово: определение рабочего
+                    # процесса выглядит как вызов команды, но это та же попытка спрятать логику.
+                    $entry.Functions++; $entry.Details += "function:${line}:workflow"
+                }
                 if ($dynamicCommands -contains $name) {
                     $entry.Functions++; $entry.Details += "dynamic:${line}:$name"
                 }
