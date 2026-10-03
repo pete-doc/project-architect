@@ -109,7 +109,7 @@ CI идёт на Ubuntu; тесты hooks и запускающего файла
 
 1. Все обязательные проверки CI зелёные, а у PR с кодом зелёный и статус `full-run` (полный прогон, метка `full`).
 2. В PR нет ADR со статусом `proposed`.
-3. PR не меняет `.github/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `plugin/templates/ci/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `state/baseline.json`, `pyproject.toml` в части правил проверок.
+3. PR не меняет `.github/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `plugin/templates/ci/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `state/baseline.json`, `state/acceptance/` (приёмка владельцем, ADR-0014), `pyproject.toml` в части правил проверок.
 4. Описание PR заполнено по правилу 7.
 
 Не выполнено хотя бы одно из 2–4: не сливай, напиши владельцу в чат одной строкой, что требует его решения, и жди ответа «сливай». Если автослияние отключено или нет прав, скажи об этом, не обходи.
