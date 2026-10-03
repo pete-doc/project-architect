@@ -219,6 +219,24 @@ def test_a_group_really_runs_on_one_worker_under_xdist() -> None:
     assert len(workers) == 1, f"тесты группы разошлись по процессам: {sorted(workers)}"
 
 
+def test_xdist_group_suffix_in_a_report_is_not_part_of_the_test_name(tmp_path: Path) -> None:
+    """Под --dist loadgroup имя в отчёте выглядит как `test_x[p]@csharp`: ключи должны совпасть."""
+    root = project(tmp_path)
+    report = tmp_path / "test-report.xml"
+    report.write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_a" name="test_fast@csharp"/>'
+        '<testcase classname="tests.test_a" name="test_slow@typescript"/>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    done = run_parch(root, "tests", "--report", str(report))
+    assert done.returncode == 0, done.stdout
+    from parch_ci import junit_outcomes
+
+    assert set(junit_outcomes(report)) == {"tests.test_a::test_fast", "tests.test_a::test_slow"}
+
+
 def test_report_platform_decides_where_the_skips_are_recorded(tmp_path: Path) -> None:
     root = project(tmp_path)
     report = tmp_path / "test-report.xml"

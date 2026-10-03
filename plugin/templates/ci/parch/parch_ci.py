@@ -1576,12 +1576,16 @@ def with_tests(outcomes: dict[str, str], path: Path) -> dict[str, str]:
     return outcomes
 
 
+XDIST_GROUP_SUFFIX = re.compile(r"@[A-Za-z0-9_]+$")
+
+
 def junit_outcomes(path: Path) -> dict[str, str]:
     """JUnit XML (pytest --junitxml, Pester JUnitXml): исход каждого теста."""
     outcomes: dict[str, str] = {}
     root = parsed_root(path, {"testsuites", "testsuite"}, "JUnit XML")
     for case in root.iter("testcase"):
-        name = case.get("name", "")
+        # pytest-xdist с --dist loadgroup дописывает к имени `@группа`: это не часть имени теста
+        name = XDIST_GROUP_SUFFIX.sub("", case.get("name", ""))
         classname = case.get("classname", "")
         key = f"{classname}::{name}" if classname else name
         children = {local_name(child.tag) for child in case}
