@@ -214,7 +214,7 @@ def test_shell_guards_cover_both_shell_tools() -> None:
     """На Windows без Git Bash команды идут через PowerShell: matcher только Bash их бы не видел."""
     for group in load_hooks()["PreToolUse"]:
         scripts = " ".join(h["command"] for h in group["hooks"])
-        if "guard_packages" in scripts or "guard_paths" in scripts:
+        if "guard_packages" in scripts or "guard_paths" in scripts or "pre_push" in scripts:
             assert "Bash" in group["matcher"]
             assert "PowerShell" in group["matcher"]
 
