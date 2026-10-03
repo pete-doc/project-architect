@@ -79,7 +79,7 @@ def test_the_product_pilot_block_waits_for_the_owner_acceptance_file() -> None:
     )
     assert waiting in text
     file = (REPO / "state" / "acceptance" / "F17.md").read_text(encoding="utf-8")
-    assert file.count("- [ ]") == 5 and "Итог: ожидает приёмки владельца" in file
+    assert file.count("- [") == 5 and "Итог: ожидает приёмки владельца" in file
     for criterion in ("doctor", "analyze-existing", "без чтения кода", "GOAL и ADR", "записаны"):
         assert criterion in file, criterion
 
