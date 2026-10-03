@@ -3030,6 +3030,8 @@ COLLECTORS: dict[str, Collector] = {
 
 STANDARD_VERSION = "1.3"
 STANDARD_MAX_TIMEOUT = 20
+# Дольше 20 минут только по принятому ADR с записью `timeout-minutes: N`; больше 60 нельзя.
+STANDARD_HARD_TIMEOUT = 60
 STANDARD_BASE_RUNNER = "ubuntu-latest"
 # Единственный workflow, которому можно запускаться на push в main: пересчёт состояния после
 # слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
@@ -3127,11 +3129,18 @@ def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
     for job, (_, body) in yaml_keys(top["jobs"][1]).items():
         fields = yaml_keys(body)
         timeout = fields.get("timeout-minutes", ("", []))[0]
-        if not timeout.isdigit() or not 1 <= int(timeout) <= STANDARD_MAX_TIMEOUT:
+        minutes = int(timeout) if timeout.isdigit() else 0
+        by_adr = (
+            STANDARD_MAX_TIMEOUT < minutes <= STANDARD_HARD_TIMEOUT
+            and f"timeout-minutes: {minutes}" in adr_text
+        )
+        if not (1 <= minutes <= STANDARD_MAX_TIMEOUT or by_adr):
             problems.append(
                 f"{rel}, задание {job}: timeout-minutes {timeout or 'не задан'} "
-                f"(нужно число от 1 до {STANDARD_MAX_TIMEOUT}). По умолчанию GitHub ждёт "
-                "360 минут, и один зависший тест стоит шесть часов квоты."
+                f"(нужно число от 1 до {STANDARD_MAX_TIMEOUT}; больше только если принятый ADR "
+                f"называет это значение записью `timeout-minutes: N`, но не больше "
+                f"{STANDARD_HARD_TIMEOUT}). По умолчанию GitHub ждёт 360 минут, и один "
+                "зависший тест стоит шесть часов квоты."
             )
         runner = fields.get("runs-on", ("", []))[0].strip("\"'")
         if "uses" not in fields and not runner:
