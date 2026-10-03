@@ -738,7 +738,7 @@ def test_generated_typescript_ci_catches_violations(generated: TsShop) -> None:
 def test_python_and_typescript_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "typescript"])
     workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-typescript.yml", "ci.yml"]
+    assert workflows == ["ci-typescript.yml", "ci.yml", "state.yml"]
     baseline = json.loads((tmp_path / "both" / "state" / "baseline.json").read_text("utf-8"))
     assert set(baseline["tests"]) == {"python", "typescript"}
     assert set(baseline["config"]) == {"python", "typescript"}

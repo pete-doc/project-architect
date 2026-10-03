@@ -1,6 +1,7 @@
 """Охранные hooks: попытка нарушения -> блок (код 2) -> понятное сообщение агенту."""
 
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,63 @@ def test_destructive_message_is_actionable(project: Path) -> None:
 def test_powershell_tool_is_covered(project: Path) -> None:
     result = run_hook("guard_destructive.py", powershell("Remove-Item x -Recurse -Force"), project)
     assert_blocked(result, "guard_destructive")
+
+
+# Удаление внутри системной временной папки вне проекта разрешено; всё остальное по-прежнему нет.
+
+
+def test_recursive_delete_in_system_temp_outside_project_is_allowed(project: Path) -> None:
+    scratch = Path(tempfile.gettempdir()) / "parch-scratch" / "report"
+    allowed = run_hook("guard_destructive.py", bash(f'rm -rf "{scratch}"'), project)
+    assert allowed.code == 0
+    short = Path(tempfile.gettempdir()) / "RUNNER~1" / "x"  # короткие имена Windows содержат ~
+    assert run_hook("guard_destructive.py", bash(f'rm -rf "{short}"'), project).code == 0
+    ps = powershell(f"Remove-Item {scratch} -Recurse -Force")
+    assert run_hook("guard_destructive.py", ps, project).code == 0
+
+
+def test_a_variable_in_the_target_blocks_even_inside_system_temp(project: Path) -> None:
+    # TMPDIR=<проект> rm -rf $TMPDIR/docs: hook и оболочка раскрыли бы переменную по-разному
+    bad_bash = [
+        f"TMPDIR={project} rm -rf $TMPDIR/docs",
+        "rm -rf $TEMP/parch-scratch",
+        "rm -rf ${TMPDIR}/x",
+        "rm -rf $TMP/x",
+        "rm -rf $VAR/x",
+        "rm -rf ~/x",
+        "rm -rf %TEMP%/x",
+    ]
+    for command in bad_bash:
+        result = run_hook("guard_destructive.py", bash(command), project)
+        assert_blocked(result, "guard_destructive")
+    bad_ps = [r"Remove-Item $env:TEMP\x -r -fo", r"Remove-Item $env:TMP\x -Recurse -Force"]
+    for command in bad_ps:
+        result = run_hook("guard_destructive.py", powershell(command), project)
+        assert_blocked(result, "guard_destructive")
+
+
+def test_system_temp_exception_has_limits(project: Path) -> None:
+    temp = Path(tempfile.gettempdir())
+    outside = temp.anchor + "somewhere"
+    bad = [
+        f'rm -rf "{temp}"',  # сама временная папка
+        "rm -rf $TEMP",
+        "rm -rf $TEMP/*",  # маска
+        f"rm -rf {temp}/a/../..",  # выход вверх
+        f"rm -rf {temp}/ok {outside}",  # одна цель за пределами
+        f"rm -rf {outside}",
+        f'rm -rf "{project}"',  # проект лежит во временной папке тестов
+        f'rm -rf "{project / "src"}"',
+        f'rm -rf "{project.parent}"',  # папка выше проекта
+        "rm -rf scratch",  # относительный путь заранее не проверить
+        "rm -rf $HOME/x",
+        "rm -rf",
+    ]
+    for command in bad:
+        result = run_hook("guard_destructive.py", bash(command), project)
+        assert_blocked(result, "guard_destructive")
+    cmd_form = run_hook("guard_destructive.py", bash(f"rd /s /q {temp}/x"), project)
+    assert_blocked(cmd_form, "guard_destructive")
 
 
 @pytest.mark.parametrize("command", HARMLESS)

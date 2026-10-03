@@ -11,7 +11,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 PRODUCT = REPO / ".github" / "workflows" / "ci.yml"
-TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml"))
+# state.yml (пересчёт табло после слияния, ADR-0012) устроен иначе: см. tests/test_status.py
+ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml"))
+TEMPLATES = [p for p in ALL_TEMPLATES if p.name != "state.yml"]
 HOOK_TESTS = ("tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py")
 
 
@@ -137,8 +139,8 @@ def test_hook_test_files_exist_and_are_the_files_that_run_the_hooks() -> None:
 
 
 def test_templates_are_found() -> None:
-    assert {p.name for p in TEMPLATES} == {
-        "csharp.yml", "powershell.yml", "python.yml", "typescript.yml",
+    assert {p.name for p in ALL_TEMPLATES} == {
+        "csharp.yml", "powershell.yml", "python.yml", "state.yml", "typescript.yml",
     }  # fmt: skip
 
 

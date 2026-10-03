@@ -32,6 +32,13 @@ jobs:
       # Отчёт о запуске формирует сам CI: проверки tests и skips берут пропуски из него и не запускают
       # тесты второй раз.
       - run: pytest -v --junitxml=test-report.xml
+      # Отчёт нужен табло state.yml после слияния (ADR-0012).
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.xml
+          retention-days: 14
       - run: python .github/parch/parch_ci.py settings
       - run: python .github/parch/parch_ci.py tests --report test-report.xml
       - run: python .github/parch/parch_ci.py skips --report test-report.xml
