@@ -371,6 +371,10 @@ def test_own_functions_classes_and_dynamic_code_are_caught(
 ) -> None:
     project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER + snippet + "\n"})
     out = fails(project, "thin")
+    if snippet.startswith("workflow") and Path(SHELL or "").stem.lower() == "pwsh":
+        # В PowerShell 6+ рабочих процессов нет: скрипт не разбирается, и это тоже провал.
+        assert "не разбирается" in out
+        return
     assert "(max_functions)" in out
     assert name in out
 
