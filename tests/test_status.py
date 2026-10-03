@@ -547,3 +547,62 @@ def test_the_product_goal_is_approved_and_g6_is_tied_to_blocks() -> None:
     assert "Прослеживаемость цели до кода" in g6.values()
     pilot = next(b for b in blocks if b["id"] == "F17")
     assert pilot["status"] == "waiting_owner"  # пилот ждёт владельца, а не «заблокирован»
+
+
+# ---------- расход CI: минуты за неделю и на один PR ----------
+
+
+def ci_run(
+    pr: int | None, day: str, conclusion: str, *jobs: tuple[str, str, str]
+) -> dict[str, Any]:
+    return {
+        "id": 1, "pr": pr, "created": f"{day}T10:00:00Z", "conclusion": conclusion,
+        "jobs": [
+            {"labels": [label], "started_at": f"{day}T10:00:00Z", "completed_at": f"{day}T{end}Z"}
+            for label, end, _ in jobs
+        ],
+    }  # fmt: skip
+
+
+def ci_board(tmp_path: Path, runs: list[dict[str, Any]]) -> str:
+    root = make(tmp_path, [])
+    (root / "ci-runs.json").write_text(json.dumps(runs), encoding="utf-8")
+    return section(board(root, "--ci-runs", str(root / "ci-runs.json")), "Расход CI")
+
+
+def test_ci_minutes_are_counted_per_job_rounded_up_with_the_windows_multiplier(
+    tmp_path: Path,
+) -> None:
+    runs = [
+        ci_run(5, "2026-10-02", "success", ("ubuntu-latest", "10:10:30", "")),  # 10,5 -> 11
+        ci_run(5, "2026-10-02", "failure", ("windows-latest", "10:01:00", "")),  # 1 x2 -> 2
+        ci_run(6, "2026-10-03", "success", ("ubuntu-latest", "10:05:00", "")),  # 5
+        ci_run(None, "2026-10-03", "success", ("ubuntu-latest", "10:03:00", "")),  # 3, вне PR
+        ci_run(4, "2026-09-20", "success", ("ubuntu-latest", "10:59:00", "")),  # старше недели
+    ]
+    out = ci_board(tmp_path, runs)
+    assert "За 7 дней: **21** минут квоты в 4 прогонах" in out
+    assert "Впустую, то есть упало или отменено: **2** минут в 1 прогонах" in out
+    assert "в среднем **9** минут (PR за неделю: 2); больше всего у PR #5: 13 минут" in out
+    assert "| #5 | 2 | 13 | 1 |" in out and "| #6 | 1 | 5 | 0 |" in out
+    assert "#4" not in out  # прогон старше недели не считается
+    assert "Вне PR (после слияния, табло): 3 минут" in out
+    assert "https://github.com/settings/billing/summary" in out  # ссылка на GitHub остаётся
+
+
+def test_ci_section_without_runs_data_is_only_the_link_and_with_no_prs_says_so(
+    tmp_path: Path,
+) -> None:
+    quiet = ci_board(
+        tmp_path, [ci_run(None, "2026-10-03", "success", ("ubuntu-latest", "10:02:00", ""))]
+    )
+    assert "За 7 дней: **2** минут квоты в 1 прогонах" in quiet
+    assert "за неделю PR с прогонами не было" in quiet
+    assert "Нет данных" not in quiet
+
+
+def test_the_state_workflow_reads_the_report_of_the_full_run_and_counts_ci_minutes() -> None:
+    text = TEMPLATE_STATE.read_text(encoding="utf-8")
+    assert "for wf in full.yml ci.yml" in text  # отчёт даёт полный прогон
+    assert "--ci-runs" in text and "actions/runs" in text and "/jobs?per_page=100" in text
+    assert "continue-on-error: true" in text  # сбой подсчёта минут не ломает табло

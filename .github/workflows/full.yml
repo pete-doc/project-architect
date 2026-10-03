@@ -1,0 +1,92 @@
+name: full
+
+# Полный прогон перед слиянием (ADR-0013): все тесты, обязательный и единственный, кто даёт право
+# на слияние. Запускается, когда на PR стоит метка full (при новой отправке перезапускается сам).
+# Результат записывается в статус full-run на коммите PR; без него слияние запрещено (AGENTS.md).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    # Другая метка не должна запускать полный прогон; новая отправка при метке запускает.
+    if: >
+      contains(github.event.pull_request.labels.*.name, 'full') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full')
+    runs-on: ubuntu-latest
+    # 25, а не 20: скорость раннера GitHub плавает почти вдвое (ADR-0011, изменение 2026-10-03).
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Статус full-run
+        run: >
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA"
+          -f state=pending -f context=full-run -f description="Полный прогон идёт"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python plugin/templates/ci/parch/parch_ci.py standard
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/projects/ts_shop/package-lock.json
+      # Тесты C# запускают настоящий dotnet; версия SDK закреплена точно в global.json тестового проекта.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.dotnet
+          key: dotnet-sdk-${{ runner.os }}-${{ hashFiles('tests/projects/cs_shop/global.json') }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: tests/projects/cs_shop/global.json
+          cache: true
+          cache-dependency-path: tests/projects/cs_shop/**/packages.lock.json
+      # Тесты PowerShell запускают настоящий PSScriptAnalyzer; версия та же, что в шаблоне CI.
+      - id: psa-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: psscriptanalyzer-${{ runner.os }}-1.25.0
+      - name: Install PSScriptAnalyzer
+        if: steps.psa-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+      - run: pyright
+      # Полный прогон (-m "" снимает фильтр медленных тестов).
+      - run: pytest -v -m "" --junitxml=test-report.xml
+      # Отчёт нужен и для табло, и для проверки baseline: пропуски и падения берутся из него.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.xml
+          retention-days: 14
+      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
+      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+      - run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+      - run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml
+      - name: Статус full-run успех
+        run: >
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA"
+          -f state=success -f context=full-run
+          -f description="Полный прогон прошёл: все тесты, храповик зелёный"
+      - name: Статус full-run провал
+        if: failure()
+        run: >
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA"
+          -f state=failure -f context=full-run -f description="Полный прогон не прошёл"

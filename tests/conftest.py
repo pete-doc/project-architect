@@ -123,6 +123,14 @@ CS_SHOP = Path(__file__).resolve().parent / "projects" / "cs_shop"
 # Тест медленный, если ему нужна одна из этих фикстур: они ставят или запускают node, dotnet, pwsh
 # и PSScriptAnalyzer. Остальные медленные тесты помечены `@pytest.mark.slow` вручную.
 SLOW_FIXTURES = frozenset({"jscpd", "ts_node_modules", "prepared", "psa", "ps_shell"})
+# Файлы тестов по языкам: CI в урезанном прогоне запускает медленные тесты только тех языков, чьи
+# файлы изменил PR (`-m "not slow or lang_csharp"`), полный прогон перед слиянием запускает все.
+LANGUAGE_FILES = {
+    "test_ci_python": "python",
+    "test_ci_typescript": "typescript",
+    "test_ci_csharp": "csharp",
+    "test_ci_powershell": "powershell",
+}
 SLOW_GROUPS = {
     "test_ci_csharp": "csharp",
     "test_ci_typescript": "typescript",
@@ -213,6 +221,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if SLOW_FIXTURES & set(getattr(item, "fixturenames", ())):
             item.add_marker(pytest.mark.slow)
+        language = LANGUAGE_FILES.get(item.path.stem)
+        if language:
+            item.add_marker(getattr(pytest.mark, f"lang_{language}"))
         group = SLOW_GROUPS.get(item.path.stem)
         if group and item.get_closest_marker("slow"):
             item.add_marker(pytest.mark.xdist_group(group))
