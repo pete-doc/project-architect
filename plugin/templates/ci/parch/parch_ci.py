@@ -907,6 +907,14 @@ def update_baseline(
             REPORT_HINT.get(language, ""),
         )
         return result
+    failed_now = sorted(name for name, state in outcomes.items() if state == "failed")
+    if failed_now:
+        result.fail(
+            f"Отказ: в запуске тестов есть упавшие ({len(failed_now)}): baseline по такому запуску "
+            "не записывается, иначе он зафиксирует сломанное состояние как норму.",
+            *shown(failed_now),
+            "Почините тесты, запустите их заново и обновите baseline по чистому отчёту.",
+        )
     skipped_now = skipped_ids(outcomes)
     if report is not None:
         gaps = report_gaps(project, language, outcomes, baseline, include_known=not accept.removed)
