@@ -255,3 +255,39 @@ def test_the_check_is_registered_for_every_language(tmp_path: Path) -> None:
         check=False,
     )
     assert done.returncode == 0, done.stdout
+
+
+# ---------- таймаут дольше 20 минут: только по принятому ADR ----------
+
+
+def test_a_longer_timeout_is_allowed_only_when_an_accepted_adr_records_it(tmp_path: Path) -> None:
+    long = GOOD.replace("timeout-minutes: 20", "timeout-minutes: 25")
+    fails(project(tmp_path / "bad", long), "timeout-minutes 25")
+    adr = "- Статус: accepted\n\nЗапас на плавающий раннер: `timeout-minutes: 25` для check.\n"
+    passes(project(tmp_path / "ok", long, adr=adr))
+
+
+def test_a_proposed_adr_does_not_allow_a_longer_timeout(tmp_path: Path) -> None:
+    long = GOOD.replace("timeout-minutes: 20", "timeout-minutes: 25")
+    adr = "- Статус: proposed\n\nЗапас: `timeout-minutes: 25`.\n"
+    fails(project(tmp_path, long, adr=adr), "timeout-minutes 25")
+
+
+def test_an_adr_for_one_value_does_not_allow_another(tmp_path: Path) -> None:
+    long = GOOD.replace("timeout-minutes: 20", "timeout-minutes: 30")
+    adr = "- Статус: accepted\n\nЗапас: `timeout-minutes: 25`.\n"
+    fails(project(tmp_path, long, adr=adr), "timeout-minutes 30")
+
+
+def test_no_timeout_above_sixty_minutes_is_ever_allowed(tmp_path: Path) -> None:
+    huge = GOOD.replace("timeout-minutes: 20", "timeout-minutes: 61")
+    adr = "- Статус: accepted\n\nЗапас: `timeout-minutes: 61`.\n"
+    fails(project(tmp_path, huge, adr=adr), "timeout-minutes 61", "не больше 60")
+
+
+def test_the_product_check_timeout_is_25_and_is_recorded_in_adr_0011() -> None:
+    workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "    timeout-minutes: 25\n" in workflow
+    adr = (REPO / "docs" / "adr" / "0011-ci-ubuntu-po-umolchaniyu.md").read_text(encoding="utf-8")
+    assert "`timeout-minutes: 25`" in adr
+    assert "ключи кэша не виноваты" in adr and "1,9 раза" in adr

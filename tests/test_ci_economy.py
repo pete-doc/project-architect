@@ -62,7 +62,7 @@ def test_product_ci_has_no_matrix_and_no_macos() -> None:
 
 def test_every_product_job_has_a_timeout() -> None:
     workflow = text(PRODUCT)
-    for name, minutes in (("scope", 3), ("check", 20), ("windows-hooks", 15)):
+    for name, minutes in (("scope", 3), ("check", 25), ("windows-hooks", 15)):
         assert f"timeout-minutes: {minutes}\n" in job_block(workflow, name), name
 
 

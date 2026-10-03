@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from conftest import CS_SHOP
+from conftest import CS_SHOP, INIT_ANSWERS
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
@@ -732,6 +732,7 @@ def run_init(project: Path, languages: list[str]) -> dict[str, object]:
         "languages": languages,
         "description": "Считает заказы.",
         "priorities": "надёжность",
+        **INIT_ANSWERS,
     }
     done = subprocess.run(
         [sys.executable, str(INIT)],

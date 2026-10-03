@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import HOOKS, HookResult, bash, file_call, run_hook
+from conftest import HOOKS, INIT_ANSWERS, HookResult, bash, file_call, run_hook
 
 PLUGIN = HOOKS.parent
 SKILLS = PLUGIN / "skills"
@@ -40,6 +40,7 @@ def init(project: Path, **extra: Any) -> dict[str, Any]:
         "languages": ["python"],
         "description": "Считает заказы.",
         "priorities": "надёжность\nпонятность",
+        **INIT_ANSWERS,
         **extra,
     }
     code, result, error = run_script(INIT, request)
@@ -177,7 +178,13 @@ def test_every_supported_language_has_a_ci_template() -> None:
     [{"languages": []}, {"languages": ["cobol"]}, {"name": "  "}],
 )
 def test_init_rejects_bad_answers(tmp_path: Path, bad: dict[str, Any]) -> None:
-    request = {"project_dir": str(tmp_path), "name": "x", "languages": ["python"], **bad}
+    request = {
+        "project_dir": str(tmp_path),
+        "name": "x",
+        "languages": ["python"],
+        **INIT_ANSWERS,
+        **bad,
+    }
     code, _, error = run_script(INIT, request)
     assert code == 1
     assert error.startswith("init-project:")
@@ -437,7 +444,12 @@ def test_skills_work_from_an_installed_copy_of_the_plugin_only(tmp_path: Path) -
     installed = tmp_path / "installed" / "plugin"
     shutil.copytree(PLUGIN, installed, ignore=shutil.ignore_patterns("__pycache__"))
     project = tmp_path / "project"
-    request = {"project_dir": str(project), "name": "Копия", "languages": ["python"]}
+    request = {
+        "project_dir": str(project),
+        "name": "Копия",
+        "languages": ["python"],
+        **INIT_ANSWERS,
+    }
     script = installed / "skills" / "init-project" / "scripts" / "init_project.py"
     code, result, error = run_script(script, request)
     assert code == 0, error

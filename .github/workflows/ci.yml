@@ -50,7 +50,8 @@ jobs:
   check:
     needs: scope
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 25, а не 20: скорость раннера GitHub плавает почти вдвое (ADR-0011, изменение 2026-10-03).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

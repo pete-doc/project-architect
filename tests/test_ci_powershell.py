@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import INIT_ANSWERS
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
@@ -600,6 +601,7 @@ def run_init(project: Path, languages: list[str]) -> dict[str, object]:
         "languages": languages,
         "description": "Запускает программы.",
         "priorities": "надёжность",
+        **INIT_ANSWERS,
     }
     done = subprocess.run(
         [sys.executable, str(INIT)],

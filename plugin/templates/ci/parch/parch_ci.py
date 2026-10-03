@@ -3030,6 +3030,8 @@ COLLECTORS: dict[str, Collector] = {
 
 STANDARD_VERSION = "1.3"
 STANDARD_MAX_TIMEOUT = 20
+# Дольше 20 минут только по принятому ADR с записью `timeout-minutes: N`; больше 60 нельзя.
+STANDARD_HARD_TIMEOUT = 60
 STANDARD_BASE_RUNNER = "ubuntu-latest"
 # Единственный workflow, которому можно запускаться на push в main: пересчёт состояния после
 # слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
@@ -3127,11 +3129,18 @@ def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
     for job, (_, body) in yaml_keys(top["jobs"][1]).items():
         fields = yaml_keys(body)
         timeout = fields.get("timeout-minutes", ("", []))[0]
-        if not timeout.isdigit() or not 1 <= int(timeout) <= STANDARD_MAX_TIMEOUT:
+        minutes = int(timeout) if timeout.isdigit() else 0
+        by_adr = (
+            STANDARD_MAX_TIMEOUT < minutes <= STANDARD_HARD_TIMEOUT
+            and f"timeout-minutes: {minutes}" in adr_text
+        )
+        if not (1 <= minutes <= STANDARD_MAX_TIMEOUT or by_adr):
             problems.append(
                 f"{rel}, задание {job}: timeout-minutes {timeout or 'не задан'} "
-                f"(нужно число от 1 до {STANDARD_MAX_TIMEOUT}). По умолчанию GitHub ждёт "
-                "360 минут, и один зависший тест стоит шесть часов квоты."
+                f"(нужно число от 1 до {STANDARD_MAX_TIMEOUT}; больше только если принятый ADR "
+                f"называет это значение записью `timeout-minutes: N`, но не больше "
+                f"{STANDARD_HARD_TIMEOUT}). По умолчанию GitHub ждёт 360 минут, и один "
+                "зависший тест стоит шесть часов квоты."
             )
         runner = fields.get("runs-on", ("", []))[0].strip("\"'")
         if "uses" not in fields and not runner:
@@ -3156,6 +3165,31 @@ def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
     return problems
 
 
+TARGET_OS_HEADING = re.compile(r"^#{1,6}\s*целевая ос\s*$", re.IGNORECASE)
+
+
+def target_os_problem(project: Path) -> str | None:
+    """В CONSTITUTION.md должна быть записана целевая ОС (STANDARD.md, 7.2, правило 2)."""
+    constitution = next((project / c for c in CONSTITUTIONS if (project / c).is_file()), None)
+    if constitution is None:
+        return None
+    inside = False
+    for line in constitution.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if TARGET_OS_HEADING.match(stripped):
+            inside = True
+        elif inside and re.match(r"^#{1,6}\s", stripped):
+            break
+        elif inside and stripped and not stripped.startswith((">", "(", "{{")):
+            return None
+    return (
+        f"{constitution.name}: не записана целевая ОС (раздел «Целевая ОС»). На ней работает "
+        "исполнитель и проверяет проект бесплатно, а CI на Linux проверяет переносимость; без "
+        "записи непонятно, какую систему считать главной. Спросите владельца и запишите "
+        "(Windows 11, macOS или Linux)."
+    )
+
+
 def check_standard(project: Path, language: str) -> Result:
     """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
     del language
@@ -3165,6 +3199,9 @@ def check_standard(project: Path, language: str) -> Result:
     adr_text = accepted_adr_text(project)
     for path in workflows:
         problems.extend(standard_workflow_problems(path, adr_text))
+    os_problem = target_os_problem(project)
+    if os_problem:
+        problems.append(os_problem)
     agents = project / "AGENTS.md"
     if agents.is_file():
         size = len(agents.read_text(encoding="utf-8").splitlines())
@@ -3178,7 +3215,7 @@ def check_standard(project: Path, language: str) -> Result:
         return result
     result.note(
         f"Стандарт {STANDARD_VERSION}: проверено workflow {len(workflows)} (таймауты, отмена, "
-        "триггеры, раннеры, матрицы) и размер AGENTS.md."
+        "триггеры, раннеры, матрицы), целевая ОС в CONSTITUTION.md и размер AGENTS.md."
     )
     result.note(f"Пока не проверяется: {STANDARD_NOT_YET}.")
     return result
