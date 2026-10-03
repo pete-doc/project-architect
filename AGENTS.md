@@ -23,6 +23,10 @@ pyright
 pytest
 ```
 
+Для тестов C# и PowerShell нужны .NET SDK точной версии из `tests/projects/cs_shop/global.json` и PSScriptAnalyzer 1.25.0
+(`Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser`); без них эти тесты пропускаются
+локально, а в CI оба инструмента ставятся.
+
 Проверка манифестов плагина (нужен установленный Claude Code):
 
 ```bash

@@ -303,11 +303,18 @@ def cs_classes_without_results(project: Path, reported: set[str]) -> set[str]:
 
 
 def report_gaps(
-    project: Path, language: str, outcomes: dict[str, str], baseline: Baseline
+    project: Path,
+    language: str,
+    outcomes: dict[str, str],
+    baseline: Baseline,
+    include_known: bool = True,
 ) -> list[str]:
-    """Тесты из кода и из baseline, которых нет в отчёте запуска."""
+    """Тесты из кода и из baseline, которых нет в отчёте запуска.
+
+    include_known=False: тесты из baseline не берутся (владелец утвердил их удаление).
+    """
     reported = set(outcomes)
-    known = baseline.strings("tests", language)
+    known = baseline.strings("tests", language) if include_known else set[str]()
     if language == "python":
         found = set(py_test_ids(project)) | known
         return sorted(t for t in found if py_report_key(t) not in reported)
@@ -891,6 +898,8 @@ def update_baseline(
     result = Result()
     baseline = Baseline(project)
     outcomes = test_outcomes(project, language, report)
+    if outcomes is None and language == "powershell":
+        outcomes = {}  # PowerShell: тесты Pester не требуются (ADR-0010)
     if outcomes is None:
         result.fail(
             f"Нет отчёта о запуске тестов для {language}: без него пропуски по фактическому "
@@ -900,7 +909,8 @@ def update_baseline(
         return result
     skipped_now = skipped_ids(outcomes)
     if report is not None:
-        fail_on_gaps(result, report_gaps(project, language, outcomes, baseline))
+        gaps = report_gaps(project, language, outcomes, baseline, include_known=not accept.removed)
+        fail_on_gaps(result, gaps)
     new_skipped = sorted(skipped_now - known_skipped(baseline, language))
     if has_skipped_list(baseline, language) and new_skipped and not accept.skips:
         result.fail(
@@ -1167,6 +1177,7 @@ RULES: dict[str, LanguageRules] = {
             "SuppressMessage": r"\bSuppressMessage(Attribute)?\s*\(",
             "PSScriptAnalyzer disable": r"#\s*(PSScriptAnalyzer|noqa)\b",
         },
+        code_kinds=("SuppressMessage",),
         config_files=(
             "PSScriptAnalyzerSettings.psd1",
             "PesterConfiguration*",
@@ -1454,6 +1465,8 @@ def scan_counts(
             comment_scope = "\n".join(comments)
         elif language == "typescript":
             code_scope, comment_scope = blank_ts_comments_and_strings(text)
+        elif language == "powershell":
+            code_scope, comment_scope = blank_ps_comments_and_strings(text)
         elif language == "csharp":
             code_scope, comment_scope = blank_cs_comments_and_strings(text)
         flags = re.MULTILINE | (re.IGNORECASE if language in ("python", "powershell") else 0)
@@ -2499,6 +2512,281 @@ def cs_run_architecture_tests(
     return result
 
 
+# ---------- PowerShell: только тонкий «клей» (ADR-0010) ----------
+
+PSA_VERSION = "1.25.0"
+PSA_SETTINGS = "PSScriptAnalyzerSettings.psd1"
+PSA_FAIL_SEVERITIES = {"error", "warning", "parseerror"}
+PS_SCRIPT_EXTENSIONS = (".ps1", ".psm1")
+PS_THRESHOLDS_HEADING = re.compile(
+    r"^#{1,6}\s*(пороги тонкости powershell|powershell thin(ness)? thresholds)\s*$", re.IGNORECASE
+)
+PS_THRESHOLD_LINE = re.compile(r"^[-*]\s*`?(?P<key>\w+)`?\s*[:=]\s*(?P<value>\S+)\s*$")
+PS_THRESHOLD_KEYS = ("max_lines", "max_functions")
+PS_OWN_LOGIC = re.compile(
+    r"(?:^|[;{}(])[ \t]*(?:function|filter|workflow|class|enum|configuration)[ \t]+[\w:.-]+",
+    re.IGNORECASE | re.MULTILINE,
+)
+PS_THRESHOLDS_EXAMPLE = (
+    "Добавьте в docs/CONSTITUTION.md раздел:\n"
+    "  ## Пороги тонкости PowerShell\n"
+    "  - max_lines: 40\n"
+    "  - max_functions: 0"
+)
+PS_THIN_HINT = (
+    "PowerShell здесь только запуск программ. Перенесите логику в Python или C#, а в скрипте "
+    "оставьте вызов программы и передачу кода выхода (ADR-0010)."
+)
+PS_COMMENT_START = set(";(){},|&")
+PS_RUNNER = """\
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$wanted = [version]'%(version)s'
+$module = Get-Module -ListAvailable -Name PSScriptAnalyzer |
+    Where-Object { $_.Version -eq $wanted } | Select-Object -First 1
+if (-not $module) {
+    $found = (Get-Module -ListAvailable -Name PSScriptAnalyzer |
+        ForEach-Object { $_.Version.ToString() }) -join ', '
+    Write-Output ('PARCH-MISSING ' + $found)
+    exit 3
+}
+Import-Module -Name $module.Path -Force
+$files = [string[]]@(Get-Content -LiteralPath '%(list)s' -Encoding UTF8)
+$found = @()
+foreach ($file in $files) {
+    $arguments = @{ Path = $file }
+    if ('%(settings)s' -ne '') { $arguments.Settings = '%(settings)s' }
+    $tokens = $null
+    $parseErrors = $null
+    $parser = [System.Management.Automation.Language.Parser]
+    [void]$parser::ParseFile($file, [ref]$tokens, [ref]$parseErrors)
+    foreach ($problem in @($parseErrors)) {
+        $found += [pscustomobject]@{
+            File = $file; Rule = [string]$problem.ErrorId; Severity = 'ParseError'
+            Line = $problem.Extent.StartLineNumber; Message = $problem.Message
+        }
+    }
+    foreach ($record in @(Invoke-ScriptAnalyzer @arguments)) {
+        $found += [pscustomobject]@{
+            File = $file; Rule = $record.RuleName; Severity = [string]$record.Severity
+            Line = $record.Line; Message = $record.Message
+        }
+    }
+}
+$report = @{ version = $module.Version.ToString(); files = $files.Count; findings = @($found) }
+Write-Output ('PARCH-JSON ' + (ConvertTo-Json -InputObject $report -Depth 4 -Compress))
+"""
+
+
+def blank_ps_comments_and_strings(text: str, keep_strings: bool = False) -> tuple[str, str]:
+    """Код PowerShell без комментариев (и без содержимого строк, если keep_strings=False).
+
+    Второе значение: склеенный текст комментариев (`# ...` и `<# ... #>`). Строки: `'...'`,
+    `"..."` (обратная кавычка и удвоенные кавычки экранируют) и here-строки `@'...'@`, `@"..."@`.
+    """
+    out: list[str] = []
+    comments: list[str] = []
+    blank = re.compile(r"[^\n]")
+    i, n = 0, len(text)
+
+    def hide(chunk: str) -> str:
+        return chunk if keep_strings else blank.sub(" ", chunk)
+
+    while i < n:
+        char, following = text[i], text[i + 1] if i + 1 < n else ""
+        previous = text[i - 1] if i else "\n"
+        if char == "<" and following == "#":
+            end = text.find("#>", i + 2)
+            end = n if end == -1 else end + 2
+            comments.append(text[i:end])
+            out.append(blank.sub(" ", text[i:end]))
+            i = end
+        elif char == "#" and (previous.isspace() or previous in PS_COMMENT_START):
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            comments.append(text[i:end])
+            out.append(" " * (end - i))
+            i = end
+        elif char == "@" and following in "'\"" and re.match(r"@['\"][ \t]*\r?\n", text[i:]):
+            quote = following
+            close = re.compile(r"\r?\n" + quote + "@").search(text, i + 2)
+            end = n if close is None else close.end()
+            body_end = end if close is None else close.start()
+            header = re.match(r"@['\"][ \t]*", text[i:])
+            start = i + (header.end() if header else 2)
+            out.append(text[i:start] + hide(text[start:body_end]) + text[body_end:end])
+            i = end
+        elif char in "'\"":
+            j = i + 1
+            while j < n:
+                if text[j] == "`" and char == '"':
+                    j += 2
+                    continue
+                if text[j] == char:
+                    if text[j + 1 : j + 2] == char:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            end = min(j + 1, n)
+            closed = end - i > 1 and text[end - 1] == char
+            body = text[i + 1 : end - 1] if closed else text[i + 1 : end]
+            out.append(char + hide(body) + (char if closed else ""))
+            i = end
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out), "\n".join(comments)
+
+
+def ps_scripts(project: Path, extensions: tuple[str, ...]) -> list[Path]:
+    return walk_files(project, extensions)
+
+
+def ps_thresholds(project: Path) -> dict[str, int]:
+    constitution = next((project / c for c in CONSTITUTIONS if (project / c).is_file()), None)
+    if constitution is None:
+        raise ToolError("нет CONSTITUTION.md: пороги тонкости PowerShell негде взять")
+    found: dict[str, str] = {}
+    inside = False
+    for line in constitution.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if PS_THRESHOLDS_HEADING.match(stripped):
+            inside = True
+        elif inside and re.match(r"^#{1,6}\s", stripped):
+            break
+        elif inside and (match := PS_THRESHOLD_LINE.match(stripped)):
+            found[match["key"].lower()] = match["value"]
+    if not found:
+        raise ToolError(
+            "в CONSTITUTION.md нет раздела «Пороги тонкости PowerShell»: без порогов проверка не "
+            "может работать (и не считается пройденной).\n" + PS_THRESHOLDS_EXAMPLE
+        )
+    values: dict[str, int] = {}
+    for key in PS_THRESHOLD_KEYS:
+        raw = found.get(key)
+        if raw is None or not raw.isdigit():
+            raise ToolError(
+                f"порог {key} не задан целым числом в разделе «Пороги тонкости PowerShell» "
+                f"(сейчас: {raw}).\n" + PS_THRESHOLDS_EXAMPLE
+            )
+        values[key] = int(raw)
+    return values
+
+
+def ps_thin_report(path: Path) -> tuple[int, list[str]]:
+    """Строки кода (без пустых и комментариев) и собственные функции, классы, перечисления."""
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    with_strings, _ = blank_ps_comments_and_strings(text, keep_strings=True)
+    lines = sum(1 for line in with_strings.splitlines() if line.strip())
+    code, _ = blank_ps_comments_and_strings(text)
+    logic = [" ".join(m.group(0).strip(" \t;{}(").split()) for m in PS_OWN_LOGIC.finditer(code)]
+    return lines, logic
+
+
+def check_thin(project: Path, language: str) -> Result:
+    result = Result()
+    if language != "powershell":
+        raise ToolError("проверка thin относится только к PowerShell")
+    limits = ps_thresholds(project)
+    rules = RULES["powershell"]
+    scripts = [
+        p
+        for p in ps_scripts(project, PS_SCRIPT_EXTENSIONS)
+        if not is_test_file(rules, rel_of(project, p))
+    ]
+    if not scripts:
+        result.note("Скриптов PowerShell пока нет, проверка тонкости не нужна.")
+        return result
+    heavy: list[str] = []
+    for path in scripts:
+        lines, logic = ps_thin_report(path)
+        rel = rel_of(project, path)
+        if lines > limits["max_lines"]:
+            heavy.append(f"{rel}: строк кода {lines}, порог {limits['max_lines']}")
+        if len(logic) > limits["max_functions"]:
+            heavy.append(
+                f"{rel}: собственных функций и классов {len(logic)} "
+                f"({', '.join(logic[:3])}), порог {limits['max_functions']}"
+            )
+    if heavy:
+        result.fail("Скрипты PowerShell не «тонкие»:", *shown(heavy), PS_THIN_HINT)
+        return result
+    result.note(
+        f"Скриптов PowerShell: {len(scripts)}, все в пределах порогов "
+        f"(строк {limits['max_lines']}, функций {limits['max_functions']})."
+    )
+    return result
+
+
+def powershell_exe() -> str:
+    found = shutil.which("pwsh") or shutil.which("powershell")
+    if found is None:
+        raise ToolError("не найден PowerShell (pwsh или powershell): PSScriptAnalyzer не запустить")
+    return found
+
+
+def psa_findings(project: Path, files: list[Path]) -> tuple[int, list[dict[str, object]]]:
+    with tempfile.TemporaryDirectory() as tmp:
+        listing = Path(tmp) / "files.txt"
+        listing.write_text("\n".join(str(p) for p in files), encoding="utf-8")
+        settings = project / PSA_SETTINGS
+        script = PS_RUNNER % {
+            "version": PSA_VERSION,
+            "list": str(listing).replace("'", "''"),
+            "settings": str(settings).replace("'", "''") if settings.is_file() else "",
+        }
+        runner = Path(tmp) / "run.ps1"
+        runner.write_text(script, encoding="utf-8-sig")
+        argv = [powershell_exe(), "-NoProfile", "-NonInteractive"]
+        if os.name == "nt":
+            argv += ["-ExecutionPolicy", "Bypass"]
+        done = run([*argv, "-File", str(runner)], project)
+    lines = [line for line in done.stdout.splitlines() if line.startswith("PARCH-")]
+    if any(line.startswith("PARCH-MISSING") for line in lines):
+        installed = lines[0].removeprefix("PARCH-MISSING").strip() or "не установлен"
+        raise ToolError(
+            f"нужен PSScriptAnalyzer {PSA_VERSION} (найдено: {installed}). Установите: "
+            f"Install-Module PSScriptAnalyzer -RequiredVersion {PSA_VERSION} -Scope CurrentUser"
+        )
+    payload = next((x for x in lines if x.startswith("PARCH-JSON ")), None)
+    if done.returncode != 0 or payload is None:
+        raise ToolError("PSScriptAnalyzer не отработал:\n" + tail(done))
+    data = as_dict(json.loads(payload.removeprefix("PARCH-JSON ")))
+    findings = [as_dict(x) for x in as_list(data.get("findings"))]
+    return int(str(data.get("files", 0))), findings
+
+
+def check_psscriptanalyzer(project: Path, language: str) -> Result:
+    result = Result()
+    if language != "powershell":
+        raise ToolError("проверка psscriptanalyzer относится только к PowerShell")
+    if not ps_scripts(project, PS_SCRIPT_EXTENSIONS):
+        result.note("Скриптов PowerShell пока нет, PSScriptAnalyzer не запускался.")
+        return result
+    files = ps_scripts(project, (".ps1", ".psm1", ".psd1"))
+    scanned, findings = psa_findings(project, files)
+    if scanned != len(files):
+        raise ToolError(f"PSScriptAnalyzer проверил {scanned} файлов из {len(files)}")
+    bad = sorted(
+        {
+            f"{rel_of(project, Path(str(f['File'])))}:{f.get('Line') or 0}: {f['Rule']} "
+            f"({f['Severity']}): {f['Message']}"
+            for f in findings
+            if str(f.get("Severity", "")).lower() in PSA_FAIL_SEVERITIES
+        }
+    )
+    if bad:
+        result.fail(
+            f"PSScriptAnalyzer нашёл {len(bad)} замечаний (Error и Warning не допускаются):",
+            *shown(bad),
+            "Исправьте причину. Подавление (SuppressMessage) считается и не должно расти.",
+        )
+        return result
+    result.note(f"PSScriptAnalyzer {PSA_VERSION}: файлов {scanned}, замечаний нет.")
+    return result
+
+
 # ---------- адаптеры языков ----------
 
 
@@ -2566,6 +2854,8 @@ CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "skips": check_skips,
     "suppressions": check_suppressions,
     "settings": check_settings,
+    "thin": check_thin,
+    "psscriptanalyzer": check_psscriptanalyzer,
 }
 COLLECTOR_CHECKS = {
     "tests",
@@ -2614,10 +2904,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             result = update_baseline(project, args.language, accept, report, args.only_tests)
         elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
-            print(
-                f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка "
-                "ещё не реализована"
+            reason = (
+                "не применяется (ADR-0010: PowerShell только тонкий клей)"
+                if args.language == "powershell"
+                else "ещё не реализована"
             )
+            print(f"[parch:{args.check}] ПРОВАЛ: для языка {args.language} эта проверка {reason}")
             return 1
         elif args.check == "tests":
             result = check_tests(project, args.language, report)

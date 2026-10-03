@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: tests/projects/cs_shop/global.json
+      # Тесты PowerShell запускают настоящий PSScriptAnalyzer; версия та же, что в шаблоне CI.
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .

@@ -249,3 +249,23 @@ def test_csharp_report_with_all_classes_passes_without_a_baseline(tmp_path: Path
     )
     passes(tmp_path, "tests", "csharp", report)
     passes(tmp_path, "skips", "csharp", report)
+
+
+def test_a_removal_approved_by_the_owner_passes_the_not_run_check(py_project: Path) -> None:
+    full = write(py_project / "full.xml", FULL_PY)
+    assert run(py_project, "baseline", "python", full, "--update", "--only-tests").returncode == 0
+    write(
+        py_project / "tests" / "test_a.py",
+        "def test_one() -> None:\n    assert True\n\n\ndef test_two() -> None:\n    assert True\n",
+    )
+    report = write(
+        py_project / "after.xml", junit(("tests.test_a", "test_one"), ("tests.test_a", "test_two"))
+    )
+    refused = run(py_project, "baseline", "python", report, "--update", "--only-tests")
+    assert refused.returncode == 1
+    assert "--accept-removed" in refused.stdout
+    accepted = run(
+        py_project, "baseline", "python", report, "--update", "--only-tests", "--accept-removed"
+    )
+    assert accepted.returncode == 0, accepted.stdout
+    passes(py_project, "tests", "python", report)
