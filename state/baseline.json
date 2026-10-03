@@ -1265,6 +1265,7 @@
       "tests/test_status.py::test_the_product_state_workflow_is_the_template_with_the_plugin_script_path",
       "tests/test_status.py::test_the_python_template_hands_its_report_to_the_state_job",
       "tests/test_status.py::test_the_report_may_come_from_any_supported_format",
+      "tests/test_status.py::test_the_state_workflow_finds_the_pr_of_a_run_by_branch_when_the_run_data_has_none",
       "tests/test_status.py::test_the_state_workflow_is_the_only_one_allowed_to_run_on_push_and_passes_the_standard",
       "tests/test_status.py::test_the_state_workflow_reads_the_report_of_the_full_run_and_counts_ci_minutes",
       "tests/test_status.py::test_the_state_workflow_runs_no_tests_and_publishes_only_to_the_status_branch",
