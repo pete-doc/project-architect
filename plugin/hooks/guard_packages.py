@@ -23,6 +23,7 @@ from _common import (
     SHELL_TOOLS,
     Block,
     JsonDict,
+    cd_roots,
     command_name,
     command_tokens,
     constitution_path,
@@ -262,7 +263,19 @@ def install_requests(tokens: list[str], project: Path) -> list[Request]:
 
 
 def check(data: JsonDict, project: Path) -> Block | None:
-    if get_str(data, "tool_name") not in SHELL_TOOLS or not is_managed(project):
+    if get_str(data, "tool_name") not in SHELL_TOOLS:
+        return None
+    # проект сессии и проекты, в папки которых команда переходит через cd: нельзя уйти из-под
+    # защиты, перейдя в чужую папку, и нельзя промахнуться, если сессия в папке без CONSTITUTION.md
+    for root in dict.fromkeys([project, *cd_roots(data)]):
+        block = check_project(data, root)
+        if block is not None:
+            return block
+    return None
+
+
+def check_project(data: JsonDict, project: Path) -> Block | None:
+    if not is_managed(project):
         return None
     constitution = constitution_path(project)
     if constitution is None:

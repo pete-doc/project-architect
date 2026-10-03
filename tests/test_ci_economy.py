@@ -112,15 +112,18 @@ def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
 
 
 def test_a_docs_and_state_only_pr_runs_only_the_structure_checks() -> None:
+    # правки только текста: в check идёт один standard, без тестов (scope.py, ADR-0013)
     workflow = text(PRODUCT)
     scope_text = text(SCOPE)  # только эти пути не делают PR «кодовым»; baseline.json и прочее код
     assert '"state/incidents/*"' in scope_text and '"state/baseline.json"' not in scope_text
     block = job_block(workflow, "check")
-    assert block.count("if: needs.scope.outputs.code != 'true'") == 2
-    heavy = re.findall(r"if: needs\.scope\.outputs\.code == 'true'(?: && [^\n]+)?\n", block)
-    assert len(heavy) >= 9  # node, dotnet (два шага), psa (три шага), pyright, pytest, ratchet
-    assert "test_product_adr_index_is_up_to_date" in block
-    assert "parch_ci.py tests --language python\n" in block  # без отчёта: baseline и тесты
+    assert block.count("if: needs.scope.outputs.code != 'true'") == 0  # отдельных шагов тестов нет
+    heavy = re.findall(r"if: needs\.scope\.outputs\.code == 'true'", block)
+    assert (
+        len(heavy) >= 10
+    )  # pip, ruff (два), node, dotnet (два), psa (три), pyright, pytest, ratchet
+    assert "parch_ci.py standard" in block and "test_product_adr_index_is_up_to_date" not in block
+    assert "parch_ci.py tests --language python --report" not in block.split("Урезанный")[0]
 
 
 def test_if_the_pr_files_cannot_be_read_everything_runs() -> None:

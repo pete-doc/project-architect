@@ -241,6 +241,35 @@ def shell_command(data: JsonDict) -> str:
     return command if isinstance(command, str) else ""
 
 
+CD_COMMANDS = {"cd", "chdir", "pushd", "set-location", "sl"}
+
+
+def cd_roots(data: JsonDict) -> list[Path]:
+    """Проекты с CONSTITUTION.md, в папки которых команда переходит (`cd`, `pushd`, `Set-Location`).
+
+    Папку сессии hook получает до выполнения команды, а команда может сменить её сама: тогда проект
+    определяется по цели перехода (так `/parch:doctor` проверяет временный проект, а сессия может
+    быть в пустой папке). Цель перехода только добавляется к проверке: проект сессии не заменяет.
+    """
+    base = Path(get_str(data, "cwd") or os.getcwd())
+    roots: list[Path] = []
+    for tokens in command_tokens(shell_command(data)):
+        if command_name(tokens) not in CD_COMMANDS:
+            continue
+        args = [t for t in tokens[1:] if not t.startswith("-")]
+        if not args:
+            continue
+        target = args[0]
+        if os.name == "nt" and re.match(r"^/[a-zA-Z]/", target):
+            target = f"{target[1]}:{target[2:]}"  # путь Git Bash: /c/Users/... -> C:/Users/...
+        path = Path(target)
+        path = path if path.is_absolute() else base / path
+        root = managed_root(path.resolve())
+        if root is not None and root not in roots:
+            roots.append(root)
+    return roots
+
+
 def target_paths(data: JsonDict) -> list[str]:
     """Пути, которые затрагивает вызов файлового инструмента."""
     if get_str(data, "tool_name") not in (*FILE_TOOLS, "Read"):

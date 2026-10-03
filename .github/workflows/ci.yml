@@ -55,22 +55,15 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      - run: pip install -r requirements-dev.txt
-      - run: ruff check .
-      - run: ruff format --check .
+      # Правки только текста (scope.py): тестов нет, идёт один standard.
+      - if: needs.scope.outputs.code == 'true'
+        run: pip install -r requirements-dev.txt
+      - if: needs.scope.outputs.code == 'true'
+        run: ruff check .
+      - if: needs.scope.outputs.code == 'true'
+        run: ruff format --check .
       # Стоимость CI и бюджет текста (STANDARD.md, 7.2 и 12): таймауты, отмена, триггеры, раннеры.
       - run: python plugin/templates/ci/parch/parch_ci.py standard
-
-      # PR только с docs/** и state/**: тестов нет, проверяется структура (манифесты плагина,
-      # индекс ADR, чистота стиля) и согласованность baseline с тестами.
-      - name: Структура (PR только с docs и state)
-        if: needs.scope.outputs.code != 'true'
-        run: >
-          pytest -q tests/test_plugin_manifest.py tests/test_style_gate.py
-          tests/test_skills.py::test_product_adr_index_is_up_to_date
-      - name: Согласованность baseline (PR только с docs и state)
-        if: needs.scope.outputs.code != 'true'
-        run: python plugin/templates/ci/parch/parch_ci.py tests --language python
 
       # Урезанный прогон: PR меняет код, тесты, плагин или настройки.
       - if: needs.scope.outputs.code == 'true' && needs.scope.outputs.node == 'true'

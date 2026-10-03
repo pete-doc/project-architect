@@ -36,15 +36,26 @@ OWN = {
     ),
     "powershell": ("tests/test_ci_powershell.py", "plugin/templates/ci/powershell.yml"),
 }
-# Без кода и тестов считаются только эти пути. Всё остальное в docs/ и state/ (baseline.json,
-# features.json, GOAL.md, MODULES.md и любые будущие файлы правил проверок) считается кодом: оно
-# меняет правила проверок, поэтому его изменение требует полного прогона. Новые файлы там тоже код.
+# Правки только текста идут без тестов: в CI проверяется только standard. Тесты не проверяют
+# смысл текста; для защищённых текстовых файлов проверка это «сливай» владельца (ADR-0003).
+# Текстом считаются AGENTS.md, CLAUDE.md, docs/**/*.md (ADR, BACKLOG и т.п.) и отчёты в state/.
+# Исключение: файлы, которые читают проверки и тесты (RULE_FILES), и всё остальное в state/
+# (baseline.json, features.json и будущие файлы правил): они считаются кодом, нужен полный прогон.
 NO_CODE = (
-    "docs/adr/*",
-    "docs/QUESTIONS.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/*.md",
     "state/incidents/*",
     "state/acceptance/*",
     "state/STATUS.md",
+)
+RULE_FILES = (
+    "docs/GOAL.md",
+    "docs/MODULES.md",
+    "docs/CONSTITUTION.md",
+    "docs/STANDARD.md",
+    "CONSTITUTION.md",
+    "GOAL.md",
 )
 HOOKS = ("plugin/hooks/*", "plugin/templates/*", ".github/*")
 
@@ -58,7 +69,7 @@ def scope(files: list[str] | None) -> dict[str, str]:
     code = hooks = files is None
     languages = set(LANGUAGES) if files is None else set[str]()
     for path in files or []:
-        code = code or not matches(path, NO_CODE)
+        code = code or not matches(path, NO_CODE) or matches(path, RULE_FILES)
         hooks = hooks or matches(path, HOOKS)
         if matches(path, SHARED):
             languages |= set(LANGUAGES)
