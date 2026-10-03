@@ -193,6 +193,7 @@ def unlink_directory(link: Path) -> None:
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "reports"
 
 
+@pytest.hookimpl(tryfirst=True)  # раньше хука xdist: он добавляет имя группы к идентификатору теста
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Автоматически помечает медленные тесты и держит их по языкам на одном процессе xdist."""
     for item in items:

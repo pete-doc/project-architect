@@ -11,6 +11,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
 FAST = ["-p", "no:cacheprovider", "-n", "0", "--collect-only", "-q"]
@@ -194,6 +196,27 @@ def test_baseline_only_tests_takes_the_count_from_collection_and_skips_from_the_
     assert any("test_slow" in x for v in data["skipped_tests"].values() for x in v)
     assert not (root / "ran-fast.txt").exists()
     assert not (root / "ran-slow.txt").exists()
+
+
+@pytest.mark.slow
+def test_a_group_really_runs_on_one_worker_under_xdist() -> None:
+    """Без tryfirst на хуке меток xdist их не видит, и тесты группы расходятся по процессам."""
+    done = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "tests/test_ci_powershell.py", "-m", "", "-n", "3",
+            "-v", "-p", "no:cacheprovider", "-k", "findings_fail or information_level",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=600,
+    )  # fmt: skip
+    workers = set(re.findall(r"\[(gw\d+)\] \[ *\d+%\] PASSED", done.stdout))
+    assert done.returncode == 0, done.stdout[-1500:]
+    assert len(workers) == 1, f"тесты группы разошлись по процессам: {sorted(workers)}"
 
 
 def test_report_platform_decides_where_the_skips_are_recorded(tmp_path: Path) -> None:
