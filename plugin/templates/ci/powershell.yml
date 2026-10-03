@@ -1,15 +1,21 @@
 name: ci-powershell
 
+# Раннеры: только ubuntu-latest (PowerShell 7 работает на нём так же, как на Windows).
+# Другие раннеры, матрицы и запуск не по pull_request добавляются только через ADR с оценкой
+# стоимости (к квоте Windows считается x2, macOS x10).
+# Облегчённый набор (ADR-0010): скрипты PowerShell только запускают программы, поэтому тестов,
+# покрытия, архитектуры и дублей здесь нет.
 on:
   pull_request:
-  push:
-    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    # PowerShell проверяется на Windows. Облегчённый набор (ADR-0010): скрипты PowerShell только
-    # запускают программы, поэтому тестов, покрытия, архитектуры и дублей здесь нет.
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

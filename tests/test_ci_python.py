@@ -355,7 +355,7 @@ def test_workflow_template_runs_every_check_and_pins_versions() -> None:
         "parch_ci.py coverage",
     ):
         assert command in workflow, command
-    assert "ubuntu-latest" in workflow and "windows-latest" in workflow
+    assert "ubuntu-latest" in workflow and "windows-latest" not in workflow  # ADR-0011
     assert 'node-version: "22"' in workflow  # jscpd запускается через npx из скрипта
     script = SCRIPT.read_text(encoding="utf-8")
     assert f'JSCPD_VERSION = "{JSCPD_VERSION}"' in script  # версия jscpd зафиксирована

@@ -622,9 +622,9 @@ def test_coverage_demands_a_test_run_with_coverage(shop: CsShop) -> None:
 # ---------- CI-шаблон и версии ----------
 
 
-def test_workflow_pins_every_version_and_runs_on_windows() -> None:
+def test_workflow_pins_every_version_and_runs_on_ubuntu() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "windows-latest" in text
+    assert "ubuntu-latest" in text and "windows-latest" not in text
     assert "global-json-file: global.json" in text
     assert 'node-version: "22.14.0"' in text
     assert "dotnet restore --locked-mode" in text

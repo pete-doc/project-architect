@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
 REPORT_NAME = "test-report.xml"
@@ -58,7 +60,9 @@ def test_repository_ci_runs_the_ratchet_on_the_product_itself() -> None:
     for check in ("tests", "skips"):
         line = f"parch_ci.py {check} --language python --report test-report.xml"
         assert line in workflow, check
-    assert workflow.index("pytest -v") < workflow.index("parch_ci.py tests")
+    assert workflow.index("pytest -v") < workflow.index(
+        "parch_ci.py tests --language python --report"
+    )
 
 
 def test_repository_baseline_exists_and_lists_the_product_tests() -> None:
@@ -176,3 +180,58 @@ def test_baseline_update_records_skips_for_this_system_only(tmp_path: Path) -> N
     data = json.loads((project / "state" / "baseline.json").read_text(encoding="utf-8"))
     assert data["skipped_tests"][f"python@{here}"] == ["tests.test_a::test_two"]
     assert data["skipped_tests"]["python@elsewhere"] == ["tests.test_a::old"]  # чужое не тронуто
+
+
+# ---------- урок: baseline не записывается по запуску с упавшими тестами ----------
+
+BROKEN_RUN = (
+    '<testsuites><testsuite name="pytest">'
+    '<testcase classname="tests.test_a" name="test_one"/>'
+    '<testcase classname="tests.test_a" name="test_two"><failure message="assert 0"/></testcase>'
+    "</testsuite></testsuites>"
+)
+ERRORED_RUN = BROKEN_RUN.replace("<failure", "<error")
+
+
+@pytest.mark.parametrize("report", [BROKEN_RUN, ERRORED_RUN], ids=["failure", "error"])
+def test_baseline_refuses_a_run_with_failed_tests(tmp_path: Path, report: str) -> None:
+    """Цепочка команд не стоит на ошибке теста: по такому запуску baseline не пишется."""
+    project = make_project(tmp_path / "p")
+    done = run(project, "baseline", "--update", "--only-tests", report=report)
+    assert done.returncode == 1, done.stdout
+    assert "упавшие" in done.stdout
+    assert "tests.test_a::test_two" in done.stdout
+    assert not (project / "state" / "baseline.json").exists()
+
+
+def test_baseline_refuses_failed_tests_in_typescript_and_csharp_reports(tmp_path: Path) -> None:
+    ts_report = (
+        '{"testResults":[{"name":"/p/a.test.ts","assertionResults":'
+        '[{"status":"failed","fullName":"breaks"}]}]}'
+    )
+    trx_report = (
+        '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
+        '<UnitTestResult testName="App.Tests.A.Breaks" outcome="Failed"/></Results></TestRun>'
+    )
+    for language, text, name in (
+        ("typescript", ts_report, "a.test.ts::breaks"),
+        ("csharp", trx_report, "App.Tests.A.Breaks"),
+    ):
+        project = tmp_path / language
+        (project / "state").mkdir(parents=True)
+        path = project / "report.out"
+        path.write_text(text, encoding="utf-8")
+        done = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), "baseline", "--update", "--language", language,
+                "--project", str(project), "--report", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=300,
+        )  # fmt: skip
+        assert done.returncode == 1, f"{language}: {done.stdout}"
+        assert name in done.stdout, language
+        assert not (project / "state" / "baseline.json").exists(), language

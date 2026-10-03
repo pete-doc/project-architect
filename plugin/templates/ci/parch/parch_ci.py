@@ -907,6 +907,14 @@ def update_baseline(
             REPORT_HINT.get(language, ""),
         )
         return result
+    failed_now = sorted(name for name, state in outcomes.items() if state == "failed")
+    if failed_now:
+        result.fail(
+            f"Отказ: в запуске тестов есть упавшие ({len(failed_now)}): baseline по такому запуску "
+            "не записывается, иначе он зафиксирует сломанное состояние как норму.",
+            *shown(failed_now),
+            "Почините тесты, запустите их заново и обновите baseline по чистому отчёту.",
+        )
     skipped_now = skipped_ids(outcomes)
     if report is not None:
         gaps = report_gaps(project, language, outcomes, baseline, include_known=not accept.removed)
@@ -2558,7 +2566,10 @@ foreach ($file in $files) {
         }
     }
 }
-$report = @{ version = $module.Version.ToString(); files = $files.Count; findings = @($found) }
+$report = @{
+    version = $module.Version.ToString(); files = $files.Count; findings = @($found)
+    shell = $PSVersionTable.PSVersion.ToString()
+}
 Write-Output ('PARCH-JSON ' + (ConvertTo-Json -InputObject $report -Depth 4 -Compress))
 """
 
@@ -2867,13 +2878,17 @@ def check_thin(project: Path, language: str) -> Result:
 
 
 def powershell_exe() -> str:
-    found = shutil.which("pwsh") or shutil.which("powershell")
+    """Только PowerShell 7 (`pwsh`): Windows PowerShell 5.1 не используется (ADR-0010)."""
+    found = shutil.which("pwsh")
     if found is None:
-        raise ToolError("не найден PowerShell (pwsh или powershell): PSScriptAnalyzer не запустить")
+        raise ToolError(
+            "не найден PowerShell 7 (pwsh). Windows PowerShell 5.1 не подходит: "
+            "установите PowerShell 7 (на Windows: winget install Microsoft.PowerShell)"
+        )
     return found
 
 
-def psa_findings(project: Path, files: list[Path]) -> tuple[int, list[dict[str, object]]]:
+def psa_findings(project: Path, files: list[Path]) -> tuple[int, list[dict[str, object]], str]:
     with tempfile.TemporaryDirectory() as tmp:
         listing = Path(tmp) / "files.txt"
         listing.write_text("\n".join(str(p) for p in files), encoding="utf-8")
@@ -2901,7 +2916,7 @@ def psa_findings(project: Path, files: list[Path]) -> tuple[int, list[dict[str, 
         raise ToolError("PSScriptAnalyzer не отработал:\n" + tail(done))
     data = as_dict(json.loads(payload.removeprefix("PARCH-JSON ")))
     findings = [as_dict(x) for x in as_list(data.get("findings"))]
-    return int(str(data.get("files", 0))), findings
+    return int(str(data.get("files", 0))), findings, str(data.get("shell", ""))
 
 
 def check_psscriptanalyzer(project: Path, language: str) -> Result:
@@ -2912,7 +2927,7 @@ def check_psscriptanalyzer(project: Path, language: str) -> Result:
         result.note("Скриптов PowerShell пока нет, PSScriptAnalyzer не запускался.")
         return result
     files = ps_scripts(project, (".ps1", ".psm1", ".psd1"))
-    scanned, findings = psa_findings(project, files)
+    scanned, findings, shell_version = psa_findings(project, files)
     if scanned != len(files):
         raise ToolError(f"PSScriptAnalyzer проверил {scanned} файлов из {len(files)}")
     bad = sorted(
@@ -2930,7 +2945,10 @@ def check_psscriptanalyzer(project: Path, language: str) -> Result:
             "Исправьте причину. Подавление (SuppressMessage) считается и не должно расти.",
         )
         return result
-    result.note(f"PSScriptAnalyzer {PSA_VERSION}: файлов {scanned}, замечаний нет.")
+    result.note(
+        f"PSScriptAnalyzer {PSA_VERSION} на PowerShell {shell_version}: файлов {scanned}, "
+        "замечаний нет."
+    )
     return result
 
 

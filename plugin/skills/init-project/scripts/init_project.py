@@ -238,6 +238,36 @@ def bullets(text: str, fallback: str) -> str:
     return "\n".join(f"- {line}" for line in lines) if lines else fallback
 
 
+TS_NODE_VERSION = "22.14.0"
+CS_EXTRA_PACKAGES = {"TngTech.ArchUnitNET.xUnit": "0.13.4"}
+PACKAGE_VERSION = re.compile(r'Include="([^"]+)"\s+Version="([^"]+)"')
+
+
+def tool_versions_text(languages: list[str]) -> str:
+    """Точные версии инструментов выбранных языков: те же, что в шаблонах CI и настройках."""
+    lines = [f"- jscpd {parch_ci.JSCPD_VERSION} (дубли; запускается через Node, все языки)"]
+    for lang in languages:
+        if lang == "python":
+            pins = (line.split("==") for line in REQUIREMENTS_DEV.split())
+            lines.append("- Python 3.12; " + ", ".join(f"{n} {v}" for n, v in pins))
+        elif lang == "typescript":
+            tools = ", ".join(f"{n} {v}" for n, v in TS_TOOL_VERSIONS.items())
+            lines.append(f"- Node {TS_NODE_VERSION}; {tools}")
+        elif lang == "csharp":
+            sdk = json.loads((TEMPLATES / "csharp" / "global.json").read_text(encoding="utf-8"))
+            texts = [
+                (TEMPLATES / "csharp" / name).read_text(encoding="utf-8")
+                for name in ("Directory.Build.props", "App.Tests.csproj")
+            ]
+            found = {n: v for text in texts for n, v in PACKAGE_VERSION.findall(text)}
+            found.update(CS_EXTRA_PACKAGES)
+            tools = ", ".join(f"{n} {v}" for n, v in found.items())
+            lines.append(f"- .NET SDK {sdk['sdk']['version']}; {tools}")
+        elif lang == "powershell":
+            lines.append(f"- PowerShell 7 (pwsh); PSScriptAnalyzer {parch_ci.PSA_VERSION}")
+    return "\n".join(lines)
+
+
 def render_constitution(name: str, description: str, priorities: str, languages: list[str]) -> str:
     template = (TEMPLATES / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     chosen = [LANGUAGES[lang] for lang in languages]
@@ -254,6 +284,7 @@ def render_constitution(name: str, description: str, priorities: str, languages:
         "{{STACK}}": stack,
         "{{ALLOWED_PACKAGES}}": packages,
         "{{CHECK_COMMANDS}}": check_text,
+        "{{TOOL_VERSIONS}}": tool_versions_text(languages),
     }
     for key, value in values.items():
         template = template.replace(key, value)
