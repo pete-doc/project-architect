@@ -36,7 +36,16 @@ OWN = {
     ),
     "powershell": ("tests/test_ci_powershell.py", "plugin/templates/ci/powershell.yml"),
 }
-NO_CODE = ("docs/*", "state/*")
+# Без кода и тестов считаются только эти пути. Всё остальное в docs/ и state/ (baseline.json,
+# features.json, GOAL.md, MODULES.md и любые будущие файлы правил проверок) считается кодом: оно
+# меняет правила проверок, поэтому его изменение требует полного прогона. Новые файлы там тоже код.
+NO_CODE = (
+    "docs/adr/*",
+    "docs/QUESTIONS.md",
+    "state/incidents/*",
+    "state/acceptance/*",
+    "state/STATUS.md",
+)
 HOOKS = ("plugin/hooks/*", "plugin/templates/*", ".github/*")
 
 

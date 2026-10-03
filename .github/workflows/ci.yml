@@ -2,7 +2,7 @@ name: ci
 
 # Быстрая часть на каждую отправку (ADR-0013): проверки, быстрые тесты и медленные тесты только тех
 # языков, чьи файлы изменил PR. Такой прогон помечен как урезанный и права на слияние не даёт:
-# слияние подтверждает полный прогон (full.yml, метка full), он выставляет статус full-run.
+# слияние подтверждает полный прогон (full.yml, проверка full-run: `gh pr ready`).
 # Раннеры: Ubuntu по умолчанию. Другие раннеры, матрицы и запуск не по pull_request добавляются
 # только через ADR с оценкой минут квоты (ADR-0011): Windows считается как x2, macOS как x10.
 # Прогона на push в main нет: ветка main защищена, в неё попадает только проверенное.
@@ -44,20 +44,11 @@ jobs:
   check:
     needs: scope
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25: если PR меняет общий код или сам CI, идут тесты всех языков и прогон не короче полного.
+    timeout-minutes: 25
     permissions:
       contents: read
-      statuses: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      # Права на слияние даёт только полный прогон: пока его нет, статус full-run ждёт (ADR-0013).
-      - name: Статус full-run
-        run: >
-          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA"
-          -f state=pending -f context=full-run
-          -f description="Полный прогон не выполнен: поставьте метку full"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -71,7 +62,7 @@ jobs:
       - run: python plugin/templates/ci/parch/parch_ci.py standard
 
       # PR только с docs/** и state/**: тестов нет, проверяется структура (манифесты плагина,
-      # индекс ADR, чистота стиля) и согласованность baseline с тестами; полный прогон не нужен.
+      # индекс ADR, чистота стиля) и согласованность baseline с тестами.
       - name: Структура (PR только с docs и state)
         if: needs.scope.outputs.code != 'true'
         run: >
@@ -80,12 +71,6 @@ jobs:
       - name: Согласованность baseline (PR только с docs и state)
         if: needs.scope.outputs.code != 'true'
         run: python plugin/templates/ci/parch/parch_ci.py tests --language python
-      - name: Статус full-run (PR без кода)
-        if: needs.scope.outputs.code != 'true'
-        run: >
-          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA"
-          -f state=success -f context=full-run
-          -f description="PR без кода и тестов: полный прогон не нужен"
 
       # Урезанный прогон: PR меняет код, тесты, плагин или настройки.
       - if: needs.scope.outputs.code == 'true' && needs.scope.outputs.node == 'true'

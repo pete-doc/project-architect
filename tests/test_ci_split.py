@@ -5,7 +5,6 @@
 """
 
 import importlib.util
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,10 +33,30 @@ def scope(*files: str) -> dict[str, str]:
 # ---------- какие тесты идут в урезанном прогоне ----------
 
 
-def test_a_docs_only_pr_has_no_code_and_runs_no_slow_tests() -> None:
-    result = scope("docs/adr/0013-x.md", "state/baseline.json", "docs/GOAL.md")
+def test_a_pr_with_only_decisions_questions_and_reports_has_no_code() -> None:
+    result = scope(
+        "docs/adr/0013-x.md", "docs/QUESTIONS.md", "state/incidents/2026-10-04-F4-loop.md",
+        "state/acceptance/F17.md", "state/STATUS.md",
+    )  # fmt: skip
     assert result["code"] == "false" and result["hooks"] == "false"
     assert result["selector"] == "not slow" and result["node"] == "false"
+
+
+@pytest.mark.parametrize(
+    "rule_file",
+    [
+        "state/baseline.json",
+        "state/features.json",
+        "state/future-rules.json",  # будущие файлы правил: в state/ по умолчанию код
+        "docs/GOAL.md",
+        "docs/MODULES.md",
+        "docs/CONSTITUTION.md",
+        "docs/rules/new-check.md",
+    ],
+)
+def test_files_that_set_the_rules_of_checks_in_docs_and_state_count_as_code(rule_file: str) -> None:
+    assert scope(rule_file)["code"] == "true"
+    assert scope("docs/adr/0013-x.md", rule_file)["code"] == "true"  # хоть один такой файл
 
 
 @pytest.mark.parametrize(
@@ -127,58 +146,77 @@ def test_every_language_test_file_has_a_marker_the_selector_can_use() -> None:
         assert f"lang_{language}:" in pyproject, language
 
 
-# ---------- право на слияние: статус full-run ----------
+# ---------- право на слияние: проверка full-run ----------
 
 
 def test_the_quick_run_never_gives_the_right_to_merge() -> None:
     text = CI.read_text(encoding="utf-8")
-    assert "statuses: write" in text
-    pending = text.index("state=pending -f context=full-run")
-    assert pending < text.index("actions/checkout@v4", pending)  # статус ставится до всех проверок
-    assert text.count("state=success") == 1  # единственный успех: PR без кода
-    block = text[text.index("Статус full-run (PR без кода)") :].split("\n      - ", 1)[0]
-    assert "if: needs.scope.outputs.code != 'true'" in block
+    assert "statuses" not in text and "gh api" not in text  # никаких отметок вручную
     assert "-o junit_suite_name=parch-partial" in text and "--partial" in text
     assert 'pytest -v -m ""' not in text
+    assert "full-run" not in text.replace(
+        "(full.yml, проверка full-run:", ""
+    )  # проверку даёт full.yml
 
 
-def test_only_the_full_run_reports_success_and_only_after_every_check() -> None:
+def test_the_full_run_check_exists_only_after_ready_for_review() -> None:
     text = FULL.read_text(encoding="utf-8")
-    success = text.index("state=success -f context=full-run")
+    on_block = text.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+    assert on_block.strip() == "pull_request:\n    types: [ready_for_review]"  # других событий нет
+    head = text.split("\n  full-run:\n", 1)[1].split("    steps:", 1)[0]
+    assert "if:" not in head  # пропущенное по условию задание GitHub считает успешным
+    assert "cancel-in-progress: true" in text and "group: full-${{ github.ref }}" in text
+
+
+def test_no_workflow_sets_a_check_or_status_by_hand() -> None:
+    for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        assert "/statuses/" not in text and "-f context=" not in text, path.name
+        assert "statuses: write" not in text and "checks: write" not in text, path.name
+
+
+def test_the_full_run_covers_every_check_and_its_ratchet_runs_last() -> None:
+    text = FULL.read_text(encoding="utf-8")
     for step in (
         "pytest -v -m",
         "parch_ci.py tests --language python --report test-report.xml",
         "parch_ci.py skips --language python --report test-report.xml",
         "pyright",
+        "parch_ci.py standard",
     ):
-        assert text.index(step) < success, step
-    assert "state=failure -f context=full-run" in text
-    assert re.search(r"Статус full-run провал\n\s+if: failure\(\)", text)
+        assert step in text, step
+    assert text.index("pytest -v -m") < text.index("parch_ci.py tests --language python --report")
+    assert "--partial" not in text  # полный прогон не принимает урезанный отчёт
 
 
-def test_the_full_run_starts_only_with_the_full_label() -> None:
+def test_a_pr_without_code_still_gets_the_full_run_check_but_runs_no_tests() -> None:
     text = FULL.read_text(encoding="utf-8")
-    assert "contains(github.event.pull_request.labels.*.name, 'full')" in text
-    assert "github.event.label.name == 'full'" in text  # другая метка его не запускает
-    on_block = text.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
-    assert "types: [opened, synchronize, reopened, labeled]" in on_block
-    assert "push" not in on_block and "workflow_dispatch" not in on_block
-    assert "cancel-in-progress: true" in text and "group: full-${{ github.ref }}" in text
-
-
-def test_the_quick_run_ignores_labels_so_a_label_cannot_cancel_it() -> None:
-    on_block = CI.read_text(encoding="utf-8").split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
-    assert "labeled" not in on_block
+    assert "steps.scope.outputs.code != 'true'" in text and "scope.py --unknown" in text
+    assert (
+        text.count("steps.scope.outputs.code == 'true'") >= 8
+    )  # установка и тесты только для кода
 
 
 def test_adr_0013_records_the_split_and_the_saving() -> None:
     adr = (REPO / "docs" / "adr" / "0013-razdelenie-ci.md").read_text(encoding="utf-8")
     for fact in (
         "full-run",
-        "метка `full`",
+        "`ready_for_review`",
+        "GitHub Actions",
+        "вручную",
+        "integration",
+        "check`, `full-run` и",
         "parch-partial",
         "минут",
         "Экономия",
         "перед слиянием",
     ):
         assert fact in adr, fact
+
+
+def test_agents_md_forbids_setting_checks_by_hand_and_explains_ready_for_review() -> None:
+    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    assert "через `gh api`" in text and "запрещено" in text
+    assert "источник проверок" in text and "GitHub Actions" in text
+    assert "gh pr ready --undo" in text and "gh pr create --draft" in text
+    assert "любые файлы правил проверок" in text  # файлы правил проверок считаются кодом

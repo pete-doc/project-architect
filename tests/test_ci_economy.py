@@ -66,9 +66,9 @@ def test_product_ci_has_no_matrix_and_no_macos() -> None:
 
 def test_every_product_job_has_a_timeout() -> None:
     workflow = text(PRODUCT)
-    for name, minutes in (("scope", 3), ("check", 15), ("windows-hooks", 15)):
+    for name, minutes in (("scope", 3), ("check", 25), ("windows-hooks", 15)):
         assert f"timeout-minutes: {minutes}\n" in job_block(workflow, name), name
-    assert "timeout-minutes: 25\n" in job_block(text(FULL), "full")
+    assert "timeout-minutes: 25\n" in job_block(text(FULL), "full-run")
 
 
 def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
@@ -86,7 +86,7 @@ def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
         assert step in block, step
     assert 'pytest -v -m ""' not in block  # полный прогон только в full.yml
     # полный прогон перед слиянием: все шаги прежнего check и статус для слияния
-    full = job_block(text(FULL), "full")
+    full = job_block(text(FULL), "full-run")
     assert "runs-on: ubuntu-latest" in full
     for step in (
         "ruff check .", "ruff format --check .", "pyright",
@@ -113,9 +113,10 @@ def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
 
 def test_a_docs_and_state_only_pr_runs_only_the_structure_checks() -> None:
     workflow = text(PRODUCT)
-    assert 'NO_CODE = ("docs/*", "state/*")' in text(SCOPE)  # эти пути не делают PR «кодовым»
+    scope_text = text(SCOPE)  # только эти пути не делают PR «кодовым»; baseline.json и прочее код
+    assert '"state/incidents/*"' in scope_text and '"state/baseline.json"' not in scope_text
     block = job_block(workflow, "check")
-    assert block.count("if: needs.scope.outputs.code != 'true'") == 3  # два шага и статус full-run
+    assert block.count("if: needs.scope.outputs.code != 'true'") == 2
     heavy = re.findall(r"if: needs\.scope\.outputs\.code == 'true'(?: && [^\n]+)?\n", block)
     assert len(heavy) >= 9  # node, dotnet (два шага), psa (три шага), pyright, pytest, ratchet
     assert "test_product_adr_index_is_up_to_date" in block
