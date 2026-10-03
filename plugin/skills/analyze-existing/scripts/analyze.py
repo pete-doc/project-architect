@@ -4,8 +4,11 @@
 Вход: JSON-объект на stdin. Выход: JSON-объект на stdout. Скрипт только читает проект: он ничего в нём не создаёт и не меняет.
 
     {"command": "inventory", "project_dir": "."}   факты и предварительная карточка пунктов P1-P13
-    {"command": "verify", "project_dir": ".", "before": "<snapshot из inventory>"}
-                                                   изменилось ли что-то в проекте, кроме analysis/
+    {"command": "verify", "project_dir": "."}      изменилось ли что-то в проекте, кроме parch-analysis/
+                                                   (состояние «до» inventory сохраняет вне проекта)
+
+Отчёт пишется только в папку parch-analysis/. Если она уже есть, inventory отказывается работать:
+папка analysis/ и любые другие папки проекта принадлежат владельцу и считаются кодом.
 
 Оценки пунктов предварительные: по ним агент пишет отчёт, а пункты, которые по файлам не определить
 (P4, P8, P12), остаются вопросами владельцу.
@@ -13,11 +16,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +31,7 @@ SKIP_DIRS = {
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vs",
 }  # fmt: skip
 MAX_FILES = 50_000
+REPORT_DIR = "parch-analysis"  # единственное место, где анализу разрешено создавать файлы
 LANGUAGE_SUFFIXES = {
     "python": (".py",),
     "typescript": (".ts", ".tsx"),
@@ -73,9 +79,37 @@ def git(project: Path, *args: str) -> str | None:
     return done.stdout if done.returncode == 0 else None
 
 
+def digest(path: Path) -> str:
+    """Отпечаток содержимого файла: правка уже изменённого или нового файла видна в состоянии «до/после»."""
+    if not path.is_file():
+        return "-"
+    sha = hashlib.sha1()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            sha.update(block)
+    return sha.hexdigest()
+
+
+def changed_path(line: str) -> str:
+    """Путь из строки состояния «XY путь<TAB>отпечаток» (git берёт пути с пробелами в кавычки)."""
+    path = line.split(chr(9))[0][3:].split(" -> ")[-1].strip('"')
+    return path.replace(chr(92), "/")
+
+
 def snapshot(project: Path) -> str | None:
-    """Состояние дерева по git: список изменённых и новых файлов (None, если это не git-репозиторий)."""
-    return git(project, "status", "--porcelain=v1", "-uall")
+    """Состояние дерева по git: изменённые и новые файлы с отпечатками (None, если это не git-репозиторий)."""
+    status = git(project, "-c", "core.quotepath=off", "status", "--porcelain=v1", "-uall")
+    if status is None:
+        return None
+    return chr(10).join(
+        f"{line}{chr(9)}{digest(project / changed_path(line))}" for line in status.splitlines()
+    )
+
+
+def snapshot_file(project: Path) -> Path:
+    """Где inventory сохраняет состояние «до»: вне проекта, чтобы в проекте ничего не появлялось."""
+    key = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"parch-analyze-{key}.json"
 
 
 def walk(project: Path) -> list[Path]:
@@ -224,7 +258,7 @@ def inventory(project: Path) -> dict[str, Any]:
     instruction_paths = {i["path"] for i in instructions}
     outside = [
         p for p in rel
-        if p.endswith(".md") and not p.startswith("docs/") and not p.startswith("analysis/")
+        if p.endswith(".md") and not p.startswith("docs/") and not p.startswith(f"{REPORT_DIR}/")
         and p not in instruction_paths and p.rsplit("/", 1)[-1] not in OK_MARKDOWN
     ]  # fmt: skip
     goal = project / "docs" / "GOAL.md"
@@ -234,13 +268,18 @@ def inventory(project: Path) -> dict[str, Any]:
     adr_dir = project / "docs" / "adr"
     incidents = project / "state" / "incidents"
     status = snapshot(project)
+    if status is not None:
+        snapshot_file(project).write_text(
+            json.dumps({"project": str(project), "snapshot": status}), encoding="utf-8"
+        )
     facts: dict[str, Any] = {
         "project": project.name,
         "git": {
             "is_repo": status is not None,
             "branch": (git(project, "branch", "--show-current") or "").strip() or None,
             "clean": (status == "") if status is not None else None,
-            "snapshot": status,
+            "dirty_files": len(status.splitlines()) if status else 0,
+            "snapshot_saved": status is not None,
         },
         "languages": languages,
         "test_files": sum(
@@ -279,21 +318,28 @@ def inventory(project: Path) -> dict[str, Any]:
 
 def verify(project: Path, before: str | None) -> dict[str, Any]:
     now = snapshot(project)
-    if now is None or before is None:
+    saved = snapshot_file(project)
+    if before is None and saved.is_file():
+        saved_data = json.loads(saved.read_text(encoding="utf-8"))
+        before = saved_data["snapshot"] if saved_data["project"] == str(project) else None
+    if now is None:
         return {
             "ok": None,
             "changed": [],
             "note": "это не git-репозиторий: изменения проверить нельзя",
         }
+    if before is None:
+        raise ValueError("нет состояния «до»: сначала выполни inventory")
     old = set(before.splitlines())
     changed = [
-        line for line in now.splitlines()
-        if line not in old and not line[3:].replace("\\", "/").startswith("analysis/")
-    ]  # fmt: skip
+        line.split(chr(9))[0]
+        for line in now.splitlines()
+        if line not in old and not changed_path(line).startswith(f"{REPORT_DIR}/")
+    ]
     return {
         "ok": not changed,
         "changed": changed,
-        "note": "изменения вне analysis/ найдены" if changed else "код не менялся",
+        "note": f"изменения вне {REPORT_DIR}/ найдены" if changed else "код не менялся",
     }
 
 
@@ -308,6 +354,11 @@ def main() -> int:
         if not project.is_dir():
             raise ValueError(f"нет папки проекта: {project}")
         if command == "inventory":
+            if (project / REPORT_DIR).exists():
+                raise ValueError(
+                    f"папка {REPORT_DIR}/ уже существует: остановись и спроси владельца, как быть "
+                    "(анализ не должен перезаписать или смешать её содержимое со своим отчётом)"
+                )
             result = inventory(project)
         elif command == "verify":
             result = verify(project, request.get("before"))
