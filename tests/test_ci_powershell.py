@@ -151,6 +151,7 @@ def test_psscriptanalyzer_with_no_scripts_says_so_instead_of_pretending(tmp_path
     assert "Скриптов PowerShell пока нет" in passes(project, "psscriptanalyzer")
 
 
+@pytest.mark.slow
 def test_wrong_psscriptanalyzer_version_is_an_error_not_a_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -665,6 +666,7 @@ def test_product_ci_installs_the_same_analyzer_version_as_the_template() -> None
 # ---------- только PowerShell 7 (pwsh) ----------
 
 
+@pytest.mark.slow
 def test_the_tests_run_powershell_7_and_not_windows_powershell() -> None:
     from parch_ci import powershell_exe
 

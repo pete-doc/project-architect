@@ -18,3 +18,11 @@ norecursedirs = ["projects"]
 # Параметризованный тест с пустым набором параметров не должен молча пропускаться.
 empty_parameter_set_mark = "fail_at_collect"
 pythonpath = ["plugin/hooks", "plugin/templates/ci/parch"]
+# Обычный pytest быстрый: параллельно и без медленных тестов (они запускают dotnet, pwsh, node или
+# PSScriptAnalyzer). Полный прогон: pytest -m "" (только в CI и один раз перед PR).
+# loadgroup держит медленные тесты одного языка на одном процессе: сборка проекта один раз.
+addopts = "-n auto --dist loadgroup -m 'not slow'"
+markers = [
+    "slow: запускает dotnet, pwsh, node или PSScriptAnalyzer; обычный pytest такие тесты пропускает",
+    "xdist_group: тесты группы идут на одном процессе pytest-xdist",
+]
