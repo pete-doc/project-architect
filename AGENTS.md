@@ -55,8 +55,11 @@ CI (`.github/workflows/ci.yml`) идёт на Ubuntu; тесты hooks и зап
 
 ```bash
 gh run download ИДЕНТИФИКАТОР_ПРОГОНА -n test-report
-python plugin/templates/ci/parch/parch_ci.py baseline --update --only-tests --report test-report.xml
+python plugin/templates/ci/parch/parch_ci.py baseline --update --only-tests --report-platform posix --report test-report.xml
 ```
+
+Отчёт CI снят на Linux, поэтому `--report-platform posix`: пропуски, которые бывают только на Linux (тесты запуска hooks
+через `cmd` пропускаются вне Windows), записываются в список для posix, а не для компьютера, где обновляют baseline.
 
 Прогон CI должен быть на том же коммите, что и тесты (в отчёте обязаны быть все тесты, иначе обновление
 откажется). Изменение одного `state/baseline.json` коммитится отдельно и проходит лёгкую проверку CI.

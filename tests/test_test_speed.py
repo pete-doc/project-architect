@@ -196,6 +196,27 @@ def test_baseline_only_tests_takes_the_count_from_collection_and_skips_from_the_
     assert not (root / "ran-slow.txt").exists()
 
 
+def test_report_platform_decides_where_the_skips_are_recorded(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    report = tmp_path / "test-report.xml"
+    report.write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.test_a" name="test_fast"/>'
+        '<testcase classname="tests.test_a" name="test_slow"><skipped message="posix only"/>'
+        "</testcase></testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    args = ["baseline", "--update", "--only-tests", "--report", str(report)]
+    assert run_parch(root, *args, "--report-platform", "posix").returncode == 0
+    data = json.loads((root / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert data["skipped_tests"]["python@posix"] == ["tests.test_a::test_slow"]
+    assert "python@windows" not in data["skipped_tests"]
+    # на Windows тот же пропуск остаётся нарушением: для этой системы он не известен
+    skips = run_parch(root, "skips", "--report", str(report))
+    expected = 0 if sys.platform != "win32" else 1
+    assert skips.returncode == expected, skips.stdout
+
+
 # ---------- документы и CI ----------
 
 
@@ -204,6 +225,7 @@ def test_agents_md_explains_both_modes_and_the_baseline_flow() -> None:
     assert "до 3 минут" in text and "до 15 минут" in text
     assert "`pytest`" in text and 'pytest -m ""' in text
     assert "gh run download" in text and "test-report" in text
+    assert "--report-platform posix" in text
     assert "Array buffer allocation failed" in text and "не обходи" in text
     assert len(text.splitlines()) <= 150
 

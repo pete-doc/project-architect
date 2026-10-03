@@ -896,8 +896,13 @@ def update_baseline(
     accept: Accept,
     report: Path | None = None,
     only_tests: bool = False,
+    platform: str | None = None,
 ) -> Result:
-    """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта)."""
+    """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта).
+
+    platform: система, на которой снят отчёт (windows или posix); по умолчанию система этого
+    компьютера. Отчёт CI всегда снят на Linux, то есть posix.
+    """
     result = Result()
     baseline = Baseline(project)
     if only_tests and report is None and language == "python":
@@ -928,8 +933,8 @@ def update_baseline(
     if report is not None:
         gaps = report_gaps(project, language, outcomes, baseline, include_known=not accept.removed)
         fail_on_gaps(result, gaps)
-    new_skipped = sorted(skipped_now - known_skipped(baseline, language))
-    if has_skipped_list(baseline, language) and new_skipped and not accept.skips:
+    new_skipped = sorted(skipped_now - known_skipped(baseline, language, platform))
+    if has_skipped_list(baseline, language, platform) and new_skipped and not accept.skips:
         result.fail(
             "Отказ: появились тесты, пропущенные по фактическому результату запуска, "
             "записывать их в baseline нельзя (--accept-skips):",
@@ -1001,7 +1006,7 @@ def update_baseline(
     baseline.set("skips", language, skips)
     if not baseline.has("skipped_tests", language):
         baseline.set("skipped_tests", language, [])
-    baseline.set("skipped_tests", platform_key(language), sorted(skipped_now))
+    baseline.set("skipped_tests", platform_key(language, platform), sorted(skipped_now))
     if not only_tests:
         baseline.set("suppressions", language, suppressions)
         baseline.set("config", language, config)
@@ -1703,21 +1708,21 @@ REPORT_HINT = {
 }
 
 
-def platform_key(language: str) -> str:
+def platform_key(language: str, platform: str | None = None) -> str:
     """Ключ baseline для пропусков, зависящих от системы (тест только для Windows и т.п.)."""
-    return f"{language}@{'windows' if os.name == 'nt' else 'posix'}"
+    return f"{language}@{platform or ('windows' if os.name == 'nt' else 'posix')}"
 
 
-def known_skipped(baseline: Baseline, language: str) -> set[str]:
+def known_skipped(baseline: Baseline, language: str, platform: str | None = None) -> set[str]:
     """Пропущенные тесты, известные для всех систем и для этой системы."""
     return baseline.strings("skipped_tests", language) | baseline.strings(
-        "skipped_tests", platform_key(language)
+        "skipped_tests", platform_key(language, platform)
     )
 
 
-def has_skipped_list(baseline: Baseline, language: str) -> bool:
+def has_skipped_list(baseline: Baseline, language: str, platform: str | None = None) -> bool:
     return baseline.has("skipped_tests", language) or baseline.has(
-        "skipped_tests", platform_key(language)
+        "skipped_tests", platform_key(language, platform)
     )
 
 
@@ -3221,6 +3226,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="baseline --update: только списки тестов и пропусков (остальное не трогать)",
     )
+    parser.add_argument(
+        "--report-platform",
+        choices=["windows", "posix"],
+        default=None,
+        help="baseline --update: на какой системе снят отчёт (отчёт CI всегда posix)",
+    )
     args = parser.parse_args(argv)
     project = Path(args.project).resolve()
     report = Path(args.report).resolve() if args.report else None
@@ -3235,7 +3246,9 @@ def main(argv: list[str] | None = None) -> int:
                 suppressions=args.accept_suppressions,
                 config=args.accept_config,
             )
-            result = update_baseline(project, args.language, accept, report, args.only_tests)
+            result = update_baseline(
+                project, args.language, accept, report, args.only_tests, args.report_platform
+            )
         elif args.check in COLLECTOR_CHECKS and args.language not in COLLECTORS:
             reason = (
                 "не применяется (ADR-0010: PowerShell только тонкий клей)"
