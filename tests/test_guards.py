@@ -800,7 +800,10 @@ def test_push_is_allowed_when_standard_is_satisfied(project: Path) -> None:
 
 def test_other_git_commands_are_not_checked(project: Path) -> None:
     with_workflow(project, GOOD_WORKFLOW.replace("    timeout-minutes: 20\n", ""))
-    for command in ("git status", "git commit -m push", "git log --oneline", "echo git push"):
+    for command in (
+        "git status", "git commit -m push", "git log --oneline", "echo git push",
+        "git -C push status", "git commit -m 'git push'",
+    ):  # fmt: skip
         result = run_hook("pre_push.py", bash(command), project)
         assert result.code == 0, (command, result.stderr)
 
@@ -835,3 +838,14 @@ def test_pre_push_hook_is_registered_for_both_shell_tools_and_runs_through_the_l
     assert len(groups) == 1
     assert groups[0]["matcher"] == "Bash|PowerShell"
     assert "run-hook.cmd" in groups[0]["hooks"][0]["command"]
+
+
+def test_push_with_global_git_options_is_still_a_push(project: Path) -> None:
+    with_workflow(project, GOOD_WORKFLOW.replace("ubuntu-latest", "macos-latest"))
+    for command in (
+        "git -c user.name=x push",
+        "git -C . -c core.x=1 push origin f",
+        "git --no-pager push",
+    ):
+        result = run_hook("pre_push.py", bash(command), project)
+        assert_blocked(result, "pre_push", "macos-latest")

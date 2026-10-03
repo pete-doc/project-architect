@@ -45,8 +45,25 @@ def is_product_repo(project: Path) -> bool:
     ).is_file()
 
 
+_GIT_OPTIONS_WITH_VALUE = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+
+
+def git_subcommand(tokens: list[str]) -> str:
+    """Подкоманда git: первый токен без `-`, кроме значений общих опций (`-C папка`)."""
+    skip = False
+    for token in tokens[1:]:
+        if skip:
+            skip = False
+        elif token in _GIT_OPTIONS_WITH_VALUE:
+            skip = True
+        elif not token.startswith("-"):
+            return token
+    return ""
+
+
 def is_push(tokens: list[str]) -> bool:
-    return command_name(tokens) == "git" and "push" in tokens[1:]
+    """`git push`, а не `git commit -m push` и не слово push в тексте команды."""
+    return command_name(tokens) == "git" and git_subcommand(tokens) == "push"
 
 
 def check(data: JsonDict, project: Path) -> Block | None:
