@@ -161,23 +161,22 @@ def test_inventory_creates_and_changes_nothing(tmp_path: Path) -> None:
 def test_verify_accepts_only_the_report_and_catches_a_changed_source_file(repo: Path) -> None:
     facts = inventory(repo)
     assert facts["git"]["is_repo"] is True and facts["git"]["clean"] is True
-    before = facts["git"]["snapshot"]
-    write(repo / "analysis" / "ANALYSIS_REPORT.md", "# Отчёт\n")
-    done = call({"command": "verify", "project_dir": str(repo), "before": before})
-    assert done["ok"] is True and done["changed"] == []  # отчёт в analysis/ допустим
+    write(repo / "parch-analysis" / "ANALYSIS_REPORT.md", "# Отчёт\n")
+    done = call({"command": "verify", "project_dir": str(repo)})
+    assert done["ok"] is True and done["changed"] == []  # отчёт в parch-analysis/ допустим
     write(repo / "src" / "app.py", "x = 2\n")  # плохой пример: правка кода
-    bad = call({"command": "verify", "project_dir": str(repo), "before": before})
+    bad = call({"command": "verify", "project_dir": str(repo)})
     assert bad["ok"] is False and any("src/app.py" in line for line in bad["changed"])
-    write(repo / "src" / "new.py", "y = 1\n")  # новый файл вне analysis/ тоже нарушение
+    write(repo / "src" / "new.py", "y = 1\n")  # новый файл вне parch-analysis/ тоже нарушение
     assert any("new.py" in line for line in call(
-        {"command": "verify", "project_dir": str(repo), "before": before}
+        {"command": "verify", "project_dir": str(repo)}
     )["changed"])  # fmt: skip
 
 
 def test_verify_ignores_changes_that_were_there_before_the_analysis(repo: Path) -> None:
     write(repo / "src" / "app.py", "x = 5\n")  # владелец оставил правку до анализа
-    before = inventory(repo)["git"]["snapshot"]
-    assert call({"command": "verify", "project_dir": str(repo), "before": before})["ok"] is True
+    inventory(repo)
+    assert call({"command": "verify", "project_dir": str(repo)})["ok"] is True
 
 
 def test_outside_git_verify_says_it_cannot_check(tmp_path: Path) -> None:
@@ -204,7 +203,8 @@ def test_the_skill_is_read_only_and_promises_the_simplified_scope() -> None:
     assert "disable-model-invocation: true" in text
     for fact in (
         "ничего не меняешь в коде проекта",
-        "analysis/ANALYSIS_REPORT.md",
+        "parch-analysis/ANALYSIS_REPORT.md",
+        "остановись и спроси",
         '"command": "inventory"',
         '"command": "verify"',
         "P1-P13",
