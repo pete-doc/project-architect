@@ -25,6 +25,15 @@
   },
   "tests": {
     "python": [
+      "tests/test_acceptance.py::test_a_block_with_tests_and_an_acceptance_file_needs_both",
+      "tests/test_acceptance.py::test_a_block_without_tests_becomes_done_only_after_the_owner_accepted_it",
+      "tests/test_acceptance.py::test_a_manual_done_with_a_pending_acceptance_is_flagged",
+      "tests/test_acceptance.py::test_agents_md_makes_acceptance_changes_wait_for_the_owner_and_adr_0014_exists",
+      "tests/test_acceptance.py::test_an_incomplete_acceptance_file_does_not_make_the_block_done[- [x] \\u041e\\u0442\\u0447\\u0451\\u0442 \\u043f\\u043e\\u043d\\u044f\\u0442\\u0435\\u043d\\n- [ ] \\u0426\\u0435\\u043b\\u044c \\u0443\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0435\\u043d\\u0430\\n\\u0418\\u0442\\u043e\\u0433: \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u043e \\u0432\\u043b\\u0430\\u0434\\u0435\\u043b\\u044c\\u0446\\u0435\\u043c, 2026-10-04\\n]",
+      "tests/test_acceptance.py::test_an_incomplete_acceptance_file_does_not_make_the_block_done[- [x] \\u041e\\u0442\\u0447\\u0451\\u0442 \\u043f\\u043e\\u043d\\u044f\\u0442\\u0435\\u043d\\n- [x] \\u0426\\u0435\\u043b\\u044c \\u0443\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0435\\u043d\\u0430\\n\\u0418\\u0442\\u043e\\u0433: \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u043e \\u0432\\u043b\\u0430\\u0434\\u0435\\u043b\\u044c\\u0446\\u0435\\u043c, \\u0414\\u0410\\u0422\\u0410\\n]",
+      "tests/test_acceptance.py::test_an_incomplete_acceptance_file_does_not_make_the_block_done[- [x] \\u041e\\u0442\\u0447\\u0451\\u0442 \\u043f\\u043e\\u043d\\u044f\\u0442\\u0435\\u043d\\n- [x] \\u0426\\u0435\\u043b\\u044c \\u0443\\u0442\\u0432\\u0435\\u0440\\u0436\\u0434\\u0435\\u043d\\u0430\\n\\u0418\\u0442\\u043e\\u0433: \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u043e\\n]",
+      "tests/test_acceptance.py::test_an_incomplete_acceptance_file_does_not_make_the_block_done[\\u0418\\u0442\\u043e\\u0433: \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u043e \\u0432\\u043b\\u0430\\u0434\\u0435\\u043b\\u044c\\u0446\\u0435\\u043c, 2026-10-04\\n]",
+      "tests/test_acceptance.py::test_the_product_pilot_block_waits_for_the_owner_acceptance_file",
       "tests/test_ci_csharp.py::test_a_deleted_test_fails_the_test_count_check",
       "tests/test_ci_csharp.py::test_a_module_without_any_rule_fails",
       "tests/test_ci_csharp.py::test_a_new_nuget_config_is_caught",
