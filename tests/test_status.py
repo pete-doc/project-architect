@@ -606,3 +606,9 @@ def test_the_state_workflow_reads_the_report_of_the_full_run_and_counts_ci_minut
     assert "for wf in full.yml ci.yml" in text  # отчёт даёт полный прогон
     assert "--ci-runs" in text and "actions/runs" in text and "/jobs?per_page=100" in text
     assert "continue-on-error: true" in text  # сбой подсчёта минут не ломает табло
+
+
+def test_the_state_workflow_finds_the_pr_of_a_run_by_branch_when_the_run_data_has_none() -> None:
+    text = TEMPLATE_STATE.read_text(encoding="utf-8")
+    assert "gh pr list --state all" in text and "--argjson map" in text
+    assert ".pull_requests[0].number // $map[.head_branch]" in text  # слитый PR: поле пустое

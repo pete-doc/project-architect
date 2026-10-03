@@ -38,6 +38,9 @@ GOAL_TITLE = re.compile(r"^# GOAL — цель продукта «(.+)»", re.MU
 ADR_FILE = re.compile(r"^\d{4}-.+\.md$")
 INCIDENT_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<block>[A-Za-z0-9]+)-.+\.md$")
 LABEL_LIMIT = 30
+# Приёмка владельцем: state/acceptance/<id>.md с критериями «- [ ]» и итогом «Итог: принято владельцем, ДАТА».
+ACCEPTANCE_VERDICT = re.compile(r"^Итог:\s*принято владельцем,\s*\d{4}-\d{2}-\d{2}", re.MULTILINE)
+CRITERION_BOX = re.compile(r"^\s*- \[( |x|X)\]", re.MULTILINE)
 
 
 @dataclass
@@ -51,6 +54,7 @@ class Block:
     incidents: int = 0
     passes: bool = False
     shown: str = "planned"
+    acceptance_state: str = "absent"
 
 
 @dataclass
@@ -148,9 +152,23 @@ def matches(entry: str, key: str) -> bool:
     )
 
 
+def acceptance_state(project: Path, block_id: str) -> str:
+    """absent: файла приёмки нет; pending: критерии не отмечены или нет итога; accepted: принято."""
+    path = project / "state" / "acceptance" / f"{block_id}.md"
+    if not path.is_file():
+        return "absent"
+    text = path.read_text(encoding="utf-8")
+    boxes = [m[1] for m in CRITERION_BOX.finditer(text)]
+    if boxes and all(box in "xX" for box in boxes) and ACCEPTANCE_VERDICT.search(text):
+        return "accepted"
+    return "pending"
+
+
 def block_passes(block: Block, outcomes: dict[str, str]) -> bool:
-    """Блок прошёл, если у каждого теста приёмки есть запуски и все они «прошёл»."""
-    if not block.acceptance:
+    """Блок прошёл, если тесты приёмки прошли, а если есть файл приёмки, то и владелец принял."""
+    if block.acceptance_state == "accepted" and not block.acceptance:
+        return True  # блок без тестов: его принимает только владелец
+    if block.acceptance_state == "pending" or not block.acceptance:
         return False
     for entry in block.acceptance:
         states = [state for key, state in outcomes.items() if matches(entry, key)]
@@ -183,10 +201,16 @@ def find_cycle(blocks: list[Block]) -> list[str]:
     return []
 
 
-def compute(board: Board, outcomes: dict[str, str], incidents: dict[str, int]) -> None:
+def compute(
+    board: Board,
+    outcomes: dict[str, str],
+    incidents: dict[str, int],
+    acceptance: dict[str, str] | None = None,
+) -> None:
     by_id = {b.id: b for b in board.blocks}
     for block in board.blocks:
         block.incidents = incidents.get(block.id, 0)
+        block.acceptance_state = (acceptance or {}).get(block.id, "absent")
         block.passes = block_passes(block, outcomes)
         for dep in block.depends_on:
             if dep not in by_id:
@@ -202,9 +226,12 @@ def compute(board: Board, outcomes: dict[str, str], incidents: dict[str, int]) -
                 "— нарушение стандарта: причину блокировки нужно записать"
             )
         if block.status == "done" and not block.passes:
-            board.problems.append(
-                f"{block.id}: помечен «готово», но тесты приёмки не прошли или не найдены в отчёте"
+            why = (
+                "приёмка владельцем не оформлена (state/acceptance/)"
+                if block.acceptance_state == "pending"
+                else "тесты приёмки не прошли или не найдены в отчёте"
             )
+            board.problems.append(f"{block.id}: помечен «готово», но {why}")
             block.shown = "in_progress"
     changed = True
     while changed:  # «готово» только если готовы и все блоки, от которых он зависит
@@ -219,7 +246,7 @@ def compute(board: Board, outcomes: dict[str, str], incidents: dict[str, int]) -
     for (
         block
     ) in board.blocks:  # «готово» ставит только отчёт CI: тесты приёмки прошли, зависимости готовы
-        if block.status in {"planned", "in_progress"} and block.passes:
+        if block.status in {"planned", "in_progress", "waiting_owner"} and block.passes:
             if all(by_id[d].shown == "done" for d in block.depends_on if d in by_id):
                 block.shown = "done"
 
@@ -342,6 +369,7 @@ def render(
     decisions += adr_waiting(project)
     decisions += [
         f"**{b.id} «{b.title}»** {STATUS_VIEW[b.shown][1]}"
+        + (f", приёмка в `state/acceptance/{b.id}.md`" if b.acceptance_state == "pending" else "")
         + (f" (инцидентов: {b.incidents})" if b.incidents else "")
         for b in board.blocks
         if b.shown in {"waiting_owner", "stuck"}
@@ -587,7 +615,8 @@ def build(
     blocks, problems = read_blocks(project, criteria)
     board = Board(name, approved, criteria, blocks, problems)
     outcomes = read_outcomes(report)
-    compute(board, outcomes, incident_counts(project))
+    accepted = {b.id: acceptance_state(project, b.id) for b in blocks}
+    compute(board, outcomes, incident_counts(project), accepted)
     return render(
         board, project, outcomes, commit, date, previous_total(previous), prs,
         source or ReportSource(), ci_runs,
