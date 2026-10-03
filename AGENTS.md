@@ -20,12 +20,22 @@ pip install -r requirements-dev.txt
 ruff check .
 ruff format --check .
 pyright
-pytest
+python plugin/templates/ci/parch/parch_ci.py standard
 ```
 
-Для тестов C# и PowerShell нужны .NET SDK точной версии из `tests/projects/cs_shop/global.json` и PSScriptAnalyzer 1.25.0
-(`Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser`); без них эти тесты пропускаются
-локально, а в CI оба инструмента ставятся.
+Тесты идут параллельно (`pytest-xdist`, `-n auto`) в двух режимах:
+
+| Режим | Команда | Цель по времени | Когда |
+|---|---|---|---|
+| Быстрый | `pytest` | до 3 минут | всегда во время работы; тесты с маркером `slow` не идут |
+| Полный | `pytest -m ""` | до 15 минут | только в CI и один раз перед открытием PR |
+
+Маркер `slow` получает каждый тест, который запускает dotnet, pwsh, node или PSScriptAnalyzer (по фикстурам
+автоматически, остальные помечены вручную). Для полного режима нужны .NET SDK точной версии из
+`tests/projects/cs_shop/global.json`, PowerShell 7 (`pwsh`) с PSScriptAnalyzer 1.25.0
+(`Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser`) и Node; в CI всё это ставится.
+Если полный прогон падает из-за памяти (`Array buffer allocation failed`), не обходи это переключателями:
+напиши владельцу.
 
 Проверка манифестов плагина (нужен установленный Claude Code):
 
@@ -34,17 +44,24 @@ claude plugin validate ./plugin
 claude plugin validate .
 ```
 
-CI (`.github/workflows/ci.yml`) гоняет то же самое на Ubuntu; тесты hooks и запускающего файла дополнительно идут на Windows (job `windows-hooks`, только если PR меняет hooks, шаблоны или `.github`). PR только с `docs/**` и `state/**` проходит без тестов, только проверка структуры. Пока CI не зелёный, работа не закончена.
+CI (`.github/workflows/ci.yml`) идёт на Ubuntu; тесты hooks и запускающего файла дополнительно на Windows (job
+`windows-hooks`, только если PR меняет hooks, шаблоны или `.github`). PR только с `docs/**` и `state/**` проходит
+без тестов, только проверка структуры. Пока CI не зелёный, работа не закончена.
 
 К тому же CI применяет «храповик» продукта к самому репозиторию (`state/baseline.json`): число тестов не должно
-уменьшаться, пропущенных тестов не должно появляться. Новые тесты записываются в baseline так:
+уменьшаться, пропущенных тестов не должно появляться. Число тестов считается по полному сбору
+(`pytest --collect-only -o addopts=`), пропуски и падения берутся из `test-report.xml` полного прогона CI
+(артефакт `test-report`), а не из локального прогона. Новые тесты записываются в baseline так:
 
 ```bash
-pytest --junitxml=test-report.xml
+gh run download ИДЕНТИФИКАТОР_ПРОГОНА -n test-report
 python plugin/templates/ci/parch/parch_ci.py baseline --update --only-tests --report test-report.xml
 ```
 
-Удаление или переименование теста (`--accept-removed`) и пропуск теста (`--accept-skips`) возможны только с решением владельца.
+Прогон CI должен быть на том же коммите, что и тесты (в отчёте обязаны быть все тесты, иначе обновление
+откажется). Изменение одного `state/baseline.json` коммитится отдельно и проходит лёгкую проверку CI.
+Удаление или переименование теста (`--accept-removed`) и пропуск теста (`--accept-skips`) возможны только с
+решением владельца.
 
 ## Правила (из BUILD_PLAN.md, раздел 2)
 

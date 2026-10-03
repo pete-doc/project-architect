@@ -241,7 +241,10 @@ PY_TEST_ID = re.compile(r"^[^\s:]+\.py::\S")
 def py_test_ids(project: Path, report: Path | None = None) -> list[str]:
     """Тесты Python собираются самим pytest; отчёт не нужен."""
     del report
+    # `-o addopts=`: настройки по умолчанию (параллельный запуск, фильтр медленных тестов) не должны
+    # скрывать тесты от учёта: число тестов всегда считается по полному сбору.
     argv = [*python_tool("pytest"), "--collect-only", "-q", "-p", "no:cacheprovider"]
+    argv += ["-o", "addopts="]
     done = run(argv, project)
     if done.returncode not in (0, 5):
         raise ToolError("pytest не смог собрать тесты:\n" + tail(done))
@@ -897,6 +900,12 @@ def update_baseline(
     """Обновляет baseline; only_tests: только списки тестов и пропусков (репозиторий продукта)."""
     result = Result()
     baseline = Baseline(project)
+    if only_tests and report is None and language == "python":
+        raise ToolError(
+            "для baseline --only-tests нужен --report test-report.xml: пропуски и падения берутся "
+            "из отчёта CI (артефакт test-report), а не из локального прогона. Скачайте отчёт: "
+            "gh run download ИДЕНТИФИКАТОР -n test-report"
+        )
     outcomes = test_outcomes(project, language, report)
     if outcomes is None and language == "powershell":
         outcomes = {}  # PowerShell: тесты Pester не требуются (ADR-0010)

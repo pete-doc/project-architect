@@ -71,7 +71,8 @@ def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
     block = job_block(workflow, "check")
     assert "runs-on: ubuntu-latest" in block
     for step in (
-        "ruff check .", "ruff format --check .", "pyright", "pytest -v --junitxml=test-report.xml",
+        "ruff check .", "ruff format --check .", "pyright",
+        'pytest -v -m "" --junitxml=test-report.xml',
         "parch_ci.py tests --language python --report test-report.xml",
         "parch_ci.py skips --language python --report test-report.xml",
         "Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0",
@@ -79,7 +80,7 @@ def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
     ):  # fmt: skip
         assert step in block, step
     ratchet = "parch_ci.py tests --language python --report"
-    assert block.index("pytest -v --junitxml") < block.index(ratchet)
+    assert block.index("pytest -v -m") < block.index(ratchet)
 
 
 def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
