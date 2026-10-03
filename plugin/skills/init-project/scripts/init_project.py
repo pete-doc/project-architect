@@ -285,6 +285,7 @@ def render_constitution(name: str, description: str, priorities: str, languages:
         "{{ALLOWED_PACKAGES}}": packages,
         "{{CHECK_COMMANDS}}": check_text,
         "{{TOOL_VERSIONS}}": tool_versions_text(languages),
+        "{{STANDARD_VERSION}}": parch_ci.STANDARD_VERSION,
     }
     for key, value in values.items():
         template = template.replace(key, value)

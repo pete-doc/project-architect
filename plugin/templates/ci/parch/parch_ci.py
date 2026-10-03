@@ -3008,6 +3008,164 @@ COLLECTORS: dict[str, Collector] = {
     ),
 }
 
+# ---------- проверка standard: стоимость CI и бюджет текста (STANDARD.md 7.2, 11, 12) ----------
+
+STANDARD_VERSION = "1.3"
+STANDARD_MAX_TIMEOUT = 20
+STANDARD_BASE_RUNNER = "ubuntu-latest"
+# Единственный workflow, которому можно запускаться на push в main: пересчёт состояния после
+# слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
+STATE_WORKFLOW = "state"
+AGENTS_MAX_LINES = 150
+STANDARD_NOT_YET = (
+    "обязательные файлы проекта, features.json и MODULES.md, конкурирующие инструкции, "
+    ".md вне docs/, раздел «Основания» в PR, отчёты об инцидентах и статус stuck"
+)
+WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
+
+
+def yaml_children(lines: list[str], start: int) -> list[str]:
+    """Строки, вложенные глубже заголовка в строке `start` (пустые и комментарии пропускаются)."""
+    head = len(lines[start]) - len(lines[start].lstrip(" "))
+    found: list[str] = []
+    for line in lines[start + 1 :]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(line) - len(line.lstrip(" ")) <= head:
+            break
+        found.append(line)
+    return found
+
+
+def yaml_keys(lines: list[str]) -> dict[str, tuple[str, list[str]]]:
+    """Ключи верхнего уровня строк: имя -> (значение в строке, вложенные строки)."""
+    keys: dict[str, tuple[str, list[str]]] = {}
+    clean = [re.sub(r"\s+#.*$", "", line.rstrip()) for line in lines]
+    clean = [line for line in clean if line.strip() and not line.lstrip().startswith("#")]
+    if not clean:
+        return keys
+    top = min(len(line) - len(line.lstrip(" ")) for line in clean)
+    for index, line in enumerate(clean):
+        match = WORKFLOW_KEY.match(line)
+        if match is None or len(match["indent"]) != top:
+            continue
+        name = match["key"].strip("\"'")
+        keys[name] = (match["value"].strip(), yaml_children(clean, index))
+    return keys
+
+
+def accepted_adr_text(project: Path) -> str:
+    """Текст принятых ADR: только они разрешают нестандартные раннеры и матрицы."""
+    texts: list[str] = []
+    for path in sorted((project / "docs" / "adr").glob("[0-9][0-9][0-9][0-9]-*.md")):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"^- Статус:\s*accepted\b", text, re.MULTILINE | re.IGNORECASE):
+            texts.append(text)
+    return "\n".join(texts)
+
+
+def workflow_triggers(on_value: tuple[str, list[str]]) -> set[str]:
+    inline, children = on_value
+    if inline.startswith("["):
+        return {x.strip().strip("\"'") for x in inline.strip("[]").split(",") if x.strip()}
+    if inline and not inline.startswith("{"):
+        return {inline.strip("\"'")}
+    return set(yaml_keys(children))
+
+
+def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
+    """Нарушения правил 7.2 в одном workflow: таймаут, отмена, триггеры, раннеры, матрицы."""
+    rel = f".github/workflows/{path.name}"
+    top = yaml_keys(path.read_text(encoding="utf-8").splitlines())
+    problems: list[str] = []
+    if "jobs" not in top or not top["jobs"][1]:
+        return [
+            f"{rel}: не найден раздел jobs, workflow не удалось разобрать "
+            "(проверка не может считать его безопасным)"
+        ]
+    triggers = workflow_triggers(top.get("on", top.get("true", ("", []))))
+    allowed: set[str] = {"pull_request"}
+    if path.stem == STATE_WORKFLOW:
+        allowed.add("push")
+    extra = sorted(triggers - allowed)
+    if extra or not triggers:
+        problems.append(
+            f"{rel}: запуск на {', '.join(extra) or 'неизвестном событии'}. "
+            "CI запускается только на pull_request: тесты на коммите уже прошли в PR, "
+            "повторный прогон тратит квоту. Для пересчёта состояния после слияния допускается "
+            f"только workflow {STATE_WORKFLOW}.yml. Другой запуск возможен только через ADR "
+            "с оценкой минут квоты (ADR-0011)."
+        )
+    concurrency = top.get("concurrency")
+    cancels = concurrency is not None and any(
+        re.match(r"\s*cancel-in-progress:\s*true\s*$", line) for line in concurrency[1]
+    )
+    if not cancels:
+        problems.append(
+            f"{rel}: нет concurrency с cancel-in-progress: true. Без отмены каждый новый push "
+            "запускает полный прогон поверх старого. Добавьте на верхнем уровне: "
+            "concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}."
+        )
+    for job, (_, body) in yaml_keys(top["jobs"][1]).items():
+        fields = yaml_keys(body)
+        timeout = fields.get("timeout-minutes", ("", []))[0]
+        if not timeout.isdigit() or not 1 <= int(timeout) <= STANDARD_MAX_TIMEOUT:
+            problems.append(
+                f"{rel}, задание {job}: timeout-minutes {timeout or 'не задан'} "
+                f"(нужно число от 1 до {STANDARD_MAX_TIMEOUT}). По умолчанию GitHub ждёт "
+                "360 минут, и один зависший тест стоит шесть часов квоты."
+            )
+        runner = fields.get("runs-on", ("", []))[0].strip("\"'")
+        if "uses" not in fields and not runner:
+            problems.append(f"{rel}, задание {job}: не задан runs-on, раннер неизвестен.")
+        elif runner and runner != STANDARD_BASE_RUNNER and runner not in adr_text:
+            problems.append(
+                f"{rel}, задание {job}: раннер {runner} не разрешён ни одним принятым ADR. "
+                "Windows считается в квоте как x2, macOS как x10. Если раннер нужен, оформите ADR "
+                "с оценкой минут квоты за один прогон и назовите в нём этот раннер; иначе "
+                f"используйте {STANDARD_BASE_RUNNER}."
+            )
+        if (
+            "strategy" in fields
+            and any("matrix" in line for line in fields["strategy"][1])
+            and not (path.name in adr_text and re.search("matrix|матриц", adr_text, re.IGNORECASE))
+        ):
+            problems.append(
+                f"{rel}, задание {job}: матрица умножает минуты квоты. Она допускается, только "
+                f"если принятый ADR называет файл {path.name} и объясняет матрицу с оценкой "
+                "стоимости."
+            )
+    return problems
+
+
+def check_standard(project: Path, language: str) -> Result:
+    """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
+    del language
+    result = Result()
+    problems: list[str] = []
+    workflows = sorted((project / ".github" / "workflows").glob("*.y*ml"))
+    adr_text = accepted_adr_text(project)
+    for path in workflows:
+        problems.extend(standard_workflow_problems(path, adr_text))
+    agents = project / "AGENTS.md"
+    if agents.is_file():
+        size = len(agents.read_text(encoding="utf-8").splitlines())
+        if size > AGENTS_MAX_LINES:
+            problems.append(
+                f"AGENTS.md: {size} строк, бюджет {AGENTS_MAX_LINES}. Длинные инструкции модель "
+                "выполняет хуже коротких: перенесите детали в docs/ и оставьте ссылки."
+            )
+    if problems:
+        result.fail(f"Нарушения стандарта {STANDARD_VERSION} ({len(problems)}):", *shown(problems))
+        return result
+    result.note(
+        f"Стандарт {STANDARD_VERSION}: проверено workflow {len(workflows)} (таймауты, отмена, "
+        "триггеры, раннеры, матрицы) и размер AGENTS.md."
+    )
+    result.note(f"Пока не проверяется: {STANDARD_NOT_YET}.")
+    return result
+
+
 CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "tests": check_tests,
     "modules": check_modules,
@@ -3021,6 +3179,7 @@ CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "settings": check_settings,
     "thin": check_thin,
     "psscriptanalyzer": check_psscriptanalyzer,
+    "standard": check_standard,
 }
 COLLECTOR_CHECKS = {
     "tests",

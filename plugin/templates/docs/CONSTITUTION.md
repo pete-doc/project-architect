@@ -9,6 +9,11 @@
 
 {{DESCRIPTION}}
 
+## Версия стандарта
+
+ProjectArchitect {{STANDARD_VERSION}} (docs/STANDARD.md в репозитории продукта). При выходе новой версии
+`/parch:analyze-existing` покажет, что изменилось.
+
 ## Что для владельца важно
 
 {{PRIORITIES}}

@@ -101,3 +101,21 @@ def test_every_version_in_the_section_is_exact() -> None:
     for line in bullets:
         assert not re.search(r"[\^~*]|latest", line), line
         assert re.search(r"\d+\.\d+", line), line
+
+
+# ---------- версия стандарта ----------
+
+
+def test_the_constitution_template_names_the_standard_version() -> None:
+    from parch_ci import STANDARD_VERSION
+
+    text: str = load_init().render_constitution("Демо", "d", "p", ["python"])
+    assert f"ProjectArchitect {STANDARD_VERSION}" in text
+    assert "{{" not in text  # все места подстановки заполнены
+
+
+def test_the_standard_document_has_the_version_the_checks_implement() -> None:
+    from parch_ci import STANDARD_VERSION
+
+    standard = (REPO / "docs" / "STANDARD.md").read_text(encoding="utf-8")
+    assert f"версия {STANDARD_VERSION} ·" in standard.splitlines()[2]
