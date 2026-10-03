@@ -9,8 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from tests.test_report_gaps import FULL_PY, PY_TESTS, THREE_PY, write
+from test_report_gaps import FULL_PY, PY_TESTS, THREE_PY, write
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
