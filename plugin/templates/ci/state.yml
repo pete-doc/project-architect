@@ -67,7 +67,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           since=$(date -u -d '8 days ago' +%Y-%m-%d)
-          gh api --paginate -X GET "repos/${{ github.repository }}/actions/runs" -f per_page=100 -f created=">=$since" --jq '.workflow_runs[] | {id, pr: (.pull_requests[0].number // null), created: .created_at, conclusion}' > "$RUNNER_TEMP/runs.jsonl"
+          # pull_requests в данных прогона бывает пустым (например, у слитого PR): ищем PR по ветке
+          prmap=$(gh pr list --state all --limit 300 --json number,headRefName --jq 'map({(.headRefName): .number}) | add // {}')
+          gh api --paginate -X GET "repos/${{ github.repository }}/actions/runs" -f per_page=100 -f created=">=$since" | jq -c --argjson map "$prmap" '.workflow_runs[] | {id, pr: (.pull_requests[0].number // $map[.head_branch]), created: .created_at, conclusion}' > "$RUNNER_TEMP/runs.jsonl"
           : > "$RUNNER_TEMP/ci-runs.jsonl"
           while IFS= read -r run; do
             id=$(echo "$run" | jq -r .id)
