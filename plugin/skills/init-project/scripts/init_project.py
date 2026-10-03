@@ -78,6 +78,24 @@ CS_TEST_COMMAND = (
 CS_CHECK_FLAGS = "--language csharp --report test-results"
 CS_LOCAL_CI_CHECKS = ("settings", "tests", "skips", "modules", "deps", "dead-code", "architecture")
 
+# PowerShell: только тонкий «клей» (ADR-0010); тестов, покрытия, архитектуры и дублей нет.
+PS_CHECK_FLAGS = "--language powershell"
+PS_LOCAL_CI_CHECKS = ("psscriptanalyzer", "thin", "suppressions", "settings")
+PS_THRESHOLDS = """
+## Пороги тонкости PowerShell
+
+Скрипты PowerShell только запускают программы; логика живёт в Python или C# (ADR-0010).
+Команды, циклы, условия и функции считает разбор PowerShell (AST);
+общий бюджет действует на весь PowerShell проекта.
+
+- max_commands: 15
+- max_loops: 0
+- max_conditions: 2
+- max_functions: 0
+- max_total_commands: 30
+- max_total_conditions: 4
+"""
+
 LANGUAGES = {
     "python": Language(
         "Python 3.12+ (ruff, pyright, pytest, import-linter, vulture, deptry, jscpd)",
@@ -114,16 +132,17 @@ LANGUAGES = {
         ),
     ),
     "powershell": Language(
-        "PowerShell (PSScriptAnalyzer, Pester)",
+        "PowerShell (только тонкий «клей» для запуска программ: PSScriptAnalyzer, пороги тонкости)",
         "psgallery",
-        "Pester, PSScriptAnalyzer",
-        (),
+        "PSScriptAnalyzer",
+        tuple(f"python {CI_SCRIPT} {check} {PS_CHECK_FLAGS}" for check in PS_LOCAL_CI_CHECKS),
     ),
 }
 CI_TEMPLATES = {
     "python": "python.yml",
     "typescript": "typescript.yml",
     "csharp": "csharp.yml",
+    "powershell": "powershell.yml",
 }
 GITIGNORE_LINES = [".claude/audit/", ".claude/settings.local.json"]
 GITIGNORE_BY_LANGUAGE = {
@@ -177,11 +196,12 @@ def initial_baseline(project: Path, languages: list[str]) -> dict[str, Any]:
         "skipped_tests": {},
         "config": {},
     }
-    for lang in (item for item in languages if item in first_tests):
+    for lang in languages:
         rules = parch_ci.RULES[lang]
-        baseline["tests"][lang] = first_tests[lang]
-        baseline["dead_code"][lang] = []
-        baseline["skipped_tests"][lang] = []
+        if lang in first_tests:
+            baseline["tests"][lang] = first_tests[lang]
+            baseline["dead_code"][lang] = []
+            baseline["skipped_tests"][lang] = []
         baseline["skips"][lang] = parch_ci.scan_counts(project, lang, rules.skip_patterns, True)
         baseline["suppressions"][lang] = parch_ci.scan_counts(
             project, lang, rules.suppression_patterns, False, in_comments=True
@@ -224,13 +244,7 @@ def render_constitution(name: str, description: str, priorities: str, languages:
     stack = "\n".join(f"- {item.title}" for item in chosen)
     packages = "\n".join(f"- {item.ecosystem}: {item.packages}" for item in chosen)
     commands = [cmd for item in chosen for cmd in item.checks]
-    pending = [lang for lang in languages if not LANGUAGES[lang].checks]
     check_text = "\n".join(f"- {cmd}" for cmd in commands)
-    if pending:
-        names = ", ".join(pending)
-        check_text += ("\n\n" if check_text else "") + (
-            f"Команды проверки для {names} появятся вместе с CI-шаблоном для этого языка."
-        )
     values = {
         "{{PROJECT_NAME}}": name,
         "{{DESCRIPTION}}": description.strip() or "(Опишите проект одной-двумя фразами.)",
@@ -243,6 +257,8 @@ def render_constitution(name: str, description: str, priorities: str, languages:
     }
     for key, value in values.items():
         template = template.replace(key, value)
+    if "powershell" in languages:
+        template = template.rstrip("\n") + "\n" + PS_THRESHOLDS
     return template
 
 
@@ -404,6 +420,8 @@ def init_project(
         create_typescript_files(project, report, name)
     if "csharp" in languages:
         create_csharp_files(project, report)
+    if "powershell" in languages:
+        report.copy("powershell/PSScriptAnalyzerSettings.psd1", "PSScriptAnalyzerSettings.psd1")
     if any(lang in CI_TEMPLATES for lang in languages):
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
         report.write(
@@ -413,11 +431,6 @@ def init_project(
         if lang in CI_TEMPLATES:
             workflow = "ci.yml" if lang == languages[0] or lang == "python" else f"ci-{lang}.yml"
             report.copy(f"ci/{CI_TEMPLATES[lang]}", f".github/workflows/{workflow}")
-        else:
-            report.notes.append(
-                f"CI-шаблона для {lang} пока нет (появится в фазе D): создана только запись "
-                "в CONSTITUTION.md."
-            )
     merge_permissions(report)
     update_gitignore(report, languages)
     adr.build_index(project)

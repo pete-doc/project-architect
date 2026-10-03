@@ -159,14 +159,17 @@ def test_init_keeps_existing_ci_and_merges_permissions(tmp_path: Path) -> None:
     assert "Edit(/.github/**)" in settings["permissions"]["ask"]
 
 
-def test_init_for_languages_without_ci_template_says_so(tmp_path: Path) -> None:
-    result = init(tmp_path, languages=["powershell"])
-    assert not (tmp_path / ".github").exists()
-    assert not (tmp_path / "tests").exists()
-    assert any("powershell" in note and "фазе D" in note for note in result["notes"])
-    constitution = (tmp_path / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
-    assert "- psgallery: Pester, PSScriptAnalyzer" in constitution
-    assert "появятся вместе с CI-шаблоном" in constitution
+def test_every_supported_language_has_a_ci_template() -> None:
+    spec = importlib.util.spec_from_file_location("init_project_module", INIT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    templates: dict[str, str] = module.CI_TEMPLATES
+    languages: dict[str, Any] = module.LANGUAGES
+    assert set(templates) == set(languages)
+    for name in templates.values():
+        assert (REPO / "plugin" / "templates" / "ci" / name).is_file(), name
 
 
 @pytest.mark.parametrize(
