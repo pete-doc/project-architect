@@ -524,7 +524,7 @@ def test_the_python_template_hands_its_report_to_the_state_job() -> None:
 
 def test_adr_0012_records_the_choice_of_the_status_branch() -> None:
     adr = (REPO / "docs" / "adr" / "0012-tablo-status-na-vetke.md").read_text(encoding="utf-8")
-    assert "- Статус: proposed" in adr
+    assert "- Статус: accepted (утверждён владельцем, 2026-10-03)" in adr
     for fact in (
         "ветке `status`",
         "обход",
