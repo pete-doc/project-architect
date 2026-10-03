@@ -3,6 +3,7 @@
 На каждое правило есть заведомо плохой пример, который проверка обязана остановить.
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -291,3 +292,32 @@ def test_the_product_check_timeout_is_25_and_is_recorded_in_adr_0011() -> None:
     adr = (REPO / "docs" / "adr" / "0011-ci-ubuntu-po-umolchaniyu.md").read_text(encoding="utf-8")
     assert "`timeout-minutes: 25`" in adr
     assert "ключи кэша не виноваты" in adr and "1,9 раза" in adr
+
+
+# ---------- блоки «заблокирован» обязаны иметь отчёт об инциденте ----------
+
+
+def features_file(root: Path, *items: tuple[str, str]) -> None:
+    (root / "state").mkdir(exist_ok=True)
+    features = [{"id": i, "status": status} for i, status in items]
+    (root / "state" / "features.json").write_text(
+        json.dumps({"version": 1, "features": features}), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("status", ["blocked", "stuck"])
+def test_a_blocked_block_without_an_incident_report_fails(tmp_path: Path, status: str) -> None:
+    root = project(tmp_path)
+    features_file(root, ("F4", status))
+    out = fails(root, "блок F4", status, "waiting_owner")
+    assert "state/incidents/" in out
+
+
+def test_a_blocked_block_with_its_own_incident_report_passes(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    features_file(root, ("F4", "blocked"), ("F5", "waiting_owner"), ("F6", "planned"))
+    (root / "state" / "incidents").mkdir()
+    (root / "state" / "incidents" / "2026-10-04-F9-other.md").write_text("x", encoding="utf-8")
+    fails(root, "блок F4")  # отчёт чужого блока не считается
+    (root / "state" / "incidents" / "2026-10-04-F4-loop.md").write_text("x", encoding="utf-8")
+    passes(root)  # waiting_owner и planned отчёта не требуют

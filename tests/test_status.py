@@ -196,17 +196,52 @@ def test_a_draft_goal_waits_for_the_owner_and_an_approved_one_does_not(tmp_path:
 
 
 def test_blocked_blocks_and_their_incidents_are_put_in_front_of_the_owner(tmp_path: Path) -> None:
-    root = make(tmp_path, [feature("F9", ["G1"], [], "blocked", title="Выгрузка в PDF")])
+    root = make(
+        tmp_path,
+        [
+            feature("F9", ["G1"], [], "blocked", title="Выгрузка в PDF"),
+            feature("F8", ["G1"], [], "waiting_owner", title="Пилот на живом проекте"),
+        ],
+    )
     incidents = root / "state" / "incidents"
     incidents.mkdir()
     (incidents / "2026-10-14-F9-loop.md").write_text("# отчёт\n", encoding="utf-8")
     (incidents / "2026-10-15-F9-blocker.md").write_text("# отчёт\n", encoding="utf-8")
     (incidents / "2026-10-15-F2-loop.md").write_text("# другой блок\n", encoding="utf-8")
     text = board(root)
-    assert "**F9 «Выгрузка в PDF»** заблокирован (2 инцидентов)" in section(
-        text, "Нужно ваше решение"
+    decisions = section(text, "Нужно ваше решение")
+    assert "**F8 «Пилот на живом проекте»** ждёт владельца" in decisions
+    assert "F9" not in decisions  # заблокированный блок ждёт не владельца, а устранения причины
+    assert "F9 «Выгрузка в PDF» — заблокирован (инцидентов: 2)" in section(text, "В работе")
+    assert "| ⛔ заблокирован | — | 2 |" in text and "| 🙋 ждёт владельца |" in text
+    assert "Замечания к плану" not in text  # у блока есть отчёты об инцидентах
+
+
+def test_blocked_or_stuck_without_an_incident_report_is_flagged_on_the_board(
+    tmp_path: Path,
+) -> None:
+    root = make(
+        tmp_path,
+        [feature("F1", ["G1"], [], "blocked"), feature("F2", ["G1"], [], "stuck")],
     )
-    assert "| 🔨" not in text and "| ⛔ заблокирован | — | 2 |" in text
+    problems = section(board(root), "Замечания к плану")
+    assert "F1: статус «заблокирован» без отчёта в state/incidents/" in problems
+    assert "F2: статус «застрял» без отчёта в state/incidents/" in problems
+
+
+def test_report_from_another_commit_is_called_out_with_the_report_commit(tmp_path: Path) -> None:
+    root = make(tmp_path, [feature("F1", ["G1"], ["tests/test_a.py"])], junit(PASS_A))
+    stale = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "no")
+    assert (
+        "> ⚠ **Отчёт тестов снят не с текущего коммита:** отчёт с `9f8e7d6`, табло на `abc1234`"
+        in (stale)
+    )
+    assert "Это не текущий коммит `abc1234`" in section(stale, "Тесты")
+    same = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "yes")
+    assert "⚠" not in same and "коммите `9f8e7d6`" in section(same, "Тесты")
+    unknown = board(root)  # коммит отчёта не передан: так тоже нельзя молчать
+    assert "коммит отчёта не указан" in unknown
+    assert "⚠" not in board(make(tmp_path / "n", []))  # без отчёта предупреждать не о чем
 
 
 def test_adr_waiting_for_approval_and_open_questions_are_listed(tmp_path: Path) -> None:
@@ -429,7 +464,7 @@ def test_the_product_has_a_consistent_goal_and_plan() -> None:
 def test_the_product_goal_is_a_draft_until_the_owner_approves_it() -> None:
     goal = (REPO / "docs" / "GOAL.md").read_text(encoding="utf-8")
     assert "# GOAL — цель продукта «ProjectArchitect»" in goal
-    for criterion in ("G1", "G2", "G3", "G4", "G5"):
+    for criterion in ("G1", "G2", "G3", "G4", "G5", "G6"):
         assert f"**{criterion}.**" in goal
 
 
@@ -471,6 +506,7 @@ def test_the_state_workflow_runs_no_tests_and_publishes_only_to_the_status_branc
     assert "git push origin HEAD:status" in text
     assert "git push origin HEAD:main" not in text and "pytest" not in text
     assert "gh run download" in text and "-n test-report" in text
+    assert "--report-commit" in text and "--report-same-tree" in text
 
 
 def test_the_product_state_workflow_is_the_template_with_the_plugin_script_path() -> None:
@@ -497,3 +533,17 @@ def test_adr_0012_records_the_choice_of_the_status_branch() -> None:
         "правила 10",
     ):
         assert fact in adr, fact
+
+
+def test_the_product_goal_is_approved_and_g6_is_tied_to_blocks() -> None:
+    goal = (REPO / "docs" / "GOAL.md").read_text(encoding="utf-8")
+    assert "Статус: утверждена владельцем, 2026-10-03" in goal
+    assert "**G6.** ИИ не теряет нить проекта" in goal
+    blocks = json.loads((REPO / "state" / "features.json").read_text(encoding="utf-8"))["features"]
+    g6 = {b["id"]: b["title"] for b in blocks if "G6" in b["goal"]}
+    assert {"F13", "F14", "F18"} <= set(
+        g6
+    )  # инциденты и петли, проверка стандарта, прослеживаемость
+    assert "Прослеживаемость цели до кода" in g6.values()
+    pilot = next(b for b in blocks if b["id"] == "F17")
+    assert pilot["status"] == "waiting_owner"  # пилот ждёт владельца, а не «заблокирован»

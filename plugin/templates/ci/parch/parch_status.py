@@ -27,6 +27,7 @@ STATUS_VIEW = {
     "in_progress": ("🔨", "в работе", "work"),
     "blocked": ("⛔", "заблокирован", "blocked"),
     "stuck": ("🛑", "застрял", "blocked"),
+    "waiting_owner": ("🙋", "ждёт владельца", "blocked"),
     "done": ("✅", "готово", "done"),
     "dropped": ("➖", "отказ", "later"),
 }
@@ -50,6 +51,14 @@ class Block:
     incidents: int = 0
     passes: bool = False
     shown: str = "planned"
+
+
+@dataclass
+class ReportSource:
+    """Откуда отчёт тестов: коммит отчёта и совпадает ли его содержимое с текущим коммитом."""
+
+    commit: str = ""
+    same_tree: bool = False
 
 
 @dataclass
@@ -187,6 +196,11 @@ def compute(board: Board, outcomes: dict[str, str], incidents: dict[str, int]) -
         board.problems.append("цикл зависимостей между блоками: " + " → ".join(cycle))
     for block in board.blocks:
         block.shown = block.status
+        if block.status in {"blocked", "stuck"} and block.incidents == 0:
+            board.problems.append(
+                f"{block.id}: статус «{STATUS_VIEW[block.status][1]}» без отчёта в state/incidents/ "
+                "— нарушение стандарта: причину блокировки нужно записать"
+            )
         if block.status == "done" and not block.passes:
             board.problems.append(
                 f"{block.id}: помечен «готово», но тесты приёмки не прошли или не найдены в отчёте"
@@ -304,11 +318,15 @@ def render(
     date: str,
     previous: int | None,
     prs: list[dict[str, Any]],
+    source: ReportSource,
 ) -> str:
     out = [f"# Прогресс: {headline(board) if board.blocks else 'блоков пока нет'}"]
     out.append(
         f"Обновлено: {date}, коммит `{commit}` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`"
     )
+    stale = report_warning(outcomes, source, commit)
+    if stale:
+        out += ["", f"> ⚠ {stale}"]
     out.append("")
     decisions: list[str] = []
     if not board.approved:
@@ -322,9 +340,10 @@ def render(
     ]
     decisions += adr_waiting(project)
     decisions += [
-        f"**{b.id} «{b.title}»** {STATUS_VIEW[b.shown][1]} ({b.incidents} инцидентов)"
+        f"**{b.id} «{b.title}»** {STATUS_VIEW[b.shown][1]}"
+        + (f" (инцидентов: {b.incidents})" if b.incidents else "")
         for b in board.blocks
-        if b.shown in {"blocked", "stuck"}
+        if b.shown in {"waiting_owner", "stuck"}
     ]
     decisions += open_questions(project)
     out += (
@@ -335,6 +354,11 @@ def render(
     working = [f"- **PR #{p['number']}** «{p['title']}» — {checks_text(p)}" for p in prs]
     working += [
         f"- {b.id} «{b.title}» — идёт работа" for b in board.blocks if b.shown == "in_progress"
+    ]
+    working += [
+        f"- {b.id} «{b.title}» — заблокирован (инцидентов: {b.incidents}), причина в `state/incidents/`"
+        for b in board.blocks
+        if b.shown == "blocked"
     ]
     out += ["## В работе"] + (working or ["- ничего не открыто"]) + [""]
     if board.blocks:
@@ -361,7 +385,7 @@ def render(
             "Блоков пока нет. Планировщик заводит их в `state/features.json` после утверждения цели.",
             "",
         ]
-    out += tests_section(outcomes, previous)
+    out += tests_section(outcomes, previous, source, commit)
     out += [
         "## Расход CI",
         "Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), [бюджеты](https://github.com/settings/billing/budgets).",
@@ -426,7 +450,26 @@ def plan_table(board: Board) -> list[str]:
     return rows
 
 
-def tests_section(outcomes: dict[str, str], previous: int | None) -> list[str]:
+def report_warning(outcomes: dict[str, str], source: ReportSource, commit: str) -> str:
+    """Предупреждение, если отчёт тестов снят не с содержимого текущего коммита ("" = всё в порядке)."""
+    if not outcomes:
+        return ""
+    if not source.commit:
+        return (
+            "**Отчёт тестов снят неизвестно когда:** коммит отчёта не указан, "
+            "готовность блоков может не соответствовать коду."
+        )
+    if source.same_tree:
+        return ""
+    return (
+        f"**Отчёт тестов снят не с текущего коммита:** отчёт с `{source.commit}`, табло на `{commit}`. "
+        "Готовность блоков и счётчики тестов могут отставать от кода."
+    )
+
+
+def tests_section(
+    outcomes: dict[str, str], previous: int | None, source: ReportSource, commit: str
+) -> list[str]:
     if not outcomes:
         return ["## Тесты", "Отчёта о запуске тестов пока нет.", ""]
     total = len(outcomes)
@@ -439,7 +482,12 @@ def tests_section(outcomes: dict[str, str], previous: int | None) -> list[str]:
     )
     out = ["## Тесты", line, f"- Упавших: **{len(failed)}**. Пропущенных: **{len(skipped)}**."]
     out += [f"  - упал: {k}" for k in failed[:10]]
-    return [*out, "- Источник: отчёт последнего прогона CI на этом коммите.", ""]
+    where = f"отчёт прогона CI на коммите `{source.commit}`" if source.commit else "отчёт CI"
+    if report_warning(outcomes, source, commit):
+        origin = f"- Источник: {where}. ⚠ Это не текущий коммит `{commit}`: данные могли устареть."
+    else:
+        origin = f"- Источник: {where} (то же содержимое, что у табло)."
+    return [*out, origin, ""]
 
 
 def previous_total(path: Path | None) -> int | None:
@@ -456,13 +504,17 @@ def build(
     date: str,
     previous: Path | None,
     prs: list[dict[str, Any]],
+    source: ReportSource | None = None,
 ) -> str:
     name, approved, criteria = read_goal(project)
     blocks, problems = read_blocks(project, criteria)
     board = Board(name, approved, criteria, blocks, problems)
     outcomes = read_outcomes(report)
     compute(board, outcomes, incident_counts(project))
-    return render(board, project, outcomes, commit, date, previous_total(previous), prs)
+    return render(
+        board, project, outcomes, commit, date, previous_total(previous), prs,
+        source or ReportSource(),
+    )  # fmt: skip
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -477,6 +529,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--previous", default=None, help="прежний STATUS.md: из него берётся число тестов"
     )
+    parser.add_argument("--report-commit", default="", help="коммит, с которого снят отчёт тестов")
+    parser.add_argument(
+        "--report-same-tree",
+        choices=["yes", "no"],
+        default="no",
+        help="yes, если содержимое коммита отчёта совпадает с текущим коммитом",
+    )
     parser.add_argument("--prs", default=None, help="JSON со списком открытых PR")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
@@ -490,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         text = build(
             project, Path(args.report) if args.report else None, args.commit, date,
             Path(args.previous) if args.previous else None, prs,
+            ReportSource(args.report_commit, args.report_same_tree == "yes"),
         )  # fmt: skip
     except (ValueError, OSError, json.JSONDecodeError) as error:
         sys.stderr.write(f"[parch:status] ПРОВАЛ: {error}\n")

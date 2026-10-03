@@ -1,6 +1,7 @@
 """Охранные hooks: попытка нарушения -> блок (код 2) -> понятное сообщение агенту."""
 
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,41 @@ def test_destructive_message_is_actionable(project: Path) -> None:
 def test_powershell_tool_is_covered(project: Path) -> None:
     result = run_hook("guard_destructive.py", powershell("Remove-Item x -Recurse -Force"), project)
     assert_blocked(result, "guard_destructive")
+
+
+# Удаление внутри системной временной папки вне проекта разрешено; всё остальное по-прежнему нет.
+
+
+def test_recursive_delete_in_system_temp_outside_project_is_allowed(project: Path) -> None:
+    scratch = Path(tempfile.gettempdir()) / "parch-scratch" / "report"
+    for command in (f'rm -rf "{scratch}"', "rm -rf $TEMP/parch-scratch", "rm -rf ${TMPDIR}/x"):
+        assert run_hook("guard_destructive.py", bash(command), project).code == 0, command
+    for command in (f"Remove-Item {scratch} -Recurse -Force", r"Remove-Item $env:TEMP\x -r -fo"):
+        assert run_hook("guard_destructive.py", powershell(command), project).code == 0, command
+
+
+def test_system_temp_exception_has_limits(project: Path) -> None:
+    temp = Path(tempfile.gettempdir())
+    outside = temp.anchor + "somewhere"
+    bad = [
+        f'rm -rf "{temp}"',  # сама временная папка
+        "rm -rf $TEMP",
+        "rm -rf $TEMP/*",  # маска
+        f"rm -rf {temp}/a/../..",  # выход вверх
+        f"rm -rf {temp}/ok {outside}",  # одна цель за пределами
+        f"rm -rf {outside}",
+        f'rm -rf "{project}"',  # проект лежит во временной папке тестов
+        f'rm -rf "{project / "src"}"',
+        f'rm -rf "{project.parent}"',  # папка выше проекта
+        "rm -rf scratch",  # относительный путь заранее не проверить
+        "rm -rf $HOME/x",
+        "rm -rf",
+    ]
+    for command in bad:
+        result = run_hook("guard_destructive.py", bash(command), project)
+        assert_blocked(result, "guard_destructive")
+    cmd_form = run_hook("guard_destructive.py", bash(f"rd /s /q {temp}/x"), project)
+    assert_blocked(cmd_form, "guard_destructive")
 
 
 @pytest.mark.parametrize("command", HARMLESS)

@@ -3057,7 +3057,7 @@ STATE_WORKFLOW = "state"
 AGENTS_MAX_LINES = 150
 STANDARD_NOT_YET = (
     "обязательные файлы проекта, features.json и MODULES.md, конкурирующие инструкции, "
-    ".md вне docs/, раздел «Основания» в PR, отчёты об инцидентах и статус stuck"
+    ".md вне docs/, раздел «Основания» в PR, счётчик инцидентов и порог stuck (D2-4)"
 )
 WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
 
@@ -3208,6 +3208,35 @@ def target_os_problem(project: Path) -> str | None:
     )
 
 
+INCIDENT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<block>[A-Za-z0-9]+)-.+\.md$")
+
+
+def blocked_without_incident_problems(project: Path) -> list[str]:
+    """Блок в статусе blocked или stuck обязан иметь отчёт state/incidents/ДАТА-БЛОК-*.md."""
+    path = project / "state" / "features.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [f"{path.name}: не читается как JSON"]
+    folder = project / "state" / "incidents"
+    files: list[Path] = sorted(folder.iterdir()) if folder.is_dir() else []
+    reported = {m["block"] for m in (INCIDENT_NAME.match(f.name) for f in files) if m}
+    problems: list[str] = []
+    for entry in as_list(as_dict(data).get("features")):
+        item = as_dict(entry)
+        if item.get("status") in {"blocked", "stuck"}:
+            block = str(item.get("id", "?"))
+            if block not in reported:
+                problems.append(
+                    f"state/features.json: блок {block} в статусе «{item['status']}» без отчёта "
+                    f"state/incidents/ГГГГ-ММ-ДД-{block}-причина.md. Запишите, что случилось и "
+                    "чего ждёте; если решения ждёте от владельца, поставьте статус waiting_owner."
+                )
+    return problems
+
+
 def check_standard(project: Path, language: str) -> Result:
     """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
     del language
@@ -3220,6 +3249,7 @@ def check_standard(project: Path, language: str) -> Result:
     os_problem = target_os_problem(project)
     if os_problem:
         problems.append(os_problem)
+    problems.extend(blocked_without_incident_problems(project))
     agents = project / "AGENTS.md"
     if agents.is_file():
         size = len(agents.read_text(encoding="utf-8").splitlines())

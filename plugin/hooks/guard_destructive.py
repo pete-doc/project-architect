@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from _common import (
@@ -45,6 +47,10 @@ _SECRET_DIRS = {".ssh", ".gnupg"}
 _PS_RECURSE = re.compile(r"^-r(e(c(u(r(se?)?)?)?)?)?$", re.IGNORECASE)
 _PS_FORCE = re.compile(r"^-fo(r(ce?)?)?$", re.IGNORECASE)
 _PS_REMOVE = {"remove-item", "ri", "del", "erase", "rd", "rmdir", "rm"}
+_TEMP_VARIABLE = re.compile(
+    r"\$(?:env:)?\{?(?:TEMP|TMPDIR|TMP)\}?(?![A-Za-z0-9_])|%(?:TEMP|TMP)%", re.I
+)
+_UNRESOLVED = set("$%*?[]~`{}")
 
 
 def is_secret_path(path: str) -> bool:
@@ -89,6 +95,31 @@ def _deletes_recursively_and_forcibly(tokens: list[str]) -> bool:
         if "/s" in lowered:
             return True
     return False
+
+
+def _inside_system_temp(target: str, project: Path) -> bool:
+    """True, если путь заведомо лежит внутри системной временной папки и не задевает проект."""
+    temp = Path(tempfile.gettempdir()).resolve()
+    if _UNRESOLVED & set(_TEMP_VARIABLE.sub("", target)):
+        return False  # переменные, маски и ~ заранее не раскрыть
+    text = _TEMP_VARIABLE.sub(lambda _: str(temp), target)
+    if os.name == "nt" and re.match(r"^/[a-zA-Z]/", text):
+        text = f"{text[1]}:{text[2:]}"  # путь Git Bash: /c/Users/... -> C:/Users/...
+    if ".." in re.split(r"[\\/]", text) or not Path(text).is_absolute():
+        return False
+    path = Path(text).resolve()
+    if path == temp or temp not in path.parents:
+        return False
+    root = project.resolve()
+    return not (path == root or path in root.parents or root in path.parents)
+
+
+def _removes_only_system_temp(tokens: list[str], project: Path) -> bool:
+    """Удаление, у которого все цели лежат внутри системной временной папки вне проекта."""
+    if any(t.lower() == "/s" for t in tokens[1:]):
+        return False  # форма cmd (rd /s) целей не разбираем
+    targets = [t for t in tokens[1:] if not t.startswith("-")]
+    return bool(targets) and all(_inside_system_temp(t, project) for t in targets)
 
 
 def _force_pushes(tokens: list[str]) -> bool:
@@ -143,14 +174,17 @@ def _dumps_environment(tokens: list[str]) -> bool:
     )
 
 
-def _command_block(command: str) -> Block | None:
+def _command_block(command: str, project: Path) -> Block | None:
     for tokens in command_tokens(command):
-        if _deletes_recursively_and_forcibly(tokens):
+        if _deletes_recursively_and_forcibly(tokens) and not _removes_only_system_temp(
+            tokens, project
+        ):
             return Block(
                 HOOK,
                 "Рекурсивное принудительное удаление (rm -rf, Remove-Item -Recurse -Force, "
                 "rd /s) запрещено: его нельзя отменить. Удаляй конкретные файлы по одному "
-                "или через git rm, чтобы удаление осталось в истории.",
+                "или через git rm, чтобы удаление осталось в истории. Внутри системной временной "
+                "папки вне проекта удалять можно.",
             )
         if _force_pushes(tokens):
             return Block(
@@ -192,9 +226,8 @@ def _command_block(command: str) -> Block | None:
 
 
 def check(data: JsonDict, project: Path) -> Block | None:
-    del project
     if get_str(data, "tool_name") in SHELL_TOOLS:
-        return _command_block(shell_command(data))
+        return _command_block(shell_command(data), project)
     for path in target_paths(data):
         if is_secret_path(path):
             return Block(

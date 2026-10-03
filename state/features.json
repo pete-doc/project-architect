@@ -37,7 +37,8 @@
       "id": "F3",
       "title": "Шаблоны, init-project, adr, doctor",
       "goal": [
-        "G1"
+        "G1",
+        "G6"
       ],
       "depends_on": [
         "F2"
@@ -207,7 +208,8 @@
       "id": "F13",
       "title": "Инциденты и статус «застрял»",
       "goal": [
-        "G2"
+        "G2",
+        "G6"
       ],
       "depends_on": [
         "F12"
@@ -222,7 +224,8 @@
       "id": "F14",
       "title": "Полная проверка standard (раздел 11)",
       "goal": [
-        "G2"
+        "G2",
+        "G6"
       ],
       "depends_on": [
         "F11"
@@ -252,7 +255,8 @@
       "id": "F16",
       "title": "Janitor и ревью",
       "goal": [
-        "G2"
+        "G2",
+        "G6"
       ],
       "depends_on": [
         "F13"
@@ -274,7 +278,22 @@
       ],
       "spec": "",
       "acceptance_tests": [],
-      "status": "blocked",
+      "status": "waiting_owner",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F18",
+      "title": "Прослеживаемость цели до кода",
+      "goal": [
+        "G6"
+      ],
+      "depends_on": [
+        "F14"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
       "passes": false,
       "incidents": 0
     }

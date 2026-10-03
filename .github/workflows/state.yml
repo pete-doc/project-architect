@@ -36,7 +36,16 @@ jobs:
             head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
             run=$(gh run list --workflow ci.yml --commit "$head" --status success --json databaseId --jq '.[0].databaseId // empty')
             if [ -n "$run" ]; then
-              gh run download "$run" -n test-report -D "$RUNNER_TEMP/report" || echo "в прогоне нет отчёта о тестах"
+              if gh run download "$run" -n test-report -D "$RUNNER_TEMP/report"; then
+                # отчёт снят на коммите PR; табло честно пишет, если содержимое отличается от main
+                git fetch -q origin "pull/$pr/head" || true
+                echo "${head::7}" > "$RUNNER_TEMP/report/commit"
+                if [ "$(git rev-parse "$head^{tree}" 2>/dev/null)" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+                  echo yes > "$RUNNER_TEMP/report/same-tree"
+                fi
+              else
+                echo "в прогоне нет отчёта о тестах"
+              fi
             fi
           fi
       - name: Прежнее табло и последний известный отчёт
@@ -44,18 +53,26 @@ jobs:
           git fetch origin status || true
           if git rev-parse --verify origin/status >/dev/null 2>&1; then
             git show origin/status:state/STATUS.md > "$RUNNER_TEMP/previous.md" || true
-            [ -f "$RUNNER_TEMP/report/test-report.xml" ] || git show origin/status:state/test-report.xml > "$RUNNER_TEMP/report/test-report.xml" || true
+            if [ ! -f "$RUNNER_TEMP/report/test-report.xml" ]; then
+              # последний известный отчёт: он снят не с этого коммита, коммит отчёта хранится рядом
+              git show origin/status:state/test-report.xml > "$RUNNER_TEMP/report/test-report.xml" || true
+              git show origin/status:state/test-report.commit > "$RUNNER_TEMP/report/commit" || true
+            fi
           fi
       - name: Открытые PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr list --state open --json number,title,isDraft,labels,statusCheckRollup > "$RUNNER_TEMP/prs.json"
       - name: Табло
-        run: >
-          python plugin/templates/ci/parch/parch_status.py --project .
-          --report "$RUNNER_TEMP/report/test-report.xml"
-          --previous "$RUNNER_TEMP/previous.md" --prs "$RUNNER_TEMP/prs.json"
-          --commit "${GITHUB_SHA::7}" --out "$RUNNER_TEMP/STATUS.md"
+        run: |
+          same=no
+          [ -f "$RUNNER_TEMP/report/same-tree" ] && same=yes
+          python plugin/templates/ci/parch/parch_status.py --project . \
+            --report "$RUNNER_TEMP/report/test-report.xml" \
+            --report-commit "$(cat "$RUNNER_TEMP/report/commit" 2>/dev/null || true)" \
+            --report-same-tree "$same" \
+            --previous "$RUNNER_TEMP/previous.md" --prs "$RUNNER_TEMP/prs.json" \
+            --commit "${GITHUB_SHA::7}" --out "$RUNNER_TEMP/STATUS.md"
       - name: Публикация на ветке status
         run: |
           git config user.name "github-actions"
@@ -69,7 +86,10 @@ jobs:
           fi
           mkdir -p state
           cp "$RUNNER_TEMP/STATUS.md" state/STATUS.md
-          [ -f "$RUNNER_TEMP/report/test-report.xml" ] && cp "$RUNNER_TEMP/report/test-report.xml" state/test-report.xml || true
+          if [ -f "$RUNNER_TEMP/report/test-report.xml" ]; then
+            cp "$RUNNER_TEMP/report/test-report.xml" state/test-report.xml
+            [ -f "$RUNNER_TEMP/report/commit" ] && cp "$RUNNER_TEMP/report/commit" state/test-report.commit || true
+          fi
           git add state
           git commit -m "state: табло на коммите ${GITHUB_SHA::7}" || echo "табло не изменилось"
           git push origin HEAD:status
