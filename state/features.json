@@ -1,0 +1,282 @@
+{
+  "version": 1,
+  "features": [
+    {
+      "id": "F1",
+      "title": "Скелет и CI самого продукта",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_plugin_manifest.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F2",
+      "title": "Hooks защиты",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F1"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_guards.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F3",
+      "title": "Шаблоны, init-project, adr, doctor",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F2"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_skills.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F4",
+      "title": "CI Python с храповиком",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F3"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_ci_python.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F5",
+      "title": "CI TypeScript",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F4"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_ci_typescript.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F6",
+      "title": "CI C# (ArchUnitNET)",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F5"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_ci_csharp.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F7",
+      "title": "Облегчённый CI PowerShell",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F6"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_ci_powershell.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F8",
+      "title": "Экономия CI: Ubuntu, таймауты, отмена",
+      "goal": [
+        "G5"
+      ],
+      "depends_on": [
+        "F4"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_ci_economy.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F9",
+      "title": "Стандарт 1.3 и проверка standard",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F8"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_standard_check.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F10",
+      "title": "Быстрый режим тестов",
+      "goal": [
+        "G5"
+      ],
+      "depends_on": [
+        "F9"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_test_speed.py"
+      ],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F11",
+      "title": "Цель, целевая ОС и бюджет Actions в init",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F9"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_init_goal.py"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F12",
+      "title": "Табло STATUS.md",
+      "goal": [
+        "G3"
+      ],
+      "depends_on": [
+        "F11"
+      ],
+      "spec": "",
+      "acceptance_tests": [
+        "tests/test_status.py"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F13",
+      "title": "Инциденты и статус «застрял»",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F12"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F14",
+      "title": "Полная проверка standard (раздел 11)",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F11"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F15",
+      "title": "/parch:analyze-existing",
+      "goal": [
+        "G4"
+      ],
+      "depends_on": [
+        "F14"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F16",
+      "title": "Janitor и ревью",
+      "goal": [
+        "G2"
+      ],
+      "depends_on": [
+        "F13"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F17",
+      "title": "Пилот на реальном проекте",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F15"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "blocked",
+      "passes": false,
+      "incidents": 0
+    }
+  ]
+}

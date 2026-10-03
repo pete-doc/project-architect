@@ -540,6 +540,8 @@ def init_project(
         report.copy("powershell/PSScriptAnalyzerSettings.psd1", "PSScriptAnalyzerSettings.psd1")
     if any(lang in CI_TEMPLATES for lang in languages):
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
+        report.copy("ci/parch/parch_status.py", ".github/parch/parch_status.py")
+        report.copy("ci/state.yml", ".github/workflows/state.yml")
         report.write(
             "state/baseline.json", json.dumps(initial_baseline(project, languages), indent=2) + "\n"
         )

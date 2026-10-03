@@ -1,0 +1,75 @@
+name: state
+
+# Пересчёт табло после слияния в main (STANDARD.md, 7.1 и 7.2, правило 6): только маленькое задание,
+# без запуска тестов: отчёт берётся из прогона CI того же PR. Табло публикуется на ветке status,
+# в main этот workflow ничего не пишет (ADR-0012). Другие раннеры и запуск не по pull_request
+# добавляются только через ADR с оценкой стоимости (Windows x2, macOS x10).
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: state
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Отчёт о тестах из прогона CI этого PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/report"
+          pr=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number // empty' || true)
+          if [ -n "$pr" ]; then
+            head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            run=$(gh run list --workflow ci.yml --commit "$head" --status success --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run" ]; then
+              gh run download "$run" -n test-report -D "$RUNNER_TEMP/report" || echo "в прогоне нет отчёта о тестах"
+            fi
+          fi
+      - name: Прежнее табло и последний известный отчёт
+        run: |
+          git fetch origin status || true
+          if git rev-parse --verify origin/status >/dev/null 2>&1; then
+            git show origin/status:state/STATUS.md > "$RUNNER_TEMP/previous.md" || true
+            [ -f "$RUNNER_TEMP/report/test-report.xml" ] || git show origin/status:state/test-report.xml > "$RUNNER_TEMP/report/test-report.xml" || true
+          fi
+      - name: Открытые PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr list --state open --json number,title,isDraft,labels,statusCheckRollup > "$RUNNER_TEMP/prs.json"
+      - name: Табло
+        run: >
+          python .github/parch/parch_status.py --project .
+          --report "$RUNNER_TEMP/report/test-report.xml"
+          --previous "$RUNNER_TEMP/previous.md" --prs "$RUNNER_TEMP/prs.json"
+          --commit "${GITHUB_SHA::7}" --out "$RUNNER_TEMP/STATUS.md"
+      - name: Публикация на ветке status
+        run: |
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse --verify origin/status >/dev/null 2>&1; then
+            git checkout -q -B status origin/status
+          else
+            git checkout -q --orphan status
+            git rm -rq --cached . || true
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          mkdir -p state
+          cp "$RUNNER_TEMP/STATUS.md" state/STATUS.md
+          [ -f "$RUNNER_TEMP/report/test-report.xml" ] && cp "$RUNNER_TEMP/report/test-report.xml" state/test-report.xml || true
+          git add state
+          git commit -m "state: табло на коммите ${GITHUB_SHA::7}" || echo "табло не изменилось"
+          git push origin HEAD:status

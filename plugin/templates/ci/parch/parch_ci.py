@@ -1667,6 +1667,24 @@ def jest_json_outcomes(path: Path) -> dict[str, str]:
     return with_tests(outcomes, path)
 
 
+def any_report_outcomes(path: Path) -> dict[str, str]:
+    """Исходы тестов из отчёта любого поддерживаемого формата (по содержимому, без языка)."""
+    if path.is_dir():
+        return trx_report_outcomes(path)
+    if path.read_text(encoding="utf-8-sig", errors="replace").lstrip().startswith("{"):
+        return jest_json_outcomes(path)
+    tag = local_name(ElementTree.parse(path).getroot().tag)
+    parsers = {
+        "testsuites": junit_outcomes,
+        "testsuite": junit_outcomes,
+        "TestRun": trx_outcomes,
+        "test-results": nunit_outcomes,
+    }
+    if tag not in parsers:
+        raise ToolError(f"{path.name}: неизвестный формат отчёта (корневой элемент {tag})")
+    return parsers[tag](path)
+
+
 REPORT_PARSERS: dict[str, Callable[[Path], dict[str, str]]] = {
     "python": junit_outcomes,
     "powershell": pester_outcomes,
