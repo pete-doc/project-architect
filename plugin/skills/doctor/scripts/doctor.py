@@ -134,7 +134,9 @@ def prepare() -> dict[str, Any]:
                 "id": "package",
                 "what": "установить пакет, которого нет в списке разрешённых",
                 "tool": "Bash",
-                "command": "pip install --no-index parch-doctor-probe-package",
+                # у pip нет пути, поэтому проект определяется переходом `cd` в той же команде:
+                # папка сессии может быть пустой и без CONSTITUTION.md
+                "command": f'cd "{root}" && pip install --no-index parch-doctor-probe-package',
                 "expect_text": "[guard_packages]",
                 "hook": "guard_packages",
             },

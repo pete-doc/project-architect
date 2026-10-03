@@ -29,8 +29,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      - run: pip install -r requirements-dev.txt
-      # PR без кода: тесты не нужны, но проверка full-run обязана появиться и пройти.
+      # PR без кода (только текст): проверка full-run обязана появиться и пройти, тесты не нужны.
       - id: scope
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,17 +40,13 @@ jobs:
             echo "Не удалось получить список файлов PR: идёт полный прогон."
             python3 .github/scope.py --unknown | tee -a "$GITHUB_OUTPUT"
           fi
-      - run: ruff check .
-      - run: ruff format --check .
+      - if: steps.scope.outputs.code == 'true'
+        run: pip install -r requirements-dev.txt
+      - if: steps.scope.outputs.code == 'true'
+        run: ruff check .
+      - if: steps.scope.outputs.code == 'true'
+        run: ruff format --check .
       - run: python plugin/templates/ci/parch/parch_ci.py standard
-      - name: Структура (PR без кода)
-        if: steps.scope.outputs.code != 'true'
-        run: >
-          pytest -q tests/test_plugin_manifest.py tests/test_style_gate.py
-          tests/test_skills.py::test_product_adr_index_is_up_to_date
-      - name: Согласованность baseline (PR без кода)
-        if: steps.scope.outputs.code != 'true'
-        run: python plugin/templates/ci/parch/parch_ci.py tests --language python
       - if: steps.scope.outputs.code == 'true'
         uses: actions/setup-node@v4
         with:

@@ -35,11 +35,18 @@ def scope(*files: str) -> dict[str, str]:
 
 def test_a_pr_with_only_decisions_questions_and_reports_has_no_code() -> None:
     result = scope(
-        "docs/adr/0013-x.md", "docs/QUESTIONS.md", "state/incidents/2026-10-04-F4-loop.md",
-        "state/acceptance/F17.md", "state/STATUS.md",
+        "AGENTS.md", "CLAUDE.md", "docs/BACKLOG.md", "docs/adr/0013-x.md", "docs/QUESTIONS.md",
+        "docs/notes/plan.md", "state/incidents/2026-10-04-F4-loop.md", "state/acceptance/F17.md",
+        "state/STATUS.md",
     )  # fmt: skip
     assert result["code"] == "false" and result["hooks"] == "false"
     assert result["selector"] == "not slow" and result["node"] == "false"
+
+
+def test_text_files_that_checks_or_tests_read_still_count_as_code() -> None:
+    for name in ("docs/GOAL.md", "docs/MODULES.md", "docs/CONSTITUTION.md", "CONSTITUTION.md"):
+        assert scope("AGENTS.md", name)["code"] == "true", name
+    assert scope("docs/BACKLOG.md", "docs/script.py")["code"] == "true"  # не текст
 
 
 @pytest.mark.parametrize(
@@ -51,7 +58,7 @@ def test_a_pr_with_only_decisions_questions_and_reports_has_no_code() -> None:
         "docs/GOAL.md",
         "docs/MODULES.md",
         "docs/CONSTITUTION.md",
-        "docs/rules/new-check.md",
+        "docs/STANDARD.md",  # его версию читает тест
     ],
 )
 def test_files_that_set_the_rules_of_checks_in_docs_and_state_count_as_code(rule_file: str) -> None:
@@ -190,11 +197,30 @@ def test_the_full_run_covers_every_check_and_its_ratchet_runs_last() -> None:
 
 
 def test_a_pr_without_code_still_gets_the_full_run_check_but_runs_no_tests() -> None:
-    text = FULL.read_text(encoding="utf-8")
-    assert "steps.scope.outputs.code != 'true'" in text and "scope.py --unknown" in text
+    for path in (CI, FULL):
+        text = path.read_text(encoding="utf-8")
+        text = text.split("\n  windows-hooks:")[0]  # Windows-задание не относится к тексту
+        assert "parch_ci.py standard" in text
+        for step in ("pip install", "ruff check", "ruff format", "pytest", "pyright"):
+            for line in [row for row in text.splitlines() if step in row and "run:" in row]:
+                before = text[: text.index(line)].rsplit("      - ", 1)[-1]
+                assert "code == 'true'" in before + line, (path.name, line)  # только для кода
+        assert (
+            "      - run: python plugin/templates/ci/parch/parch_ci.py standard" in text
+        )  # без условия
+    full = FULL.read_text(encoding="utf-8")
+    assert "scope.py --unknown" in full  # full-run для текстового PR всё равно появляется
     assert (
-        text.count("steps.scope.outputs.code == 'true'") >= 8
+        full.count("steps.scope.outputs.code == 'true'") >= 8
     )  # установка и тесты только для кода
+
+
+def test_agents_md_forbids_setting_checks_by_hand_and_explains_ready_for_review() -> None:
+    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    assert "через `gh api`" in text and "запрещено" in text
+    assert "источник проверок" in text and "GitHub Actions" in text
+    assert "gh pr ready --undo" in text and "gh pr create --draft" in text
+    assert "любые файлы правил проверок" in text  # файлы правил проверок считаются кодом
 
 
 def test_adr_0013_records_the_split_and_the_saving() -> None:
@@ -212,11 +238,3 @@ def test_adr_0013_records_the_split_and_the_saving() -> None:
         "перед слиянием",
     ):
         assert fact in adr, fact
-
-
-def test_agents_md_forbids_setting_checks_by_hand_and_explains_ready_for_review() -> None:
-    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-    assert "через `gh api`" in text and "запрещено" in text
-    assert "источник проверок" in text and "GitHub Actions" in text
-    assert "gh pr ready --undo" in text and "gh pr create --draft" in text
-    assert "любые файлы правил проверок" in text  # файлы правил проверок считаются кодом
