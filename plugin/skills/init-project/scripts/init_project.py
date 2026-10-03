@@ -85,9 +85,15 @@ PS_THRESHOLDS = """
 ## Пороги тонкости PowerShell
 
 Скрипты PowerShell только запускают программы; логика живёт в Python или C# (ADR-0010).
+Команды, циклы, условия и функции считает разбор PowerShell (AST);
+общий бюджет действует на весь PowerShell проекта.
 
-- max_lines: 40
+- max_commands: 15
+- max_loops: 0
+- max_conditions: 2
 - max_functions: 0
+- max_total_commands: 30
+- max_total_conditions: 4
 """
 
 LANGUAGES = {

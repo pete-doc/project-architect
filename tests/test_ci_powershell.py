@@ -23,7 +23,9 @@ PSA_VERSION = "1.25.0"
 SHELL = shutil.which("pwsh") or shutil.which("powershell")
 
 CONSTITUTION = (
-    "# CONSTITUTION\n\n## Пороги тонкости PowerShell\n\n- max_lines: 40\n- max_functions: 0\n"
+    "# CONSTITUTION\n\n## Пороги тонкости PowerShell\n\n"
+    "- max_commands: 15\n- max_loops: 0\n- max_conditions: 2\n- max_functions: 0\n"
+    "- max_total_commands: 30\n- max_total_conditions: 4\n"
 )
 THIN_SCRIPT = "& python tools/run.py @args\nexit $LASTEXITCODE\n"
 
@@ -182,70 +184,215 @@ def test_other_languages_cannot_run_powershell_checks(tmp_path: Path) -> None:
         assert "только к PowerShell" in done.stdout
 
 
-# ---------- «тонкость» ----------
+# ---------- «тонкость»: разбор штатным парсером PowerShell (AST) ----------
 
 
-def test_script_over_the_line_limit_fails_with_a_hint(tmp_path: Path) -> None:
-    long = "".join(f"& python step{i}.py\n" for i in range(41))
-    project = make(tmp_path, {"scripts/long.ps1": long})
+@pytest.fixture(scope="session")
+def ps_shell() -> None:
+    """Без PowerShell тесты падают, а не пропускаются (пропуск считался бы нарушением)."""
+    assert SHELL is not None, "нужен PowerShell (pwsh или powershell)"
+
+
+NEEDS_SHELL = pytest.mark.usefixtures("ps_shell")
+LEGAL_LAUNCHER = "& python tools/run.py @args\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n"
+
+
+@NEEDS_SHELL
+def test_a_launcher_with_an_exit_code_check_is_thin(tmp_path: Path) -> None:
+    """Запуск программы и проверка кода выхода законны: условие по коду выхода допустимо."""
+    project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER})
+    out = passes(project, "thin")
+    assert "команд" in out
+
+
+# --- обход 1: блок кода в переменной ---
+
+
+@NEEDS_SHELL
+@pytest.mark.parametrize(
+    "script",
+    [
+        "$f = { foreach ($i in 1..3) { Get-Item $i } }; & $f\n",
+        "$f = {\n  while ($true) { break }\n}\n& $f\n",
+        "$handlers = @{ run = { Get-Date } }\n& $handlers.run\n",
+        "$list = @({ 1 }, { 2 })\n",
+        "$f = [scriptblock]::Create('Get-Date')\n& $f\n",
+    ],
+)
+def test_bypass_code_block_in_a_variable_is_caught(tmp_path: Path, script: str) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": script})
     out = fails(project, "thin")
-    assert "scripts/long.ps1: строк кода 41, порог 40" in out
-    assert "Перенесите логику в Python или C#" in out
+    assert "(max_functions)" in out
+    assert "scripts/run.ps1" in out
 
 
-def test_script_at_the_limit_passes(tmp_path: Path) -> None:
-    project = make(
-        tmp_path, {"scripts/edge.ps1": "".join(f"& python s{i}.py\n" for i in range(40))}
-    )
+@NEEDS_SHELL
+def test_a_loop_inside_a_stored_block_is_counted_as_a_loop_too(tmp_path: Path) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": "$f = { foreach ($i in 1..3) { $i } }; & $f\n"})
+    out = fails(project, "thin")
+    assert "циклов 1, порог 0 (max_loops)" in out
+
+
+@NEEDS_SHELL
+def test_a_block_as_a_command_argument_is_not_a_stored_function(tmp_path: Path) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": "Invoke-Command { & python tools/run.py }\n"})
     passes(project, "thin")
 
 
-def test_blank_lines_and_comments_are_not_counted(tmp_path: Path) -> None:
-    body = "# комментарий\n\n<# блок\nкомментариев #>\n" * 30 + THIN_SCRIPT
-    project = make(tmp_path, {"scripts/commented.ps1": body})
+# --- обход 2: определение функции через диск function: ---
+
+
+@NEEDS_SHELL
+@pytest.mark.parametrize(
+    "script",
+    [
+        "Set-Item function:Run { & python x.py }\n",
+        "New-Item -Path function:Run -Value { & python x.py }\n",
+        "$function:Run = { & python x.py }\n",
+        "${function:Run} = { & python x.py }\n",
+        "Set-Item -Path 'Function:Run' -Value { 1 }\n",
+    ],
+)
+def test_bypass_function_drive_is_caught(tmp_path: Path, script: str) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": script})
+    out = fails(project, "thin")
+    assert "(max_functions)" in out
+    assert "function:" in out
+
+
+# --- обход 3: много команд в одной строке ---
+
+
+@NEEDS_SHELL
+def test_bypass_many_commands_on_one_line_is_caught(tmp_path: Path) -> None:
+    line = "; ".join(f"& python step{i}.py" for i in range(16)) + "\n"
+    assert line.count("\n") == 1
+    project = make(tmp_path, {"scripts/run.ps1": line})
+    out = fails(project, "thin")
+    assert "команд 16, порог 15 (max_commands)" in out
+
+
+@NEEDS_SHELL
+def test_bypass_one_long_pipeline_is_caught(tmp_path: Path) -> None:
+    pipeline = "Get-Item a | " + " | ".join(f"Select-Object -Property p{i}" for i in range(16))
+    project = make(tmp_path, {"scripts/run.ps1": pipeline + "\n"})
+    assert "(max_commands)" in fails(project, "thin")
+
+
+@NEEDS_SHELL
+def test_fifteen_commands_are_allowed(tmp_path: Path) -> None:
+    body = "; ".join(f"& python step{i}.py" for i in range(15)) + "\n"
+    passes(make(tmp_path, {"scripts/run.ps1": body}), "thin")
+
+
+# --- обход 4: логика, разнесённая по нескольким маленьким скриптам ---
+
+
+@NEEDS_SHELL
+def test_bypass_logic_split_over_many_small_scripts_is_caught(tmp_path: Path) -> None:
+    scripts = {
+        f"scripts/step{i}.ps1": "".join(f"& python a{i}_{j}.py\n" for j in range(5))
+        for i in range(7)
+    }
+    project = make(tmp_path, scripts)  # у каждого скрипта 5 команд (порог 15), всего 35 (бюджет 30)
+    out = fails(project, "thin")
+    assert "весь PowerShell проекта: команд 35, общий бюджет 30 (max_total_commands)" in out
+    assert "max_commands" not in out  # по отдельности скрипты в норме
+
+
+@NEEDS_SHELL
+def test_conditions_split_over_many_scripts_hit_the_total_budget(tmp_path: Path) -> None:
+    one = "& python x.py\nif ($LASTEXITCODE -ne 0) { exit 1 }\n"
+    project = make(tmp_path, {f"scripts/s{i}.ps1": one for i in range(5)})
+    out = fails(project, "thin")
+    assert "условий 5, общий бюджет 4 (max_total_conditions)" in out
+
+
+@NEEDS_SHELL
+def test_scripts_within_the_total_budget_pass(tmp_path: Path) -> None:
+    project = make(tmp_path, {f"scripts/s{i}.ps1": LEGAL_LAUNCHER for i in range(4)})
     passes(project, "thin")
 
 
-def test_here_string_content_counts_as_code_lines(tmp_path: Path) -> None:
-    """Код, спрятанный в here-строку (для Invoke-Expression), всё равно считается."""
-    hidden = "$code = @'\n" + "".join(f"Get-Item {i}\n" for i in range(45)) + "'@\n"
-    project = make(tmp_path, {"scripts/hidden.ps1": hidden})
-    assert "строк кода" in fails(project, "thin")
+# --- остальные меры ---
 
 
+@NEEDS_SHELL
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "foreach ($i in 1..3) { $i }",
+        "for ($i = 0; $i -lt 3; $i++) { $i }",
+        "while ($false) { 1 }",
+        "do { 1 } while ($false)",
+        "do { 1 } until ($true)",
+        "1..3 | ForEach-Object { $_ }",
+        "1..3 | % { $_ }",
+    ],
+)
+def test_every_kind_of_loop_is_caught(tmp_path: Path, snippet: str) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER + snippet + "\n"})
+    assert "(max_loops)" in fails(project, "thin")
+
+
+@NEEDS_SHELL
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "if ($a) { 1 } elseif ($b) { 2 }",
+        "switch ($a) { 1 { 'x' } 2 { 'y' } }",
+        "Get-Item . | Where-Object { $_.Name } | Where-Object { $_.Length }",
+        "Get-Item . | ? { $_.Name } | ? { $_.Length }",
+    ],
+)
+def test_conditions_are_counted_against_a_small_limit(tmp_path: Path, snippet: str) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER + snippet + "\n"})
+    assert "(max_conditions)" in fails(project, "thin")
+
+
+@NEEDS_SHELL
 @pytest.mark.parametrize(
     ("snippet", "name"),
     [
-        ("function Get-Thing { 1 }", "function Get-Thing"),
-        ("filter Only-Big { $_ }", "filter Only-Big"),
-        ("workflow Run-All { }", "workflow Run-All"),
-        ("class Worker { }", "class Worker"),
-        ("enum Color { Red }", "enum Color"),
-        ("& { function Inner { 1 } }", "function Inner"),
-        ("FUNCTION Loud { 1 }", "FUNCTION Loud"),
+        ("function Get-Thing { 1 }", "функци"),
+        ("filter Only-Big { $_ }", "функци"),
+        ("workflow Run-All { }", "функци"),
+        ("class Worker { }", "функци"),
+        ("enum Color { Red }", "функци"),
+        ("& { function Inner { 1 } }", "функци"),
+        ("FUNCTION Loud { 1 }", "функци"),
+        ("Invoke-Expression $text", "динамический код"),
+        ("iex $text", "динамический код"),
+        ("Add-Type -TypeDefinition 'public class A {}'", "динамический код"),
     ],
 )
-def test_own_functions_and_classes_fail_the_thin_check(
+def test_own_functions_classes_and_dynamic_code_are_caught(
     tmp_path: Path, snippet: str, name: str
 ) -> None:
-    project = make(tmp_path, {"scripts/run.ps1": THIN_SCRIPT + snippet + "\n"})
+    project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER + snippet + "\n"})
     out = fails(project, "thin")
-    assert "собственных функций и классов" in out
+    assert "(max_functions)" in out
     assert name in out
 
 
-def test_function_words_in_comments_strings_and_parameters_are_not_functions(
-    tmp_path: Path,
-) -> None:
+@NEEDS_SHELL
+def test_logic_words_in_comments_strings_and_parameters_are_not_logic(tmp_path: Path) -> None:
     text = (
-        "# function Fake { }\n<# class Hidden { } #>\n"
-        "Write-Output 'function Quoted { }'\n"
-        "Get-ChildItem -Filter *.txt\n& python run.py -Function main\n"
+        "# function Fake { } и foreach (1) и if ($x)\n<# class Hidden { } while ($y) #>\n"
+        "Write-Output 'function Quoted { } foreach ($i in 1) { }'\n"
+        "$text = @'\nfunction InText { }\nforeach ($i in 1) { }\n'@\n"
+        "Get-ChildItem -Filter *.txt\n& python run.py -Function main -Foreach x\n"
     )
-    project = make(tmp_path, {"scripts/run.ps1": text})
-    passes(project, "thin")
+    passes(make(tmp_path, {"scripts/run.ps1": text}), "thin")
 
 
+@NEEDS_SHELL
+def test_a_script_that_does_not_parse_cannot_be_measured_and_fails(tmp_path: Path) -> None:
+    project = make(tmp_path, {"scripts/run.ps1": "if ($x) {\n"})
+    assert "не разбирается" in fails(project, "thin")
+
+
+@NEEDS_SHELL
 def test_pester_test_files_are_not_held_to_the_thin_limit(tmp_path: Path) -> None:
     project = make(
         tmp_path,
@@ -254,27 +401,42 @@ def test_pester_test_files_are_not_held_to_the_thin_limit(tmp_path: Path) -> Non
     passes(project, "thin")
 
 
+@NEEDS_SHELL
 def test_thresholds_come_from_the_constitution(tmp_path: Path) -> None:
-    constitution = "## Пороги тонкости PowerShell\n- max_lines: 2\n- max_functions: 1\n"
-    body = "function One { 1 }\n& python a.py\n"
-    project = make(tmp_path, {"scripts/a.ps1": body}, constitution)
+    constitution = (
+        "## Пороги тонкости PowerShell\n- max_commands: 4\n- max_loops: 1\n- max_conditions: 0\n"
+        "- max_functions: 1\n- max_total_commands: 5\n- max_total_conditions: 0\n"
+    )
+    project = make(
+        tmp_path, {"scripts/a.ps1": "function One { 1 }\nforeach ($i in 1) { $i }\n"}, constitution
+    )
     passes(project, "thin")
-    write(project / "scripts" / "a.ps1", body + "& python b.py\n")
-    assert "строк кода 3, порог 2" in fails(project, "thin")
+    write(project / "scripts" / "a.ps1", "".join(f"& python s{i}.py\n" for i in range(5)))
+    assert "команд 5, порог 4" in fails(project, "thin")
     write(project / "scripts" / "a.ps1", "function One { 1 }\nfunction Two { 2 }\n")
-    assert "порог 1" in fails(project, "thin")
+    assert "(max_functions)" in fails(project, "thin")
 
 
 @pytest.mark.parametrize(
     "constitution",
     [
         "# без раздела\n",
-        "## Пороги тонкости PowerShell\n- max_lines: 40\n",
-        "## Пороги тонкости PowerShell\n- max_lines: много\n- max_functions: 0\n",
-        "## Пороги тонкости PowerShell\n- max_lines: -1\n- max_functions: 0\n",
+        "## Пороги тонкости PowerShell\n- max_commands: 15\n",
+        "## Пороги тонкости PowerShell\n" + "".join(
+            f"- {k}: много\n" for k in (
+                "max_commands", "max_loops", "max_conditions", "max_functions",
+                "max_total_commands", "max_total_conditions",
+            )
+        ),
+        "## Пороги тонкости PowerShell\n" + "".join(
+            f"- {k}: -1\n" for k in (
+                "max_commands", "max_loops", "max_conditions", "max_functions",
+                "max_total_commands", "max_total_conditions",
+            )
+        ),
         "## Пороги тонкости PowerShell\n",
     ],
-)
+)  # fmt: skip
 def test_missing_or_broken_thresholds_fail_instead_of_disabling_the_check(
     tmp_path: Path, constitution: str
 ) -> None:
@@ -459,8 +621,11 @@ def test_init_creates_a_powershell_project_with_thresholds(tmp_path: Path) -> No
     )
     constitution = (root / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert "## Пороги тонкости PowerShell" in constitution
-    assert "- max_lines: 40" in constitution
-    assert "- max_functions: 0" in constitution
+    for line in (
+        "- max_commands: 15", "- max_loops: 0", "- max_conditions: 2", "- max_functions: 0",
+        "- max_total_commands: 30", "- max_total_conditions: 4",
+    ):  # fmt: skip
+        assert line in constitution, line
     assert "- psgallery: PSScriptAnalyzer" in constitution
     assert "Pester" not in constitution
     baseline = json.loads((root / "state" / "baseline.json").read_text(encoding="utf-8"))

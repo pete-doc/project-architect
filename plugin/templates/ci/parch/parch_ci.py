@@ -2522,21 +2522,6 @@ PS_THRESHOLDS_HEADING = re.compile(
     r"^#{1,6}\s*(пороги тонкости powershell|powershell thin(ness)? thresholds)\s*$", re.IGNORECASE
 )
 PS_THRESHOLD_LINE = re.compile(r"^[-*]\s*`?(?P<key>\w+)`?\s*[:=]\s*(?P<value>\S+)\s*$")
-PS_THRESHOLD_KEYS = ("max_lines", "max_functions")
-PS_OWN_LOGIC = re.compile(
-    r"(?:^|[;{}(])[ \t]*(?:function|filter|workflow|class|enum|configuration)[ \t]+[\w:.-]+",
-    re.IGNORECASE | re.MULTILINE,
-)
-PS_THRESHOLDS_EXAMPLE = (
-    "Добавьте в docs/CONSTITUTION.md раздел:\n"
-    "  ## Пороги тонкости PowerShell\n"
-    "  - max_lines: 40\n"
-    "  - max_functions: 0"
-)
-PS_THIN_HINT = (
-    "PowerShell здесь только запуск программ. Перенесите логику в Python или C#, а в скрипте "
-    "оставьте вызов программы и передачу кода выхода (ADR-0010)."
-)
 PS_COMMENT_START = set(";(){},|&")
 PS_RUNNER = """\
 $ErrorActionPreference = 'Stop'
@@ -2674,14 +2659,146 @@ def ps_thresholds(project: Path) -> dict[str, int]:
     return values
 
 
-def ps_thin_report(path: Path) -> tuple[int, list[str]]:
-    """Строки кода (без пустых и комментариев) и собственные функции, классы, перечисления."""
-    text = path.read_text(encoding="utf-8-sig", errors="replace")
-    with_strings, _ = blank_ps_comments_and_strings(text, keep_strings=True)
-    lines = sum(1 for line in with_strings.splitlines() if line.strip())
-    code, _ = blank_ps_comments_and_strings(text)
-    logic = [" ".join(m.group(0).strip(" \t;{}(").split()) for m in PS_OWN_LOGIC.finditer(code)]
-    return lines, logic
+PS_THRESHOLD_KEYS = (
+    "max_commands",
+    "max_loops",
+    "max_conditions",
+    "max_functions",
+    "max_total_commands",
+    "max_total_conditions",
+)
+PS_THRESHOLDS_EXAMPLE = (
+    "Добавьте в docs/CONSTITUTION.md раздел:\n"
+    "  ## Пороги тонкости PowerShell\n"
+    "  - max_commands: 15\n"
+    "  - max_loops: 0\n"
+    "  - max_conditions: 2\n"
+    "  - max_functions: 0\n"
+    "  - max_total_commands: 30\n"
+    "  - max_total_conditions: 4"
+)
+PS_THIN_HINT = (
+    "PowerShell здесь только запуск программ. Перенесите логику в Python или C#, а в скрипте "
+    "оставьте вызов программы и проверку кода выхода (ADR-0010)."
+)
+# Метрики считает штатный разбор PowerShell (AST), а не регулярные выражения: поэтому
+# `$f = { цикл }; & $f`, `Set-Item function:X`, `a; b; c` в одной строке и строки в here-строках
+# не обходят проверку.
+PS_METRICS_RUNNER = """\
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$files = [string[]]@(Get-Content -LiteralPath '%(list)s' -Encoding UTF8)
+$loopTypes = 'ForEachStatementAst', 'ForStatementAst', 'WhileStatementAst',
+    'DoWhileStatementAst', 'DoUntilStatementAst'
+$loopCommands = 'foreach-object', '%', 'foreach'
+$conditionCommands = 'where-object', '?', 'where'
+$dynamicCommands = 'invoke-expression', 'iex', 'add-type'
+$listTypes = 'NamedBlockAst', 'StatementBlockAst'
+$report = @()
+foreach ($file in $files) {
+    $tokens = $null
+    $parseErrors = $null
+    $parser = [System.Management.Automation.Language.Parser]
+    $root = $parser::ParseFile($file, [ref]$tokens, [ref]$parseErrors)
+    $entry = [ordered]@{
+        File = $file; ParseErrors = @($parseErrors | ForEach-Object { $_.Message })
+        Commands = 0; Loops = 0; Conditions = 0; Functions = 0; Details = @()
+    }
+    if (@($parseErrors).Count -eq 0) {
+        foreach ($node in $root.FindAll({ $true }, $true)) {
+            $type = $node.GetType().Name
+            $parentType = if ($node.Parent) { $node.Parent.GetType().Name } else { '' }
+            $line = $node.Extent.StartLineNumber
+            if ($node -is [System.Management.Automation.Language.StatementAst] -and
+                $listTypes -contains $parentType) { $entry.Commands++ }
+            if ($type -eq 'PipelineAst') {
+                $entry.Commands += [Math]::Max(0, $node.PipelineElements.Count - 1)
+            }
+            if ($loopTypes -contains $type) {
+                $entry.Loops++; $entry.Details += "loop:$line"
+            }
+            if ($type -eq 'IfStatementAst') { $entry.Conditions += $node.Clauses.Count }
+            if ($type -eq 'SwitchStatementAst') {
+                $entry.Conditions += [Math]::Max(1, $node.Clauses.Count)
+            }
+            if ($type -eq 'TernaryExpressionAst') { $entry.Conditions++ }
+            if ($type -in 'FunctionDefinitionAst', 'TypeDefinitionAst',
+                'ConfigurationDefinitionAst') {
+                $entry.Functions++
+                $name = if ($node.Name) { $node.Name } else { '?' }
+                $entry.Details += "function:${line}:$name"
+            }
+            if ($type -eq 'ScriptBlockExpressionAst' -and
+                $parentType -notin 'CommandAst', 'CommandParameterAst') {
+                $entry.Functions++; $entry.Details += "block:$line"
+            }
+            if ($type -eq 'VariableExpressionAst' -and
+                $node.VariablePath.DriveName -eq 'function') {
+                $entry.Functions++; $entry.Details += "drive:$line"
+            }
+            if ($type -eq 'InvokeMemberExpressionAst' -and
+                $node.Member.Extent.Text -eq 'Create' -and
+                $node.Expression.Extent.Text -match 'scriptblock') {
+                $entry.Functions++; $entry.Details += "create:$line"
+            }
+            if ($type -eq 'CommandAst') {
+                $name = ([string]$node.GetCommandName()).ToLowerInvariant()
+                if ($loopCommands -contains $name) {
+                    $entry.Loops++; $entry.Details += "loop:$line"
+                }
+                if ($conditionCommands -contains $name) { $entry.Conditions++ }
+                if ($dynamicCommands -contains $name) {
+                    $entry.Functions++; $entry.Details += "dynamic:${line}:$name"
+                }
+                foreach ($element in $node.CommandElements) {
+                    if ($element.Extent.Text -match '^[''"]?function:') {
+                        $entry.Functions++; $entry.Details += "drive:$line"
+                    }
+                }
+            }
+        }
+    }
+    $report += [pscustomobject]$entry
+}
+Write-Output ('PARCH-JSON ' + (ConvertTo-Json -InputObject @($report) -Depth 4 -Compress))
+"""
+PS_DETAIL_TEXT = {
+    "loop": "цикл",
+    "function": "собственная функция, класс или перечисление",
+    "block": "блок кода вне вызова команды (в переменной, хеш-таблице и т.п.)",
+    "drive": "определение функции через диск function:",
+    "create": "[scriptblock]::Create",
+    "dynamic": "динамический код",
+}
+
+
+def ps_metrics(project: Path, files: list[Path]) -> list[dict[str, object]]:
+    with tempfile.TemporaryDirectory() as tmp:
+        listing = Path(tmp) / "files.txt"
+        listing.write_text("\n".join(str(p) for p in files), encoding="utf-8")
+        runner = Path(tmp) / "metrics.ps1"
+        script = PS_METRICS_RUNNER.replace("%(list)s", str(listing).replace("'", "''"))
+        runner.write_text(script, encoding="utf-8-sig")
+        argv = [powershell_exe(), "-NoProfile", "-NonInteractive"]
+        if os.name == "nt":
+            argv += ["-ExecutionPolicy", "Bypass"]
+        done = run([*argv, "-File", str(runner)], project)
+    payload = next((x for x in done.stdout.splitlines() if x.startswith("PARCH-JSON ")), None)
+    if done.returncode != 0 or payload is None:
+        raise ToolError("не удалось разобрать скрипты PowerShell:\n" + tail(done))
+    return [as_dict(x) for x in as_list(json.loads(payload.removeprefix("PARCH-JSON ")))]
+
+
+def ps_detail_lines(details: object, wanted: set[str]) -> str:
+    kinds: dict[str, list[str]] = {}
+    for item in as_strings(details):
+        kind, _, rest = item.partition(":")
+        if kind in wanted:
+            kinds.setdefault(kind, []).append(rest.replace(":", " "))
+    return "; ".join(
+        f"{PS_DETAIL_TEXT.get(kind, kind)} (строка {', '.join(places[:3])})"
+        for kind, places in kinds.items()
+    )
 
 
 def check_thin(project: Path, language: str) -> Result:
@@ -2699,22 +2816,52 @@ def check_thin(project: Path, language: str) -> Result:
         result.note("Скриптов PowerShell пока нет, проверка тонкости не нужна.")
         return result
     heavy: list[str] = []
-    for path in scripts:
-        lines, logic = ps_thin_report(path)
-        rel = rel_of(project, path)
-        if lines > limits["max_lines"]:
-            heavy.append(f"{rel}: строк кода {lines}, порог {limits['max_lines']}")
-        if len(logic) > limits["max_functions"]:
-            heavy.append(
-                f"{rel}: собственных функций и классов {len(logic)} "
-                f"({', '.join(logic[:3])}), порог {limits['max_functions']}"
-            )
+    total_commands = total_conditions = 0
+    for entry in ps_metrics(project, scripts):
+        rel = rel_of(project, Path(str(entry["File"])))
+        errors = as_strings(entry.get("ParseErrors"))
+        if errors:
+            heavy.append(f"{rel}: скрипт не разбирается ({errors[0]}), тонкость не измерить")
+            continue
+        commands, loops = int(str(entry["Commands"])), int(str(entry["Loops"]))
+        conditions, functions = int(str(entry["Conditions"])), int(str(entry["Functions"]))
+        total_commands += commands
+        total_conditions += conditions
+        for label, value, key, kinds in (
+            ("команд", commands, "max_commands", set[str]()),
+            ("циклов", loops, "max_loops", {"loop"}),
+            ("условий", conditions, "max_conditions", set[str]()),
+            (
+                "собственных функций и блоков кода",
+                functions,
+                "max_functions",
+                {"function", "block", "drive", "create", "dynamic"},
+            ),
+        ):
+            if value > limits[key]:
+                extra = ps_detail_lines(entry.get("Details"), kinds)
+                heavy.append(
+                    f"{rel}: {label} {value}, порог {limits[key]} ({key})"
+                    + (f"; найдено: {extra}" if extra else "")
+                )
+    if total_commands > limits["max_total_commands"]:
+        heavy.append(
+            f"весь PowerShell проекта: команд {total_commands}, общий бюджет "
+            f"{limits['max_total_commands']} (max_total_commands); логика, разнесённая по "
+            "нескольким маленьким скриптам, считается вместе"
+        )
+    if total_conditions > limits["max_total_conditions"]:
+        heavy.append(
+            f"весь PowerShell проекта: условий {total_conditions}, общий бюджет "
+            f"{limits['max_total_conditions']} (max_total_conditions)"
+        )
     if heavy:
         result.fail("Скрипты PowerShell не «тонкие»:", *shown(heavy), PS_THIN_HINT)
         return result
     result.note(
-        f"Скриптов PowerShell: {len(scripts)}, все в пределах порогов "
-        f"(строк {limits['max_lines']}, функций {limits['max_functions']})."
+        f"Скриптов PowerShell: {len(scripts)}; команд {total_commands} "
+        f"(бюджет {limits['max_total_commands']}), условий {total_conditions} "
+        f"(бюджет {limits['max_total_conditions']}); все в пределах порогов."
     )
     return result
 
