@@ -461,7 +461,7 @@ def test_the_product_has_a_consistent_goal_and_plan() -> None:
             assert (REPO / path).is_file(), f"{item['id']}: нет файла тестов приёмки {path}"
 
 
-def test_the_product_goal_is_a_draft_until_the_owner_approves_it() -> None:
+def test_the_product_goal_lists_criteria_g1_to_g6() -> None:
     goal = (REPO / "docs" / "GOAL.md").read_text(encoding="utf-8")
     assert "# GOAL — цель продукта «ProjectArchitect»" in goal
     for criterion in ("G1", "G2", "G3", "G4", "G5", "G6"):

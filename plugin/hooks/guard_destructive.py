@@ -47,9 +47,6 @@ _SECRET_DIRS = {".ssh", ".gnupg"}
 _PS_RECURSE = re.compile(r"^-r(e(c(u(r(se?)?)?)?)?)?$", re.IGNORECASE)
 _PS_FORCE = re.compile(r"^-fo(r(ce?)?)?$", re.IGNORECASE)
 _PS_REMOVE = {"remove-item", "ri", "del", "erase", "rd", "rmdir", "rm"}
-_TEMP_VARIABLE = re.compile(
-    r"\$(?:env:)?\{?(?:TEMP|TMPDIR|TMP)\}?(?![A-Za-z0-9_])|%(?:TEMP|TMP)%", re.I
-)
 _UNRESOLVED = set("$%*?[]~`{}")
 
 
@@ -100,9 +97,9 @@ def _deletes_recursively_and_forcibly(tokens: list[str]) -> bool:
 def _inside_system_temp(target: str, project: Path) -> bool:
     """True, если путь заведомо лежит внутри системной временной папки и не задевает проект."""
     temp = Path(tempfile.gettempdir()).resolve()
-    if _UNRESOLVED & set(_TEMP_VARIABLE.sub("", target)):
-        return False  # переменные, маски и ~ заранее не раскрыть
-    text = _TEMP_VARIABLE.sub(lambda _: str(temp), target)
+    if _UNRESOLVED & set(target):
+        return False  # только буквальные пути: переменную hook и оболочка раскрыли бы по-разному
+    text = target
     if os.name == "nt" and re.match(r"^/[a-zA-Z]/", text):
         text = f"{text[1]}:{text[2:]}"  # путь Git Bash: /c/Users/... -> C:/Users/...
     if ".." in re.split(r"[\\/]", text) or not Path(text).is_absolute():
