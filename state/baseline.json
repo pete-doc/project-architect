@@ -203,11 +203,14 @@
       "tests/test_ci_powershell.py::test_python_and_powershell_together_get_separate_workflows",
       "tests/test_ci_powershell.py::test_scripts_within_the_total_budget_pass",
       "tests/test_ci_powershell.py::test_suppression_words_in_strings_and_comments_are_not_counted",
+      "tests/test_ci_powershell.py::test_the_analyzer_check_reports_that_it_ran_on_powershell_7",
       "tests/test_ci_powershell.py::test_the_pester_report_parser_is_kept_and_still_works",
+      "tests/test_ci_powershell.py::test_the_tests_run_powershell_7_and_not_windows_powershell",
       "tests/test_ci_powershell.py::test_thin_check_without_a_constitution_fails",
       "tests/test_ci_powershell.py::test_thin_check_without_scripts_says_so",
       "tests/test_ci_powershell.py::test_thresholds_come_from_the_constitution",
       "tests/test_ci_powershell.py::test_weakening_the_analyzer_settings_is_caught",
+      "tests/test_ci_powershell.py::test_windows_powershell_5_alone_is_not_enough",
       "tests/test_ci_powershell.py::test_workflow_pins_the_analyzer_and_runs_on_windows",
       "tests/test_ci_powershell.py::test_wrong_psscriptanalyzer_version_is_an_error_not_a_pass",
       "tests/test_ci_python.py::test_a_new_skipped_test_is_a_violation[@pytest.mark.skip(reason=\"\\u043f\\u043e\\u0442\\u043e\\u043c\")\\ndef test_extra() -> None:\\n    assert True\\n]",
@@ -1078,7 +1081,17 @@
       "tests/test_style_gate.py::test_pyright_rejects_type_error",
       "tests/test_style_gate.py::test_repository_is_clean",
       "tests/test_style_gate.py::test_ruff_check_rejects_unused_imports",
-      "tests/test_style_gate.py::test_ruff_format_rejects_unformatted_code"
+      "tests/test_style_gate.py::test_ruff_format_rejects_unformatted_code",
+      "tests/test_tool_versions.py::test_csharp_versions_match_the_sample_project",
+      "tests/test_tool_versions.py::test_each_language_gets_only_its_own_versions[csharp]",
+      "tests/test_tool_versions.py::test_each_language_gets_only_its_own_versions[powershell]",
+      "tests/test_tool_versions.py::test_each_language_gets_only_its_own_versions[python]",
+      "tests/test_tool_versions.py::test_each_language_gets_only_its_own_versions[typescript]",
+      "tests/test_tool_versions.py::test_every_version_in_the_section_is_exact",
+      "tests/test_tool_versions.py::test_powershell_and_jscpd_versions_match_the_workflows_and_the_script",
+      "tests/test_tool_versions.py::test_python_versions_match_this_repository_pins",
+      "tests/test_tool_versions.py::test_the_template_has_the_versions_section_before_the_commands",
+      "tests/test_tool_versions.py::test_typescript_versions_match_the_sample_project_and_the_workflow"
     ]
   },
   "version": 1

@@ -20,7 +20,8 @@ TEMPLATE_SETTINGS = REPO / "plugin" / "templates" / "powershell" / "PSScriptAnal
 INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
 PSA_VERSION = "1.25.0"
-SHELL = shutil.which("pwsh") or shutil.which("powershell")
+# Только PowerShell 7: Windows PowerShell 5.1 не используется (ADR-0010).
+SHELL = shutil.which("pwsh")
 
 CONSTITUTION = (
     "# CONSTITUTION\n\n## Пороги тонкости PowerShell\n\n"
@@ -155,7 +156,7 @@ def test_wrong_psscriptanalyzer_version_is_an_error_not_a_pass(
 ) -> None:
     import parch_ci
 
-    assert SHELL is not None, "нужен PowerShell"
+    assert SHELL is not None, "нужен PowerShell 7 (pwsh)"
 
     project = make(tmp_path)
     monkeypatch.setattr(parch_ci, "PSA_VERSION", "9.9.9")
@@ -190,7 +191,7 @@ def test_other_languages_cannot_run_powershell_checks(tmp_path: Path) -> None:
 @pytest.fixture(scope="session")
 def ps_shell() -> None:
     """Без PowerShell тесты падают, а не пропускаются (пропуск считался бы нарушением)."""
-    assert SHELL is not None, "нужен PowerShell (pwsh или powershell)"
+    assert SHELL is not None, "нужен PowerShell 7 (pwsh)"
 
 
 NEEDS_SHELL = pytest.mark.usefixtures("ps_shell")
@@ -371,7 +372,7 @@ def test_own_functions_classes_and_dynamic_code_are_caught(
 ) -> None:
     project = make(tmp_path, {"scripts/run.ps1": LEGAL_LAUNCHER + snippet + "\n"})
     out = fails(project, "thin")
-    if snippet.startswith("workflow") and Path(SHELL or "").stem.lower() == "pwsh":
+    if snippet.startswith("workflow"):
         # В PowerShell 6+ рабочих процессов нет: скрипт не разбирается, и это тоже провал.
         assert "не разбирается" in out
         return
@@ -660,3 +661,41 @@ def test_python_and_powershell_together_get_separate_workflows(tmp_path: Path) -
 def test_product_ci_installs_the_same_analyzer_version_as_the_template() -> None:
     product = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"-RequiredVersion {PSA_VERSION}" in product
+
+
+# ---------- только PowerShell 7 (pwsh) ----------
+
+
+def test_the_tests_run_powershell_7_and_not_windows_powershell() -> None:
+    from parch_ci import powershell_exe
+
+    assert SHELL is not None, "нужен PowerShell 7 (pwsh)"
+    assert Path(SHELL).stem.lower() == "pwsh"
+    assert Path(powershell_exe()).stem.lower() == "pwsh"
+    done = subprocess.run(
+        [SHELL, "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert done.stdout.strip() == "7" or int(done.stdout.strip()) >= 7
+
+
+@NEEDS_PSA
+def test_the_analyzer_check_reports_that_it_ran_on_powershell_7(tmp_path: Path) -> None:
+    out = passes(make(tmp_path), "psscriptanalyzer")
+    assert "на PowerShell 7." in out
+
+
+def test_windows_powershell_5_alone_is_not_enough(monkeypatch: pytest.MonkeyPatch) -> None:
+    import parch_ci
+
+    real = shutil.which
+
+    def without_pwsh(name: str) -> str | None:
+        return None if name == "pwsh" else real(name)
+
+    monkeypatch.setattr(parch_ci.shutil, "which", without_pwsh)
+    with pytest.raises(parch_ci.ToolError, match="PowerShell 7"):
+        parch_ci.powershell_exe()
