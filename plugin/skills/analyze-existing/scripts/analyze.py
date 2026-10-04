@@ -1,17 +1,21 @@
-# ruff: noqa: E501
-"""Помощник для `/parch:analyze-existing` (упрощённая версия): факты о проекте и проверка «ничего не менялось».
+# ruff: noqa: E501, E402
+"""Помощник для `/parch:analyze-existing`: факты о проекте, снимок инструментов, план приведения, проверка «ничего не менялось».
 
-Вход: JSON-объект на stdin. Выход: JSON-объект на stdout. Скрипт только читает проект: он ничего в нём не создаёт и не меняет.
+Вход: JSON-объект на stdin. Выход: JSON-объект на stdout. Анализ только читает проект; единственное, куда он пишет
+файлы, это папка parch-analysis/ (и только командами baseline и write).
 
-    {"command": "inventory", "project_dir": "."}   факты и предварительная карточка пунктов P1-P13
-    {"command": "verify", "project_dir": "."}      изменилось ли что-то в проекте, кроме parch-analysis/
-                                                   (состояние «до» inventory сохраняет вне проекта)
+    {"command": "inventory", "project_dir": ".", "protected_paths": ["data/", "saves/"]}
+        факты, равноценные файлы, инструменты по языкам, горячие точки, кандидаты в мёртвый код, риски, план приведения
+    {"command": "baseline", "project_dir": ".", "run": ["ruff", "pyright"]}
+        только если владелец разрешил: запуск перечисленных инструментов в режиме «только отчёт», результаты в
+        parch-analysis/baseline/ (без списка «run» ничего не запускается)
+    {"command": "write", "project_dir": ".", "protected_paths": [...]}
+        parch-analysis/: QUESTIONS.md, PLAN.md, drafts/GOAL.md, drafts/ADR-DRAFTS.md, facts.json
+    {"command": "verify", "project_dir": "."}
+        изменилось ли что-то в проекте, кроме parch-analysis/ (состояние «до» inventory сохраняет вне проекта)
 
-Отчёт пишется только в папку parch-analysis/. Если она уже есть, inventory отказывается работать:
-папка analysis/ и любые другие папки проекта принадлежат владельцу и считаются кодом.
-
-Оценки пунктов предварительные: по ним агент пишет отчёт, а пункты, которые по файлам не определить
-(P4, P8, P12), остаются вопросами владельцу.
+Папка analysis/ и любые другие папки проекта принадлежат владельцу и считаются кодом. Если parch-analysis/ уже есть
+(и не создана этим анализом), inventory отказывается работать. Исходный документ: docs/design/analyze-existing.md.
 """
 
 from __future__ import annotations
@@ -24,7 +28,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import analyze_deadcode as deadcode
+import analyze_equivalents as eqmod
+import analyze_history as history
+import analyze_plan as planmod
+import analyze_report as report
+import analyze_tools as tools
 
 SKIP_DIRS = {
     ".git", "node_modules", "venv", ".venv", "bin", "obj", "dist", "build", "__pycache__",
@@ -32,6 +45,7 @@ SKIP_DIRS = {
 }  # fmt: skip
 MAX_FILES = 50_000
 REPORT_DIR = "parch-analysis"  # единственное место, где анализу разрешено создавать файлы
+MARKER = ".parch-analysis"
 LANGUAGE_SUFFIXES = {
     "python": (".py",),
     "typescript": (".ts", ".tsx"),
@@ -169,22 +183,44 @@ def instruction_facts(project: Path) -> list[dict[str, Any]]:
     ]
 
 
+def equivalent(facts: dict[str, Any], role: str) -> dict[str, Any] | None:
+    for row in facts["equivalents"]:
+        if row["role"] == role:
+            return row
+    return None
+
+
 def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
     docs: dict[str, Any] = facts["docs"]
     flows: list[dict[str, Any]] = facts["workflows"]
     instructions: list[dict[str, Any]] = facts["instruction_files"]
     settings: dict[str, Any] = facts["claude_settings"]
     status: dict[str, tuple[str, str]] = {}
+    goal_eq = equivalent(facts, "goal")
     if docs["goal_criteria"]:
         status["P1"] = (OK, f"GOAL.md есть, критериев: {docs['goal_criteria']}")
     elif docs["goal"]:
         status["P1"] = (PARTIAL, "GOAL.md есть, но критериев вида «G1.» в нём нет")
+    elif goal_eq:
+        status["P1"] = (
+            PARTIAL,
+            f"цель есть в {goal_eq['path']} (равноценен GOAL.md, засчитывается); критериев вида «G1.» нет",
+        )
     else:
-        status["P1"] = (ABSENT, "нет GOAL.md")
-    have = [name for name in ("features", "modules") if docs[name]]
+        status["P1"] = (ABSENT, "нет GOAL.md и равноценного файла цели")
+    plan_eq, modules_eq = equivalent(facts, "plan"), equivalent(facts, "modules")
+    have = [
+        label for label, row in (("план блоков", plan_eq), ("карта модулей", modules_eq)) if row
+    ]
     status["P2"] = (
         OK if len(have) == 2 else PARTIAL if have else ABSENT,
-        "есть: " + (", ".join(have) if have else "ни плана блоков, ни карты модулей"),
+        "есть: "
+        + (", ".join(have) if have else "ни плана блоков, ни карты модулей")
+        + (
+            "; равноценные файлы засчитаны"
+            if any(r and not r["is_standard"] for r in (plan_eq, modules_eq))
+            else ""
+        ),
     )
     long = [i["path"] for i in instructions if i["lines"] > AGENTS_MAX_LINES]
     if not instructions:
@@ -204,8 +240,20 @@ def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
         OK if outside <= 3 else PARTIAL if outside <= 10 else ABSENT,
         f"заметок и планов вне docs/: {outside}",
     )
+    decisions = equivalent(facts, "decisions")
     adr = docs["adr"]
-    status["P6"] = (OK if adr >= 3 else PARTIAL if adr else ABSENT, f"записей решений (ADR): {adr}")
+    if decisions and not decisions["is_standard"]:
+        files = docs["decisions_files"]
+        status["P6"] = (
+            OK if files >= 3 else PARTIAL,
+            f"журнал решений в {decisions['path']} (равноценен ADR, засчитывается); "
+            + (f"файлов записей: {files}" if files else "один файл без разбиения на записи"),
+        )
+    else:
+        status["P6"] = (
+            OK if adr >= 3 else PARTIAL if adr else ABSENT,
+            f"записей решений (ADR): {adr}",
+        )
     guards = [settings["hooks"], bool(flows), facts["git"]["is_repo"]]
     status["P7"] = (
         OK if all(guards) else PARTIAL if any(guards) else ABSENT,
@@ -214,7 +262,11 @@ def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
     text = " ".join(read(project / i["path"]) for i in instructions).lower()
     status["P9"] = (
         PARTIAL if ("существующ" in text or "adr" in text) else ABSENT,
-        "в инструкциях есть упоминание существующего кода или решений"
+        (
+            "в инструкциях есть упоминание существующего кода или решений"
+            if ("существующ" in text or "adr" in text)
+            else "в инструкциях нет требования искать существующий код и решения"
+        )
         if text
         else "инструкций нет",
     )
@@ -227,10 +279,11 @@ def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
         OK if docs["incidents"] and budget else PARTIAL if docs["incidents"] or budget else ABSENT,
         f"отчётов об инцидентах: {docs['incidents']}, бюджет в конституции: {'да' if budget else 'нет'}",
     )
+    lessons = equivalent(facts, "lessons")
     status["P11"] = (
-        PARTIAL if docs["lessons"] else ABSENT,
-        "есть LESSONS.md (связь с тестами проверяет агент)"
-        if docs["lessons"]
+        PARTIAL if docs["lessons"] or lessons else ABSENT,
+        "есть журнал уроков (связь с тестами проверяет агент)"
+        if docs["lessons"] or lessons
         else "нет LESSONS.md",
     )
     if not flows:
@@ -250,7 +303,14 @@ def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
     return [{"id": i, "title": t, "status": status[i][0], "why": status[i][1]} for i, t in CARD]
 
 
-def inventory(project: Path) -> dict[str, Any]:
+def markdown_count(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    return len([p for p in path.rglob("*.md") if p.name.lower() != "readme.md"])
+
+
+def inventory(project: Path, protected: list[str] | None = None) -> dict[str, Any]:
+    zones = planmod.clean_zone_list(protected or [])
     files = walk(project)
     rel = [f.relative_to(project).as_posix() for f in files]
     languages = {lang: sum(p.endswith(sfx) for p in rel) for lang, sfx in LANGUAGE_SUFFIXES.items()}
@@ -266,11 +326,14 @@ def inventory(project: Path) -> dict[str, Any]:
     settings = project / ".claude" / "settings.json"
     settings_text = read(settings)
     adr_dir = project / "docs" / "adr"
-    incidents = project / "state" / "incidents"
+    equivalents = eqmod.find_equivalents(project)
+    incidents_path = eqmod.equivalent_path(equivalents, "incidents")
+    decisions_path = eqmod.equivalent_path(equivalents, "decisions")
     status = snapshot(project)
     if status is not None:
         snapshot_file(project).write_text(
-            json.dumps({"project": str(project), "snapshot": status}), encoding="utf-8"
+            json.dumps({"project": str(project), "snapshot": status, "extra_allowed": []}),
+            encoding="utf-8",
         )
     facts: dict[str, Any] = {
         "project": project.name,
@@ -289,6 +352,7 @@ def inventory(project: Path) -> dict[str, Any]:
         "instruction_files": instructions,
         "markdown_outside_docs": outside[:20],
         "markdown_outside_docs_total": len(outside),
+        "equivalents": equivalents,
         "docs": {
             "goal": goal.is_file(),
             "goal_criteria": len(GOAL_CRITERION.findall(read(goal))),
@@ -303,7 +367,10 @@ def inventory(project: Path) -> dict[str, Any]:
             "adr": len([p for p in adr_dir.glob("*.md") if p.name[:4].isdigit()])
             if adr_dir.is_dir()
             else 0,
-            "incidents": len(list(incidents.glob("*.md"))) if incidents.is_dir() else 0,
+            "decisions_files": markdown_count(project / decisions_path)
+            if decisions_path and decisions_path.endswith("/")
+            else 0,
+            "incidents": markdown_count(project / incidents_path) if incidents_path else 0,
         },
         "claude_settings": {
             "exists": settings.is_file(),
@@ -313,15 +380,112 @@ def inventory(project: Path) -> dict[str, Any]:
     }
     facts["p_card"] = card(facts, project)
     facts["questions"] = [{"id": k, "question": v} for k, v in QUESTIONS.items()]
+    facts["tools"] = tools.detect(project, rel, languages)
+    facts["hotspots"] = history.hotspots(project, rel)
+    facts["dead_code"] = deadcode.candidates(project, rel)
+    facts["risks"] = report.risks(facts, facts["hotspots"], facts["dead_code"], facts["tools"])
+    facts["health_card"] = report.health_card(
+        languages, facts["tools"], facts["hotspots"], facts["dead_code"], [], facts["test_files"]
+    )
+    plan_rows = planmod.build_plan(equivalents, rel, zones)
+    facts["protected_paths"] = zones
+    facts["plan"] = plan_rows
+    facts["plan_problems"] = planmod.validate(plan_rows, zones)
     return facts
+
+
+def report_dir_state(project: Path) -> Path:
+    """Папка отчёта: новая или созданная этим анализом (с маркером). Чужую папку не трогаем."""
+    folder = project / REPORT_DIR
+    if folder.exists() and not (folder / MARKER).is_file():
+        raise ValueError(
+            f"папка {REPORT_DIR}/ уже существует и создана не этим анализом: остановись и спроси владельца"
+        )
+    folder.mkdir(exist_ok=True)
+    (folder / MARKER).write_text("создано /parch:analyze-existing" + chr(10), encoding="utf-8")
+    return folder
+
+
+def baseline(project: Path, run: list[str]) -> dict[str, Any]:
+    """Запуск разрешённых инструментов в режиме «только отчёт»; без списка ничего не запускается."""
+    names = [p.suffix.lower() for p in walk(project)]
+    languages = {lang: sum(n in sfx for n in names) for lang, sfx in LANGUAGE_SUFFIXES.items()}
+    folder = report_dir_state(project)
+    results = tools.run_baseline(project, run, languages)
+    written = tools.write_baseline(folder, results)
+    if any(r["tool"].startswith("dotnet") and r.get("status") == "выполнен" for r in results):
+        saved = snapshot_file(project)
+        if saved.is_file():
+            data = json.loads(saved.read_text(encoding="utf-8"))
+            data["extra_allowed"] = list(tools.BUILD_DIRS)  # след разрешённой сборки C#
+            saved.write_text(json.dumps(data), encoding="utf-8")
+    return {
+        "results": [{k: v for k, v in r.items() if k != "output_tail"} for r in results],
+        "written": written,
+    }
+
+
+def load_baseline(folder: Path) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for path in (
+        sorted((folder / "baseline").glob("*.json")) if (folder / "baseline").is_dir() else []
+    ):
+        try:
+            data: object = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            results.append(dict(data))  # pyright: ignore[reportUnknownArgumentType]
+    return results
+
+
+def write_artifacts(project: Path, protected: list[str] | None) -> dict[str, Any]:
+    """Пишет в parch-analysis/: QUESTIONS.md, PLAN.md, черновики GOAL и решений, facts.json."""
+    facts = inventory(project, protected)
+    folder = report_dir_state(project)
+    results = load_baseline(folder)
+    facts["baseline"] = [{k: v for k, v in r.items() if k != "output_tail"} for r in results]
+    facts["health_card"] = report.health_card(
+        facts["languages"],
+        facts["tools"],
+        facts["hotspots"],
+        facts["dead_code"],
+        results,
+        facts["test_files"],
+    )
+    written: list[str] = []
+
+    def put(relative: str, text: str) -> None:
+        target = folder / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8", newline=chr(10))
+        written.append(f"{REPORT_DIR}/{relative}")
+
+    put("QUESTIONS.md", deadcode.questions_markdown(facts["questions"], facts["dead_code"]))
+    put("PLAN.md", planmod.plan_markdown(facts["plan"], facts["protected_paths"]))
+    goal = report.goal_draft(project, facts["equivalents"])
+    if goal:
+        put("drafts/GOAL.md", goal)
+    decisions = report.adr_drafts(project, facts["equivalents"])
+    if decisions:
+        put("drafts/ADR-DRAFTS.md", decisions)
+    put("facts.json", json.dumps(facts, ensure_ascii=False, indent=2) + chr(10))
+    return {
+        "written": written,
+        "plan_problems": facts["plan_problems"],
+        "risks": len(facts["risks"]),
+    }
 
 
 def verify(project: Path, before: str | None) -> dict[str, Any]:
     now = snapshot(project)
     saved = snapshot_file(project)
-    if before is None and saved.is_file():
+    extra: list[str] = []
+    if saved.is_file():
         saved_data = json.loads(saved.read_text(encoding="utf-8"))
-        before = saved_data["snapshot"] if saved_data["project"] == str(project) else None
+        if saved_data["project"] == str(project):
+            before = before if before is not None else saved_data["snapshot"]
+            extra = list(saved_data.get("extra_allowed", []))
     if now is None:
         return {
             "ok": None,
@@ -331,10 +495,13 @@ def verify(project: Path, before: str | None) -> dict[str, Any]:
     if before is None:
         raise ValueError("нет состояния «до»: сначала выполни inventory")
     old = set(before.splitlines())
+
+    def allowed(line: str) -> bool:
+        path = changed_path(line)
+        return path.startswith(f"{REPORT_DIR}/") or any(part in extra for part in path.split("/"))
+
     changed = [
-        line.split(chr(9))[0]
-        for line in now.splitlines()
-        if line not in old and not changed_path(line).startswith(f"{REPORT_DIR}/")
+        line.split(chr(9))[0] for line in now.splitlines() if line not in old and not allowed(line)
     ]
     return {
         "ok": not changed,
@@ -353,17 +520,26 @@ def main() -> int:
         command = request.get("command")
         if not project.is_dir():
             raise ValueError(f"нет папки проекта: {project}")
+        protected = request.get("protected_paths")
         if command == "inventory":
             if (project / REPORT_DIR).exists():
                 raise ValueError(
                     f"папка {REPORT_DIR}/ уже существует: остановись и спроси владельца, как быть "
                     "(анализ не должен перезаписать или смешать её содержимое со своим отчётом)"
                 )
-            result = inventory(project)
+            result = inventory(project, protected)
+        elif command == "baseline":
+            raw_run: Any = request.get("run") or []
+            run = (
+                [str(x) for x in cast("list[object]", raw_run)] if isinstance(raw_run, list) else []
+            )
+            result = baseline(project, run)
+        elif command == "write":
+            result = write_artifacts(project, protected)
         elif command == "verify":
             result = verify(project, request.get("before"))
         else:
-            raise ValueError("command должен быть inventory или verify")
+            raise ValueError("command должен быть inventory, baseline, write или verify")
     except (ValueError, OSError) as error:
         sys.stderr.write(f"analyze-existing: {error}\n")
         return 1
