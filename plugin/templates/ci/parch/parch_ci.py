@@ -3119,7 +3119,7 @@ STATE_WORKFLOW = "state"
 AGENTS_MAX_LINES = 150
 STANDARD_NOT_YET = (
     "обязательные файлы проекта, features.json и MODULES.md, конкурирующие инструкции, "
-    ".md вне docs/, раздел «Основания» в PR, счётчик инцидентов и порог stuck (D2-4)"
+    ".md вне docs/, раздел «Основания» в PR"
 )
 WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
 
@@ -3299,6 +3299,138 @@ def blocked_without_incident_problems(project: Path) -> list[str]:
     return problems
 
 
+INCIDENT_BUDGET_DEFAULT = 2  # STANDARD.md, 6.6: бюджет инцидентов на блок по умолчанию
+INCIDENT_BUDGET_LINE = re.compile(r"^\s*Бюджет инцидентов на блок:\s*(\d+)\s*$", re.MULTILINE)
+NO_BLOCK = "NONE"  # в имени отчёта: работа вне блока
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+IMPACT_EVIDENCE = re.compile(r"\bG\d+\b|ни один", re.IGNORECASE)
+HISTORY_EVIDENCE = re.compile(
+    r"https?://|#\d+|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b"  # ссылка, PR, коммит
+    r"|\d{4}-\d{2}-\d{2}-[\w-]+\.md"  # прошлый отчёт об инциденте
+    r"|искал[^\n]{3,120}не нашёл",  # «искал там-то, не нашёл»
+    re.IGNORECASE,
+)
+IMPACT_HEADING = "Влияние на цель"
+HISTORY_HEADING = "Что нашёл в истории"
+INCIDENT_SERVICE_FILES = {".gitkeep", "readme.md"}
+
+
+def incident_budget(project: Path, override: object = None) -> int:
+    """Бюджет инцидентов блока: свой (`incident_budget` в features.json) или из CONSTITUTION.md."""
+    if isinstance(override, int) and not isinstance(override, bool) and override > 0:
+        return override
+    for name in CONSTITUTIONS:
+        path = project / name
+        if path.is_file():
+            found = INCIDENT_BUDGET_LINE.search(path.read_text(encoding="utf-8"))
+            if found:
+                return int(found.group(1))
+    return INCIDENT_BUDGET_DEFAULT
+
+
+def incident_files(project: Path) -> list[Path]:
+    folder = project / "state" / "incidents"
+    if not folder.is_dir():
+        return []
+    return sorted(p for p in folder.iterdir() if p.name.lower() not in INCIDENT_SERVICE_FILES)
+
+
+def markdown_section(text: str, heading: str) -> str | None:
+    """Текст раздела `## heading` без HTML-комментариев (None, если раздела нет)."""
+    lines = HTML_COMMENT.sub("", text).splitlines()
+    wanted = heading.lower()
+    for index, line in enumerate(lines):
+        if re.match(r"^#{1,6}\s+", line) and line.lstrip("# ").strip().lower() == wanted:
+            body: list[str] = []
+            for follow in lines[index + 1 :]:
+                if re.match(r"^#{1,6}\s", follow):
+                    break
+                body.append(follow)
+            return "\n".join(body).strip()
+    return None
+
+
+def incident_report_problems(project: Path, block_ids: set[str] | None) -> list[str]:
+    """Отчёты state/incidents/: имя, блок, «Влияние на цель» и «Что нашёл в истории» (6.3, 6.5a)."""
+    problems: list[str] = []
+    for path in incident_files(project):
+        rel = f"state/incidents/{path.name}"
+        found = INCIDENT_NAME.match(path.name)
+        if not found:
+            problems.append(
+                f"{rel}: имя должно быть ГГГГ-ММ-ДД-БЛОК-слово.md "
+                f"(БЛОК, например F9, или {NO_BLOCK}, "
+                "если работа вне блока)"
+            )
+            continue
+        block = found["block"]
+        if block != NO_BLOCK and block_ids is not None and block not in block_ids:
+            problems.append(
+                f"{rel}: блока {block} нет в state/features.json (вне блока: {NO_BLOCK})"
+            )
+        text = path.read_text(encoding="utf-8")
+        impact = markdown_section(text, IMPACT_HEADING)
+        if not impact or not IMPACT_EVIDENCE.search(impact):
+            problems.append(
+                f"{rel}: раздел «{IMPACT_HEADING}» пуст или без критерия цели (G1…) "
+                "и без слов «ни один»: "
+                "прежде чем чинить, из отчёта должно быть видно, нужно ли чинить"
+            )
+        history = markdown_section(text, HISTORY_HEADING)
+        if not history or not HISTORY_EVIDENCE.search(history):
+            problems.append(
+                f"{rel}: раздел «{HISTORY_HEADING}» пуст: нужны ссылки "
+                "(прошлые инциденты, LESSONS.md, "
+                "коммиты и PR по тем же файлам) или запись «искал там-то, не нашёл»"
+            )
+    return problems
+
+
+def incident_budget_problems(project: Path) -> list[str]:
+    """Блок, исчерпавший бюджет инцидентов, обязан иметь статус stuck (его ставит PR с отчётом)."""
+    path = project / "state" / "features.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    counts: dict[str, int] = {}
+    for report in incident_files(project):
+        found = INCIDENT_NAME.match(report.name)
+        if found and found["block"] != NO_BLOCK:
+            counts[found["block"]] = counts.get(found["block"], 0) + 1
+    problems: list[str] = []
+    for entry in as_list(as_dict(data).get("features")):
+        item = as_dict(entry)
+        block = str(item.get("id", "?"))
+        budget = incident_budget(project, item.get("incident_budget"))
+        if counts.get(block, 0) >= budget and item.get("status") not in {
+            "stuck",
+            "done",
+            "dropped",
+        }:
+            problems.append(
+                f"state/features.json: у блока {block} инцидентов {counts[block]} "
+                f"при бюджете {budget}, "
+                "а статус не «stuck». Статус ставит тот же PR, что добавляет отчёт; "
+                "снять его может только "
+                "решение владельца (статус или incident_budget блока в features.json)"
+            )
+    return problems
+
+
+def block_ids_of(project: Path) -> set[str] | None:
+    path = project / "state" / "features.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return {str(as_dict(e).get("id", "")) for e in as_list(as_dict(data).get("features"))}
+
+
 def check_standard(project: Path, language: str) -> Result:
     """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
     del language
@@ -3312,6 +3444,8 @@ def check_standard(project: Path, language: str) -> Result:
     if os_problem:
         problems.append(os_problem)
     problems.extend(blocked_without_incident_problems(project))
+    problems.extend(incident_report_problems(project, block_ids_of(project)))
+    problems.extend(incident_budget_problems(project))
     agents = project / "AGENTS.md"
     if agents.is_file():
         size = len(agents.read_text(encoding="utf-8").splitlines())

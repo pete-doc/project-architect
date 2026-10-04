@@ -317,7 +317,11 @@ def test_a_blocked_block_with_its_own_incident_report_passes(tmp_path: Path) -> 
     root = project(tmp_path)
     features_file(root, ("F4", "blocked"), ("F5", "waiting_owner"), ("F6", "planned"))
     (root / "state" / "incidents").mkdir()
-    (root / "state" / "incidents" / "2026-10-04-F9-other.md").write_text("x", encoding="utf-8")
+    report = (
+        "# Отчёт\n\n## Влияние на цель\n\nКритерий G1.\n\n"
+        "## Что нашёл в истории\n\nИскал в state/incidents/, не нашёл.\n"
+    )
+    (root / "state" / "incidents" / "2026-10-04-F5-other.md").write_text(report, encoding="utf-8")
     fails(root, "блок F4")  # отчёт чужого блока не считается
-    (root / "state" / "incidents" / "2026-10-04-F4-loop.md").write_text("x", encoding="utf-8")
+    (root / "state" / "incidents" / "2026-10-04-F4-loop.md").write_text(report, encoding="utf-8")
     passes(root)  # waiting_owner и planned отчёта не требуют

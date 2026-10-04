@@ -199,7 +199,7 @@ def test_blocked_blocks_and_their_incidents_are_put_in_front_of_the_owner(tmp_pa
     root = make(
         tmp_path,
         [
-            feature("F9", ["G1"], [], "blocked", title="Выгрузка в PDF"),
+            {**feature("F9", ["G1"], [], "blocked", title="Выгрузка в PDF"), "incident_budget": 3},
             feature("F8", ["G1"], [], "waiting_owner", title="Пилот на живом проекте"),
         ],
     )
