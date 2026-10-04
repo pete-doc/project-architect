@@ -31,10 +31,10 @@ def health_card(
     hot: list[dict[str, Any]],
     dead: dict[str, Any],
     baseline: list[dict[str, Any]],
-    test_files: int,
+    test_files: int | dict[str, int],
 ) -> list[dict[str, Any]]:
-    """Карточка здоровья по языкам. Чего не измеряли, так и пишем: «не измерялось»."""
-    ran = {str(b["tool"]): b for b in baseline if b.get("status") == "выполнен"}
+    """Карточка здоровья по языкам: у каждого языка только его инструменты. Чего не измеряли, так и пишем."""
+    by_tool = {str(b["tool"]): b for b in baseline}
     rows: list[dict[str, Any]] = []
     for language, count in languages.items():
         if not count:
@@ -43,43 +43,124 @@ def health_card(
         for key, title, alarming in HEALTH_SIGNALS:
             value = "не измерялось"
             if key == "tests":
-                value = (
-                    f"файлов тестов в проекте: {test_files}"
-                    if language in {"python", "csharp", "typescript", "powershell"}
-                    else value
-                )
+                own = test_files.get(language, 0) if isinstance(test_files, dict) else test_files
+                value = f"файлов тестов на этом языке: {own}{tests_note(by_tool.get('tests'), language)}"
             elif key == "lint":
                 value = "настроен" if configured.get("Линтер и форматирование") else "не настроен"
-                done = [
-                    r
-                    for k, r in ran.items()
-                    if k in {"ruff", "tsc", "pyright", "psscriptanalyzer", "dotnet-format"}
-                ]
-                if done:
-                    value += f"; запусков: {len(done)}, строк вывода: {sum(int(r['lines']) for r in done)}"
+                parts = [lint_part(k, by_tool.get(k)) for k in LINT_TOOLS.get(language, ())]
+                value += "".join(f"; {p}" for p in parts if p)
             elif key == "architecture":
                 value = (
                     "правила настроены" if configured.get("Правила архитектуры") else "правил нет"
                 )
             elif key == "dead":
-                value = f"кандидатов в мёртвый код: {dead['total']}"
+                total = int(dead.get("by_language", {}).get(language, 0))
+                value = f"кандидатов в мёртвый код: {total}"
+                if language == "python" and "vulture" in by_tool:
+                    value += "; " + lint_part("vulture", by_tool["vulture"])
             elif key == "hotspots":
-                value = f"горячих точек без теста: {sum(1 for h in hot if not h['has_test'])} из {len(hot)}"
-            elif key == "build" and ran:
-                bad = [
-                    k
-                    for k, r in ran.items()
-                    if k.startswith("dotnet-build") and r["returncode"] != 0
-                ]
-                value = "сборка C# не проходит" if bad else "проверено запуском: сборка проходит"
-            elif key == "dup" and "jscpd" in ran:
-                value = "запускался (см. baseline/jscpd.json)"
+                own = [h for h in hot if language_of(str(h["path"])) == language]
+                value = f"горячих точек без теста: {sum(1 for h in own if not h['has_test'])} из {len(own)}"
+            elif key == "build":
+                value = build_value(language, by_tool)
+            elif key == "dup":
+                value = dup_value(language, by_tool.get("jscpd"))
             elif key == "seams":
                 value = "оценивается в PR 2 (карта и швы)"
             rows.append(
                 {"language": language, "signal": title, "value": value, "alarming_if": alarming}
             )
     return rows
+
+
+LINT_TOOLS = {
+    "python": ("ruff", "pyright"),
+    "csharp": ("dotnet-format",),
+    "typescript": ("tsc",),
+    "powershell": ("psscriptanalyzer",),
+}
+LANGUAGE_BY_SUFFIX = {
+    ".py": "python",
+    ".cs": "csharp",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+}
+
+
+def language_of(path: str) -> str:
+    return LANGUAGE_BY_SUFFIX.get(Path(path).suffix.lower(), "")
+
+
+def not_done(tool: str, result: dict[str, Any] | None) -> str | None:
+    """Строка, если инструмент не запускался или не выполнился; None, если есть результат."""
+    if result is None:
+        return None
+    if result.get("status") != "выполнен":
+        return f"{tool}: {result.get('status')}"
+    if not result.get("metrics"):
+        return f"{tool}: запускался, вывод не разобрался (см. baseline/{tool}.json)"
+    return None
+
+
+def lint_part(tool: str, result: dict[str, Any] | None) -> str:
+    """Одна фраза по одному инструменту; пусто, если его не запускали."""
+    problem = not_done(tool, result)
+    if problem or result is None:
+        return problem or ""
+    m: dict[str, Any] = result["metrics"]
+    if tool == "ruff":
+        return f"ruff по правилам стандарта (без настроек проекта): {m['issues']} замечаний, из них исправляется автоматически: {m['auto_fixable']}"
+    if tool == "pyright":
+        return f"pyright: ошибок {m['errors']}, предупреждений {m['warnings']}"
+    if tool == "vulture":
+        return f"vulture: {m['candidates']}"
+    if tool == "dotnet-format":
+        return f"dotnet format: нарушений {m['violations']} в {m['files']} файлах; проектов без нарушений {m['clean_projects']} из {m['projects']}"
+    if tool == "tsc":
+        return f"tsc: ошибок {m['errors']}"
+    return f"PSScriptAnalyzer: ошибок {m['errors']}, предупреждений {m['warnings']}, сведений {m['information']}"
+
+
+def build_value(language: str, by_tool: dict[str, dict[str, Any]]) -> str:
+    if language == "csharp":
+        result = by_tool.get("dotnet-build")
+        if result is None:
+            return "не измерялось"
+        problem = not_done("dotnet-build", result)
+        if problem:
+            return problem
+        m: dict[str, Any] = result["metrics"]
+        text = f"сборка: собирается проектов {m['built']} из {m['projects']}, предупреждений {m['warnings']}, ошибок {m['errors']}"
+        return text + (f"; не собрались: {', '.join(m['failed'])}" if m["failed"] else "")
+    tests = by_tool.get("tests")
+    if language == "python" and tests and tests.get("status") == "выполнен":
+        m = tests["metrics"]
+        return "проверено запуском тестов: " + (
+            "все прошли" if not m.get("tests_failed") else f"упало {m['tests_failed']}"
+        )
+    return "не измерялось"
+
+
+def dup_value(language: str, result: dict[str, Any] | None) -> str:
+    if result is None:
+        return "не измерялось"
+    problem = not_done("jscpd", result)
+    if problem:
+        return problem
+    own: dict[str, Any] | None = result["metrics"].get("by_format", {}).get(language)
+    if own is None:
+        return "jscpd: файлов этого языка для сравнения не нашёл (или формат не поддерживается)"
+    return f"jscpd: {own['percentage']}% строк повторяется"
+
+
+def tests_note(result: dict[str, Any] | None, language: str) -> str:
+    """Тесты, которые запускал анализ (по разрешению владельца), и те, что анализ не запускал: это не провал."""
+    if result is None or language != "python" or result.get("status") != "выполнен":
+        return ""
+    m: dict[str, Any] = result["metrics"]
+    return f"; запускались анализом: {m['files_run']} файлов, {m['tests_passed']} тестов, упало {m['tests_failed']}; не запускались анализом (запускают процессы, игру или PowerShell): {m['files_not_run']} файлов, это не провал"
 
 
 def risks(
