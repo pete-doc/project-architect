@@ -475,7 +475,9 @@ def test_the_health_card_says_not_measured_until_tools_were_run(owner_project: P
         and python["Дублирование"] == "не измерялось"
     )
     assert python["Горячие точки"].startswith("горячих точек без теста:")
-    assert python["Межъязыковые швы без тестов"] == "оценивается в PR 2 (карта и швы)"
+    assert (
+        python["Межъязыковые швы без тестов"] == "швов между языками не найдено"
+    )  # PR 2: раньше «оценивается в PR 2»
     assert {r["language"] for r in rows} == {"python", "csharp", "powershell"}
     assert {r["alarming_if"] for r in rows if r["signal"] == "Дублирование"} == {
         "процент выше примерно 5–10%"
@@ -502,9 +504,25 @@ def test_write_creates_the_analysis_files_inside_the_report_folder_only(
         {"command": "write", "project_dir": str(owner_project), "protected_paths": ["data/"]}
     )
     folder = owner_project / "parch-analysis"
-    names = ("QUESTIONS.md", "PLAN.md", "drafts/GOAL.md", "drafts/ADR-DRAFTS.md", "facts.json")
+    names = (
+        "QUESTIONS.md",
+        "PLAN.md",
+        "drafts/GOAL.md",
+        "drafts/ADR-DRAFTS.md",
+        "drafts/MODULES.md",
+        "drafts/INTERFACES.md",
+        "facts.json",
+    )
     assert set(out["written"]) == {f"parch-analysis/{n}" for n in names}
-    for name in ("QUESTIONS.md", "PLAN.md", "drafts/GOAL.md", "drafts/ADR-DRAFTS.md", "facts.json"):
+    for name in (
+        "QUESTIONS.md",
+        "PLAN.md",
+        "drafts/GOAL.md",
+        "drafts/ADR-DRAFTS.md",
+        "drafts/MODULES.md",
+        "drafts/INTERFACES.md",
+        "facts.json",
+    ):
         assert (folder / name).is_file(), name
     assert "черновик, ждёт утверждения владельца" in (folder / "drafts" / "GOAL.md").read_text(
         encoding="utf-8"
