@@ -213,10 +213,23 @@ def test_the_f15_spec_asks_the_owner_five_questions_and_the_backlog_records_the_
     None
 ):
     spec = (REPO / "docs" / "specs" / "F15-analyze-existing.md").read_text(encoding="utf-8")
-    questions = spec.split("## Что нужно от вас", 1)[1].split("## Риски", 1)[0]
-    assert all(f"\n{n}. " in questions for n in range(1, 6))
-    for fact in ("PR 1.", "PR 2.", "PR 3.", "PR 4.", "tests/test_catalog.py", "implementer"):
-        assert fact in spec, fact
+    answers = spec.split("## Решения владельца (2026-10-04)", 1)[1].split("## Риски", 1)[0]
+    assert "На все пять вопросов ответ «да»" in answers and "implementer" in answers
+    flat = " ".join(spec.split())
+    for fact in (
+        "PR 1.", "PR 2.", "PR 3.", "PR 4.", "tests/test_catalog.py", "implementer",
+        "Снимок исходного состояния инструментов", "Горячие точки по истории git",
+        "Вопросы по мёртвому коду", "вызывается ли снаружи", "рефлексия", "планировщиком",
+        "Шов без контрактного теста — красный сигнал", "только после контрактного теста",
+        "характеризационного теста", "рискованно, нужно отдельное «да»",
+        "блок F19", "state/acceptance/F19.md", "**уже есть**",
+    ):  # fmt: skip
+        assert fact.lower() in flat.lower(), fact
+    features = json.loads((REPO / "state" / "features.json").read_text(encoding="utf-8"))[
+        "features"
+    ]
+    f19 = next(f for f in features if f["id"] == "F19")
+    assert f19["depends_on"] == ["F15", "F17"] and f19["goal"] == ["G4"]
     backlog = (REPO / "docs" / "BACKLOG.md").read_text(encoding="utf-8")
     assert (
         "`guard_shell_writes` и `loop_guard`" in backlog
