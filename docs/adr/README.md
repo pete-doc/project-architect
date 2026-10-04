@@ -21,5 +21,5 @@
 | [0013](0013-razdelenie-ci.md) | Разделение CI: быстрая часть на каждую отправку, полный прогон перед слиянием | accepted | обратимое по коду | 2026-10-03 |
 | [0014](0014-priemka-vladeltsem.md) | Приёмка владельцем для блоков, которые не проверяются тестами | accepted | обратимое | 2026-10-03 |
 | [0015](0015-katalog-vozmozhnostey.md) | Каталог возможностей и описания функций проверяет parch_ci, а не линтер языка | accepted | обратимое | 2026-10-04 |
-| [0016](0016-isklyuchenie-v-ohrane-putei-novye-md-shablony-pod-plugin-tem.md) | Исключение в охране путей: новые .md-шаблоны под plugin/templates/ в репозитории продукта | proposed | обратимое | 2026-10-04 |
+| [0016](0016-isklyuchenie-v-ohrane-putei-novye-md-shablony-pod-plugin-tem.md) | Исключение в охране путей: новые .md-шаблоны под plugin/templates/ в репозитории продукта | accepted | обратимое | 2026-10-04 |
 | [0017](0017-dva-parallelnyh-pr.md) | До двух параллельных PR, если они не пересекаются по файлам | accepted | обратимое | 2026-10-04 |
