@@ -10,11 +10,14 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 CATALOG_PATH = "docs/CAPABILITIES.md"
+DEBT_PATH = "state/catalog-baseline.json"
 MAX_DESCRIPTION = 120
 SKIP_DIRS = {
     ".git", ".github", ".venv", "venv", "env", "node_modules", "__pycache__", "site-packages", "build",
@@ -237,32 +240,83 @@ def collect(project: Path) -> tuple[list[Entry], list[Missing]]:
     return py_found + cs_found, py_missing + cs_missing
 
 
-def check(project: Path, update: bool = False) -> tuple[list[str], list[str]]:
-    """(провалы, пометки). Провалы: функция без описания; каталог отстал от кода (без `update`)."""
+def debt_key(item: Missing) -> str:
+    """Опознавательный знак функции без описания: файл и имя, без номера строки (строки сдвигаются)."""
+    return f"{item.where.rsplit(':', 1)[0]}:{item.name}"
+
+
+def read_debt(project: Path) -> set[str] | None:
+    """Функции без описания, записанные владельцем (храповик); None, если файла нет."""
+    path = project / DEBT_PATH
+    if not path.is_file():
+        return None
+    data = cast("object", json.loads(path.read_text(encoding="utf-8")))
+    raw = cast("dict[str, object]", data).get("undescribed") if isinstance(data, dict) else None
+    return {str(x) for x in cast("list[object]", raw)} if isinstance(raw, list) else set()
+
+
+def write_debt(project: Path, debt: set[str]) -> None:
+    path = project / DEBT_PATH
+    if not debt:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps({"version": 1, "undescribed": sorted(debt)}, ensure_ascii=False, indent=2)
+    path.write_text(text + "\n", encoding="utf-8", newline="\n")
+
+
+def check(
+    project: Path, update: bool = False, accept_new: bool = False
+) -> tuple[list[str], list[str]]:
+    """(провалы, пометки): новая функция без описания и отставший каталог падают; старый долг из baseline допускается.
+
+    Храповик `state/catalog-baseline.json`: функции без описания, которые были в проекте до подключения проверки,
+    записаны там по файлу и имени; число может только снижаться. `update` пересобирает каталог и сокращает baseline
+    по исправленным функциям; записать новый долг в baseline (или создать его) может только владелец: `accept_new`.
+    """
     entries, missing = collect(project)
     problems: list[str] = []
     notes: list[str] = []
-    if missing:
+    known = read_debt(project)
+    current = {debt_key(m): m for m in missing}
+    fresh = sorted(k for k in current if known is None or k not in known)
+    if fresh and not accept_new:
         problems.append(
-            "У публичных функций нет однострочного описания (оно попадает в каталог возможностей):"
+            "У новых публичных функций нет однострочного описания (оно попадает в каталог возможностей):"
         )
-        problems += [f"  {m.where}: {m.name}: {m.reason}" for m in missing[:30]]
-        if len(missing) > 30:
-            problems.append(f"  ... и ещё {len(missing) - 30}")
+        problems += [
+            f"  {current[k].where}: {current[k].name}: {current[k].reason}" for k in fresh[:30]
+        ]
+        if len(fresh) > 30:
+            problems.append(f"  ... и ещё {len(fresh) - 30}")
+    if update and not problems:
+        new_debt = set(current) if accept_new else set(current) & (known or set())
+        if new_debt != (known or set()):
+            write_debt(project, new_debt)
+            notes.append(f"Долг по описаниям записан: функций без описания {len(new_debt)}.")
+    elif known is not None and not problems:
+        paid = sorted(known - set(current))
+        if paid:
+            notes.append(
+                f"Описаны {len(paid)} функций из долга: сократите baseline командой catalog --update."
+            )
     wanted = render(entries) if entries else ""
     path = project / CATALOG_PATH
-    current = path.read_text(encoding="utf-8") if path.is_file() else ""
-    if update and not missing:
-        if wanted != current and (wanted or path.is_file()):
+    on_disk = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if update and not problems:
+        if wanted != on_disk and (wanted or path.is_file()):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(wanted, encoding="utf-8", newline="\n")
             notes.append(f"Каталог пересобран: {CATALOG_PATH}, функций {len(entries)}.")
-            return problems, notes
-    elif wanted != current and not missing:
+    elif wanted != on_disk and not problems:
         problems.append(
             f"Каталог возможностей {CATALOG_PATH} отстал от кода или отсутствует. Пересоберите: "
             "python .github/parch/parch_ci.py catalog --update"
         )
     if not problems:
-        notes.append(f"Каталог возможностей в порядке: функций {len(entries)}, все с описанием.")
+        old = len(current)
+        tail = (
+            f", в долге без описания {old} (число только снижается)" if old else ", все с описанием"
+        )
+        notes.append(f"Каталог возможностей в порядке: функций {len(entries)}{tail}.")
     return problems, notes

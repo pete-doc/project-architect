@@ -7,7 +7,9 @@
   tests         число тестов не уменьшилось: каждый тест из baseline на месте
   modules       каждый модуль кода есть в docs/MODULES.md
   catalog       у публичных функций есть однострочное описание, каталог не отстал от кода
-                (--update пересобирает docs/CAPABILITIES.md; код в parch_catalog.py, Python и C#)
+                (--update пересобирает docs/CAPABILITIES.md; код в parch_catalog.py, Python и C#);
+                старые функции без описания записаны в state/catalog-baseline.json, число только
+                снижается; записать новый долг может владелец: catalog --update --accept-new
   deps          каждый пакет из манифестов есть в разделе «Разрешённые пакеты» CONSTITUTION.md
   dead-code     мёртвый код и лишние зависимости (vulture, deptry), «храповик» по baseline
   duplicates    дубли кода (jscpd), «храповик» по baseline
@@ -3495,11 +3497,13 @@ def check_standard(project: Path, language: str) -> Result:
     return result
 
 
-def check_catalog(project: Path, language: str, update: bool = False) -> Result:
+def check_catalog(
+    project: Path, language: str, update: bool = False, accept_new: bool = False
+) -> Result:
     """Описания публичных функций и свежесть каталога docs/CAPABILITIES.md."""
     import parch_catalog  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
 
-    problems, notes = parch_catalog.check(project, update)
+    problems, notes = parch_catalog.check(project, update, accept_new)
     result = Result()
     if problems:
         result.fail(*problems)
@@ -3595,7 +3599,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.check == "skips":
             result = check_skips(project, args.language, report, args.partial)
         elif args.check == "catalog":
-            result = check_catalog(project, args.language, args.update)
+            result = check_catalog(project, args.language, args.update, args.accept_new)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:
