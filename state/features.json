@@ -246,7 +246,7 @@
       "depends_on": [
         "F13"
       ],
-      "spec": "",
+      "spec": "docs/specs/F15-analyze-existing.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
