@@ -6,6 +6,8 @@
 Проверки:
   tests         число тестов не уменьшилось: каждый тест из baseline на месте
   modules       каждый модуль кода есть в docs/MODULES.md
+  catalog       у публичных функций есть однострочное описание, каталог не отстал от кода
+                (--update пересобирает docs/CAPABILITIES.md; код в parch_catalog.py, Python и C#)
   deps          каждый пакет из манифестов есть в разделе «Разрешённые пакеты» CONSTITUTION.md
   dead-code     мёртвый код и лишние зависимости (vulture, deptry), «храповик» по baseline
   duplicates    дубли кода (jscpd), «храповик» по baseline
@@ -3493,8 +3495,21 @@ def check_standard(project: Path, language: str) -> Result:
     return result
 
 
+def check_catalog(project: Path, language: str, update: bool = False) -> Result:
+    """Описания публичных функций и свежесть каталога docs/CAPABILITIES.md."""
+    import parch_catalog  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
+
+    problems, notes = parch_catalog.check(project, update)
+    result = Result()
+    if problems:
+        result.fail(*problems)
+    result.note(*notes)
+    return result
+
+
 CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "tests": check_tests,
+    "catalog": check_catalog,
     "modules": check_modules,
     "deps": check_deps,
     "dead-code": check_dead_code,
@@ -3579,6 +3594,8 @@ def main(argv: list[str] | None = None) -> int:
             result = check_tests(project, args.language, report, args.partial)
         elif args.check == "skips":
             result = check_skips(project, args.language, report, args.partial)
+        elif args.check == "catalog":
+            result = check_catalog(project, args.language, args.update)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:

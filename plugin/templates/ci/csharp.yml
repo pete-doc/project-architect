@@ -37,6 +37,7 @@ jobs:
       - run: python .github/parch/parch_ci.py skips --language csharp --report test-results
       - run: python .github/parch/parch_ci.py suppressions --language csharp
       - run: python .github/parch/parch_ci.py modules --language csharp
+      - run: python .github/parch/parch_ci.py catalog --language csharp
       - run: python .github/parch/parch_ci.py deps --language csharp
       - run: python .github/parch/parch_ci.py architecture --language csharp
       - run: python .github/parch/parch_ci.py dead-code --language csharp
