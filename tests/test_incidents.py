@@ -20,7 +20,10 @@ SPEC = REPO / "docs" / "specs" / "F13-incidents-stuck.md"
 TEMPLATE = REPO / "plugin" / "templates" / "docs" / "INCIDENT_TEMPLATE.md"
 
 IMPACT = "- Критерий цели: G1\n- Обходной путь: нет\n- Потрачено: инцидентов 1 (Сессий: 2)\n"
-HISTORY = "- Прошлые инциденты: искал в state/incidents/, не нашёл\n"
+HISTORY = (
+    "- Поиск по коду (какие запросы): «retry_loop», `parse_report`: не нашёл\n"
+    "- История изменений кода (`git log -S`): `git log -S retry_loop`: не нашёл\n"
+)
 
 
 def report(impact: str | None = IMPACT, history: str | None = HISTORY, block: str = "F4") -> str:
@@ -28,7 +31,7 @@ def report(impact: str | None = IMPACT, history: str | None = HISTORY, block: st
     if impact is not None:
         text += f"## Влияние на цель\n\n{impact}\n"
     if history is not None:
-        text += f"## Что нашёл в истории\n\n{history}"
+        text += f"## Где искал\n\n{history}"
     return text
 
 
@@ -70,27 +73,30 @@ def test_the_impact_section_is_required_and_must_name_a_goal_or_say_none(tmp_pat
     [
         None,  # раздела нет
         "\n",  # пустой
-        "- Прошлые инциденты:\n- Уроки (`docs/LESSONS.md`):\n- Коммиты и закрытые PR:\n",  # метки без ответов
-        "Ничего похожего не было.\n",  # слова без ссылки и без записи, где искали
-        # ссылка спрятана в комментарий
-        "<!-- https://example.com/pull/7 -->\n",
+        # метки шаблона без ответов
+        "- Поиск по коду (какие запросы):\n- Реестр модулей и каталог возможностей (если есть):\n"
+        "- История изменений кода (`git log -S`):\n- Прошлые отчёты и уроки:\n",
+        "- Поиск по коду: ничего похожего не нашёл\n- Прошлые отчёты и уроки: тоже нет\n",  # без запросов
+        "- Поиск по коду: «retry_loop»\n",  # один источник
+        "- История изменений кода (`git log -S`): `git log -S retry`\n"
+        "- Реестр модулей и каталог возможностей: «retry»\n",  # нет поиска по коду
+        "- Поиск по коду: нашёл много\n- Прошлые отчёты и уроки: 2026-10-01-F4-loop.md\n",  # код без запроса
+        "<!-- - Поиск по коду: «retry» -->\n<!-- - Реестр модулей: «retry» -->\n",  # спрятано в комментарий
     ],
 )
 def test_an_empty_history_section_fails_the_standard(tmp_path: Path, history: str | None) -> None:
-    out = std.fails(
-        workspace(tmp_path, (GOOD_NAME, report(history=history))), "Что нашёл в истории"
-    )
-    assert GOOD_NAME in out
+    out = std.fails(workspace(tmp_path, (GOOD_NAME, report(history=history))), "Где искал")
+    assert GOOD_NAME in out and "поиск по коду" in out
 
 
 @pytest.mark.parametrize(
     "history",
     [
-        "- PR https://github.com/pete-doc/project-architect/pull/16\n",
-        "- Закрытый PR #16 чинил то же\n",
-        "- Коммит 3ff0a4c менял этот файл\n",
-        "- Прошлый отчёт 2026-10-01-F4-loop.md: та же ошибка\n",
-        "- Искал в docs/LESSONS.md и git log -S, не нашёл\n",
+        "- Поиск по коду: «retry»\n- Реестр модулей и каталог возможностей: «retry», «Retry»: не нашёл\n",
+        "- Поиск по коду: `retry_loop`\n- Прошлые отчёты и уроки: 2026-10-01-F4-loop.md: та же ошибка\n",
+        "- Поиск по коду: «retry»\n- Прошлые отчёты и уроки: PR #16 чинил то же\n",
+        "- Поиск по коду: «retry»\n- История изменений кода (`git log -S`): коммит 3ff0a4c менял файл\n",
+        '- Поиск по коду: "retry"\n- История изменений кода (`git log -S`): `git log -S retry`: пусто\n',
     ],
 )
 def test_a_history_with_a_link_or_a_recorded_search_passes(tmp_path: Path, history: str) -> None:
@@ -99,9 +105,7 @@ def test_a_history_with_a_link_or_a_recorded_search_passes(tmp_path: Path, histo
 
 def test_the_unfilled_template_is_not_a_valid_report(tmp_path: Path) -> None:
     text = TEMPLATE.read_text(encoding="utf-8")
-    out = std.fails(
-        workspace(tmp_path, (GOOD_NAME, text)), "Влияние на цель", "Что нашёл в истории"
-    )
+    out = std.fails(workspace(tmp_path, (GOOD_NAME, text)), "Влияние на цель", "Где искал")
     assert out.count(GOOD_NAME) >= 2  # оба раздела названы в одном и том же файле
 
 
@@ -225,7 +229,7 @@ def test_init_copies_the_incident_template_and_the_budget_line() -> None:
     )
     assert "docs/INCIDENT_TEMPLATE.md" in init
     template = TEMPLATE.read_text(encoding="utf-8")
-    for heading in ("## Влияние на цель", "## Что нашёл в истории", "NONE"):
+    for heading in ("## Влияние на цель", "## Где искал", "NONE", "Поиск по коду"):
         assert heading in template, heading
 
 
@@ -233,11 +237,11 @@ def test_the_f13_spec_is_approved_and_records_the_owner_amendments() -> None:
     spec = SPEC.read_text(encoding="utf-8")
     assert "Статус: утверждена владельцем" in spec
     for fact in (
-        "Что нашёл в истории",
+        "Где искал",
         "вне блока",
         "новой сессией",
         "F13-…",
-        "искал там-то, не нашёл",
+        "поиск по коду с запросом",
     ):
         assert fact in spec, fact
 

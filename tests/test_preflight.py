@@ -191,6 +191,15 @@ def test_the_f15_stub_keeps_every_owner_requirement() -> None:
         "только в одном модуле",
         "Протокол из 5 шагов",
         "раздел «Основания» в PR",
+        "**Перенести**",
+        "**Переименовать под имена стандарта**",
+        "**Удалить**",
+        "**Перестроить**",
+        "Равноценные файлы засчитываются",
+        "архивной меткой в git",
+        "поимённым утверждением",
+        "git mv",
+        "отдельного «да»",
     ):
         assert fact.lower() in spec.lower(), fact
     features = json.loads((REPO / "state" / "features.json").read_text(encoding="utf-8"))[

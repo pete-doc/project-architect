@@ -215,7 +215,10 @@
         "F12"
       ],
       "spec": "docs/specs/F13-incidents-stuck.md",
-      "acceptance_tests": [],
+      "acceptance_tests": [
+        "tests/test_incidents.py",
+        "tests/test_loop_guard.py"
+      ],
       "status": "in_progress",
       "passes": false,
       "incidents": 0

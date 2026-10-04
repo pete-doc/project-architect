@@ -3304,14 +3304,22 @@ INCIDENT_BUDGET_LINE = re.compile(r"^\s*Бюджет инцидентов на �
 NO_BLOCK = "NONE"  # в имени отчёта: работа вне блока
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 IMPACT_EVIDENCE = re.compile(r"\bG\d+\b|ни один", re.IGNORECASE)
-HISTORY_EVIDENCE = re.compile(
+SEARCH_LINK = re.compile(
     r"https?://|#\d+|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b"  # ссылка, PR, коммит
     r"|\d{4}-\d{2}-\d{2}-[\w-]+\.md"  # прошлый отчёт об инциденте
-    r"|искал[^\n]{3,120}не нашёл",  # «искал там-то, не нашёл»
-    re.IGNORECASE,
+)
+SEARCH_QUERY = re.compile(
+    r"«[^»\s][^»]*»|`[^`\s][^`]*`|\"[^\"\s][^\"]*\""
+)  # поисковый запрос в кавычках
+SEARCH_LINE = re.compile(r"^\s*[-*]\s*(?P<label>[^:]{2,160}):\s*(?P<body>\S.*)$")
+SEARCH_SOURCES = (
+    ("code", re.compile(r"по коду", re.IGNORECASE)),
+    ("modules", re.compile(r"реестр модулей|каталог возможностей", re.IGNORECASE)),
+    ("history", re.compile(r"git log|истори[яи] изменений", re.IGNORECASE)),
+    ("past", re.compile(r"прошл\w*\s+(?:отч[её]т|инцидент)|урок|lessons", re.IGNORECASE)),
 )
 IMPACT_HEADING = "Влияние на цель"
-HISTORY_HEADING = "Что нашёл в истории"
+SEARCH_HEADING = "Где искал"
 INCIDENT_SERVICE_FILES = {".gitkeep", "readme.md"}
 
 
@@ -3350,6 +3358,23 @@ def markdown_section(text: str, heading: str) -> str | None:
     return None
 
 
+def search_sources(section: str) -> set[str]:
+    """Источники раздела «Где искал», у которых есть запрос или ссылка (пустая метка не в счёт)."""
+    found: set[str] = set()
+    for line in section.splitlines():
+        match = SEARCH_LINE.match(line)
+        if not match:
+            continue
+        label, body = match["label"], match["body"]
+        for source, pattern in SEARCH_SOURCES:
+            if not pattern.search(label):
+                continue
+            has_query = bool(SEARCH_QUERY.search(body))
+            if has_query or (source != "code" and SEARCH_LINK.search(body)):
+                found.add(source)
+    return found
+
+
 def incident_report_problems(project: Path, block_ids: set[str] | None) -> list[str]:
     """Отчёты state/incidents/: имя, блок, «Влияние на цель» и «Что нашёл в истории» (6.3, 6.5a)."""
     problems: list[str] = []
@@ -3376,12 +3401,15 @@ def incident_report_problems(project: Path, block_ids: set[str] | None) -> list[
                 "и без слов «ни один»: "
                 "прежде чем чинить, из отчёта должно быть видно, нужно ли чинить"
             )
-        history = markdown_section(text, HISTORY_HEADING)
-        if not history or not HISTORY_EVIDENCE.search(history):
+        searched = markdown_section(text, SEARCH_HEADING)
+        sources = search_sources(searched or "")
+        if "code" not in sources or len(sources) < 2:
             problems.append(
-                f"{rel}: раздел «{HISTORY_HEADING}» пуст: нужны ссылки "
-                "(прошлые инциденты, LESSONS.md, "
-                "коммиты и PR по тем же файлам) или запись «искал там-то, не нашёл»"
+                f"{rel}: раздел «{SEARCH_HEADING}» неполный: нужен поиск по коду с запросом "
+                "(строка «Поиск по коду: «запрос»») и ещё хотя бы один источник с запросом "
+                "или ссылкой "
+                "(реестр модулей или каталог возможностей, история изменений `git log -S`, прошлые "
+                "отчёты и уроки). «Не нашёл» засчитывается только с перечнем мест и запросов"
             )
     return problems
 

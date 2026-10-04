@@ -35,6 +35,7 @@ from _common import (
     project_dir,
     read_input,
 )
+from loop_guard import loop_flag, report_written_since
 
 HOOK = "stop_gate"
 COMMAND_TIMEOUT = 600
@@ -164,6 +165,23 @@ def decide(data: JsonDict, project: Path) -> str | None:
         return None
     commands = configured_commands(constitution) or detected_commands(project)
     session = get_str(data, "session_id")
+    flag = loop_flag(project, session)
+    if flag is not None:  # петля: сессия заканчивается отчётом, а не новой попыткой (F13)
+        if report_written_since(project, str(flag.get("ts", ""))):
+            warning = (
+                "loop_guard: в сессии была петля, отчёт записан. Правки кода запрещены, сессия "
+                "завершается; продолжение только новой сессией."
+            )
+            sys.stdout.write(json.dumps({"systemMessage": warning}, ensure_ascii=False) + chr(10))
+            return None
+        audit(project, data, HOOK, "block", "петля: отчёт об инциденте ещё не записан")
+        return (
+            "Была петля ("
+            + str(flag.get("detail", ""))
+            + "). Закончить можно только после отчёта: "
+            "напиши state/incidents/ГГГГ-ММ-ДД-БЛОК-слово.md по шаблону docs/INCIDENT_TEMPLATE.md "
+            "(блок по ветке или NONE). Больше ничего не правь."
+        )
     if not commands or not session_has_changes(project, session):
         return None
     failures = run_checks(project, commands)
@@ -185,7 +203,13 @@ def decide(data: JsonDict, project: Path) -> str | None:
         )
         sys.stdout.write(json.dumps({"systemMessage": warning}, ensure_ascii=False) + "\n")
         return None
-    audit(project, data, HOOK, "block", f"{len(failures)} проверок не прошли")
+    audit(
+        project,
+        data,
+        HOOK,
+        "block",
+        f"{len(failures)} проверок не прошли; sig={fingerprint[:12]}",
+    )
     return (
         "Закончить нельзя: тесты или проверки не проходят. Исправь код (не тесты и не проверки) "
         "и повтори.\n\n" + report

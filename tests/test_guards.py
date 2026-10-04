@@ -907,3 +907,12 @@ def test_push_with_global_git_options_is_still_a_push(project: Path) -> None:
     ):
         result = run_hook("pre_push.py", bash(command), project)
         assert_blocked(result, "pre_push", "macos-latest")
+
+
+# ---------- guard_shell_writes (подробные тесты: tests/test_shell_writes.py) ----------
+
+
+def test_shell_writes_to_project_files_are_blocked(project: Path) -> None:
+    result = run_hook("guard_shell_writes.py", bash("echo x > notes.txt"), project)
+    assert_blocked(result, "guard_shell_writes", "Write или Edit")
+    assert run_hook("guard_shell_writes.py", bash("echo x > test-report.xml"), project).code == 0
