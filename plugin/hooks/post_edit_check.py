@@ -210,6 +210,12 @@ def run_step(step: Step) -> list[str]:
     return [ln for ln in lines if step.keep(ln)]
 
 
+def error_signature(problems: list[str]) -> str:
+    """Подпись ошибки (проверка, файл и текст без номеров строк): по ней loop_guard видит повтор."""
+    normalized = sorted(re.sub(r":\d+(?::\d+)?", ":", line) for line in problems)
+    return hashlib.sha1(chr(10).join(normalized).encode("utf-8")).hexdigest()[:12]
+
+
 def collect_errors(file: Path, project: Path) -> tuple[list[str], bool]:
     """Возвращает (строки с ошибками, были ли файл автоматически переформатирован)."""
     before = _fingerprint(file)
@@ -233,6 +239,7 @@ def main() -> None:
                 continue
             errors, changed = collect_errors(file, project)
             problems.extend(errors)
+            audit(project, data, HOOK, "edit", f"{file} sha={_fingerprint(file)}")  # для loop_guard
             if changed:
                 reformatted.append(file.name)
         notes = [f"Файл {name} автоматически переформатирован." for name in reformatted]
@@ -240,7 +247,13 @@ def main() -> None:
             shown = problems[:MAX_LINES]
             extra = len(problems) - len(shown)
             tail = [f"... и ещё {extra} строк"] if extra > 0 else []
-            audit(project, data, HOOK, "errors", f"{len(problems)} строк с ошибками")
+            audit(
+                project,
+                data,
+                HOOK,
+                "errors",
+                f"{len(problems)} строк с ошибками; sig={error_signature(problems)}",
+            )
             sys.stderr.write(
                 "Проверки после правки нашли ошибки, исправь их:\n"
                 + "\n".join([*shown, *tail, *notes])

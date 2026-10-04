@@ -315,3 +315,17 @@ def test_stop_gate_finds_commands_through_path_lookup(project: Path, tmp_path: P
     assert result.blocked, result.stderr
     assert "(код 1)" in result.stderr  # команда нашлась и сама вернула ошибку
     assert "не удалось выполнить" not in result.stderr
+
+
+def test_loop_guard_stops_code_edits_after_three_equal_errors(project: Path) -> None:
+    """Подробные тесты петли: tests/test_loop_guard.py."""
+    folder = project / ".claude" / "audit"
+    folder.mkdir(parents=True)
+    row = (
+        '{"ts": "2026-10-04T10:00:00+00:00", "session": "s1", "hook": "post_edit_check", '
+        '"decision": "errors", "detail": "1 строк с ошибками; sig=a1b2c3d4e5f6"}\n'
+    )
+    (folder / "2026-10-04.jsonl").write_text(row * 3, encoding="utf-8")
+    payload = {**file_call("Write", project / "src" / "app.py"), "session_id": "s1"}
+    result = run_hook("loop_guard.py", payload, project)
+    assert result.blocked and "[loop_guard]" in result.stderr and "Петля" in result.stderr

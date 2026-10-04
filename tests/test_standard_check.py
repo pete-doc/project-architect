@@ -319,7 +319,8 @@ def test_a_blocked_block_with_its_own_incident_report_passes(tmp_path: Path) -> 
     (root / "state" / "incidents").mkdir()
     report = (
         "# Отчёт\n\n## Влияние на цель\n\nКритерий G1.\n\n"
-        "## Что нашёл в истории\n\nИскал в state/incidents/, не нашёл.\n"
+        "## Где искал\n\n- Поиск по коду: «retry»\n"
+        "- История изменений кода (`git log -S`): `git log -S retry`\n"
     )
     (root / "state" / "incidents" / "2026-10-04-F5-other.md").write_text(report, encoding="utf-8")
     fails(root, "блок F4")  # отчёт чужого блока не считается
