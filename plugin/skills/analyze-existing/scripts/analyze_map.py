@@ -439,14 +439,20 @@ def call_edges(project: Path, own: list[str]) -> dict[str, list[str]]:
     """Кто кого запускает или подключает: {файл: [файлы проекта, к которым он обращается (путь, импорт, вызов)]}."""
     texts = {p: chr(10).join(code_lines(read(project, p))) for p in own}
     lowered = {p: t.lower() for p, t in texts.items()}
+
+    def linked(f: str, g: str) -> bool:
+        if language_of(f) == language_of(g):
+            return references(texts[f], g)
+        # между языками связь только настоящий запуск: вызов запуска (subprocess, Process.Start, dotnet…) рядом с именем файла
+        pattern = LAUNCH_CALL.get(language_of(f) or "")
+        lines = texts[f].splitlines()
+        return pattern is not None and any(
+            pattern.search(line) and references(window(lines, index), g, same_language=False)
+            for index, line in enumerate(lines)
+        )
+
     return {
-        f: [
-            g
-            for g in own
-            if g != f
-            and Path(g).stem.lower() in lowered[f]
-            and references(texts[f], g, same_language=language_of(f) == language_of(g))
-        ]
+        f: [g for g in own if g != f and Path(g).stem.lower() in lowered[f] and linked(f, g)]
         for f in own
     }
 
