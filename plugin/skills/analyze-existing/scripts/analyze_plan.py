@@ -23,6 +23,11 @@ SEAM_TEST = "сначала контрактный тест шва"
 ZONE_YES = "неприкосновенная зона: нужно отдельное «да»"
 OUTSIDE_YES = "неприкосновенная зона, нужно отдельное «да»"  # файл пишет за пределы проекта
 APPROVAL = "поимённое утверждение владельца"
+GROUP_A, GROUP_B = "а", "б"  # швы: а) трогают игру, сейвы или data/; б) остальные
+CONTRACT_VERIFY = "новый тест, который запускает или читает обе стороны шва и сверяет формат (колонки, поля, код возврата), падает при изменении шва"
+CONTRACT_READ_ONLY = (
+    "тест только читает файлы шва и не запускает скрипты (запуск может тронуть игру или сейв)"
+)
 
 
 def in_zone(path: str, zones: list[str]) -> bool:
@@ -140,20 +145,24 @@ def build_plan(
                 f"{item['precondition']}; {note}" if item["precondition"] else note
             )
     for seam in seams or []:
-        if seam["red"]:
+        if (
+            seam["red"] and seam.get("group", GROUP_A) == GROUP_A
+        ):  # группа «б» остаётся условием выше (red_here)
             where = ", ".join(seam["evidence"][:2])
             outside = list(seam.get("outside_write") or [])
+            zoned = [f for f in seam["files"] if in_zone(f, protected)]
             note = f"; шов пишет за пределы проекта ({', '.join(outside)})" if outside else ""
+            note += f"; файл шва в неприкосновенной зоне ({', '.join(zoned)})" if zoned else ""
             rows.append(
                 row(
                     CONTRACT,
                     f"шов {seam['id']} ({seam['kind']}: {seam['from']} → {seam['to']}, {where}) без контрактного теста{note}",
                     "",
                     "",
-                    verify="новый тест, который запускает или читает обе стороны шва и сверяет формат (колонки, поля, код возврата), падает при изменении шва",
+                    verify=f"{CONTRACT_VERIFY}; {CONTRACT_READ_ONLY}",
                     risk=f"{OUTSIDE_YES} на любое изменение файла шва; сам тест безопасен"
-                    if outside
-                    else "безопасно",
+                    if outside or zoned
+                    else "трогает игру, сейвы или data/: тест до любых изменений; сам тест безопасен",
                 )
             )
     order = {CONTRACT: -1, RENAME: 0, MOVE: 1, RESTRUCTURE: 2, DELETE: 3}
@@ -205,6 +214,7 @@ def plan_markdown(
     rows: list[dict[str, Any]],
     protected: list[str],
     outside: dict[str, list[str]] | None = None,
+    seams: list[dict[str, Any]] | None = None,
 ) -> str:
     """PLAN.md для parch-analysis/: таблица действий и предохранители."""
     lines = [
@@ -232,6 +242,23 @@ def plan_markdown(
         )
     if not rows:
         lines.append("| | | Действий не требуется | | | |")
+    red = [s for s in seams or [] if s["red"]]
+    if red:
+        a = [s for s in red if s.get("group", GROUP_A) == GROUP_A]
+        b = [s for s in red if s.get("group", GROUP_A) == GROUP_B]
+        lines += [
+            "",
+            f"Швы без контрактного теста: {len(red)}. **Группа (а)**, трогают игру, сейвы или `data/`: {len(a)}, "
+            "каждому строка «Контрактный тест» выше, тест идёт до любых изменений. "
+            f"**Группа (б)**, остальные: {len(b)}, отдельных строк нет: условие «сначала контрактный тест» действует, "
+            "только если строка плана меняет одну из сторон шва.",
+            "",
+            "Группа (а), почему: "
+            + "; ".join(f"{s['id']} ({', '.join(s.get('group_reasons', [])[:2])})" for s in a)
+            + ".",
+            "",
+            "Группа (б): " + ", ".join(str(s["id"]) for s in b) + ".",
+        ]
     if outside:
         lines += [
             "",

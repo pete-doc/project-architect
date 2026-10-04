@@ -68,6 +68,9 @@ WRITE_OPS = re.compile(
     r"|\.write_text|\.write_bytes|File\.(?:Copy|Move|Delete|WriteAll\w+|Create)|Directory\.(?:CreateDirectory|Delete|Move)"
     r"|fs\.(?:write\w*|copy\w*|rm\w*|unlink|mkdir|rename)"
 )
+ZONE_WRITE = re.compile(
+    WRITE_OPS.pattern + r"|open\([^)]*[\"'][wax]b?[\"']|\.to_(?:csv|json|parquet)\(|json\.dump\(",
+)
 LAUNCH_WORDS = re.compile(r"powershell|pwsh|subprocess|dotnet|node|python|Process", re.IGNORECASE)
 
 
@@ -381,8 +384,48 @@ def contract_tests(seam: dict[str, Any], tests: dict[str, str]) -> tuple[list[st
     return sorted(strong)[:5], sorted(weak)[:5]
 
 
-def seams(project: Path, rel: list[str]) -> list[dict[str, Any]]:
-    """Швы между языками с пометкой «красный», если контрактного теста нет."""
+def code_lines(text: str) -> list[str]:
+    return [ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "//"))]
+
+
+def risk_reasons(
+    project: Path, seam: dict[str, Any], zones: list[str], markers: list[str]
+) -> list[str]:
+    """Чем шов трогает игру, сейвы или `data/` (группа «а»): файл в зоне, запись вне проекта, путь зоны или слово игры в коде.
+
+    Пустой список: шов безопасный (группа «б»). Поиск по тексту, поэтому причины записаны в факты: их видно и проверяет агент.
+    """
+    reasons: list[str] = []
+    for path in seam["files"]:
+        if in_zone(path, zones):
+            reasons.append(f"{path}: файл в неприкосновенной зоне")
+    reasons += [f"{path}: пишет вне проекта" for path in seam["outside_write"]]
+    dirs = [z.strip("/") for z in zones if "." not in z.rsplit("/", 1)[-1]]
+    words = [m for m in markers if m.strip()]
+    for path in seam["files"]:
+        if is_test_path(path):
+            continue
+        lines = code_lines(read(project, path))
+        for zone in dirs:
+            path_in_line = re.compile(
+                rf"(?<![\w.]){re.escape(zone)}[/{chr(92)}{chr(92)}]", re.IGNORECASE
+            )
+            if any(path_in_line.search(ln) and ZONE_WRITE.search(ln) for ln in lines):
+                reasons.append(f"{path}: пишет в {zone}/")  # чтение зоны шов не делает рискованным
+        text = chr(10).join(lines)
+        for word in words:
+            if re.search(re.escape(word), text, re.IGNORECASE):
+                reasons.append(f"{path}: «{word}»")
+    return list(dict.fromkeys(reasons))
+
+
+def seams(
+    project: Path,
+    rel: list[str],
+    zones: list[str] | None = None,
+    markers: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Швы между языками с пометкой «красный», если контрактного теста нет, и группой риска (а: игра, сейвы, data; б: остальные)."""
     code = [p for p in rel if language_of(p) in CODE_LANGUAGES and not is_generated(p)]
     own = [p for p in code if not is_test_path(p)]
     tests = {p: executable_text(read(project, p)) for p in code if is_test_path(p)}
@@ -394,6 +437,8 @@ def seams(project: Path, rel: list[str]) -> list[dict[str, Any]]:
         seam["contract_tests"], seam["weak_tests"] = contract_tests(seam, tests)
         seam["red"] = not seam["contract_tests"]
         seam["outside_write"] = [f for f in seam["files"] if f in outside]
+        seam["group_reasons"] = risk_reasons(project, seam, zones or [], markers or [])
+        seam["group"] = "а" if seam["group_reasons"] else "б"
     found.sort(key=lambda s: (not s["red"], s["id"]))
     return found[:MAX_SEAMS]
 

@@ -4,8 +4,8 @@
 Вход: JSON-объект на stdin. Выход: JSON-объект на stdout. Анализ только читает проект; единственное, куда он пишет
 файлы, это папка parch-analysis/ (и только командами baseline и write).
 
-    {"command": "inventory", "project_dir": ".", "protected_paths": ["data/", "saves/"]}
-        факты, равноценные файлы, инструменты по языкам, горячие точки, кандидаты в мёртвый код, риски, план приведения
+    {"command": "inventory", "project_dir": ".", "protected_paths": ["data/", "saves/"], "game_markers": ["steam.exe"]}
+        `protected_paths`: папки и файлы; `game_markers`: слова, по которым швы с кодом игры попадают в группу (а). Факты, равноценные файлы, инструменты по языкам, горячие точки, кандидаты в мёртвый код, риски, план приведения
     {"command": "baseline", "project_dir": ".", "run": ["ruff", "pyright"], "protected_paths": [...], "allow_download": false}
         только если владелец разрешил: запуск перечисленных инструментов в режиме «только отчёт», результаты в
         parch-analysis/baseline/ (без списка «run» ничего не запускается); allow_download разрешает скачать jscpd,
@@ -330,6 +330,7 @@ def inventory(
     protected: list[str] | None = None,
     save_snapshot: bool = True,
     report_dir: str = REPORT_DIR,
+    game_markers: list[str] | None = None,
 ) -> dict[str, Any]:
     """Факты о проекте. `save_snapshot=False` не трогает сохранённое состояние «до» (так зовёт его `write`)."""
     zones = planmod.clean_zone_list(protected or [])
@@ -416,7 +417,7 @@ def inventory(
     facts["hotspots"] = history.hotspots(project, rel)
     facts["dead_code"] = deadcode.candidates(project, rel)
     facts["modules"] = mapmod.modules(project, rel, zones)
-    facts["seams"] = mapmod.seams(project, rel)
+    facts["seams"] = mapmod.seams(project, rel, zones, game_markers)
     facts["outside_writes"] = mapmod.outside_writes(project, rel)
     auto_zones = sorted(facts["outside_writes"])  # файлы, пишущие вне проекта, для плана те же зоны
     facts["risks"] = report.risks(facts, facts["hotspots"], facts["dead_code"], facts["tools"])
@@ -500,10 +501,15 @@ def load_baseline(folder: Path) -> list[dict[str, Any]]:
 
 
 def write_artifacts(
-    project: Path, protected: list[str] | None, report_dir: str = REPORT_DIR
+    project: Path,
+    protected: list[str] | None,
+    report_dir: str = REPORT_DIR,
+    game_markers: list[str] | None = None,
 ) -> dict[str, Any]:
     """Пишет в папку отчёта: QUESTIONS.md, PLAN.md, черновики GOAL и решений, facts.json."""
-    facts = inventory(project, protected, save_snapshot=False, report_dir=report_dir)
+    facts = inventory(
+        project, protected, save_snapshot=False, report_dir=report_dir, game_markers=game_markers
+    )
     folder = report_dir_state(project, report_dir)
     results = load_baseline(folder)
     facts["baseline"] = [{k: v for k, v in r.items() if k != "output_tail"} for r in results]
@@ -527,7 +533,9 @@ def write_artifacts(
     put("QUESTIONS.md", deadcode.questions_markdown(facts["questions"], facts["dead_code"]))
     put(
         "PLAN.md",
-        planmod.plan_markdown(facts["plan"], facts["protected_paths"], facts["outside_writes"]),
+        planmod.plan_markdown(
+            facts["plan"], facts["protected_paths"], facts["outside_writes"], facts["seams"]
+        ),
     )
     goal = report.goal_draft(project, facts["equivalents"])
     if goal:
@@ -593,6 +601,7 @@ def main() -> int:
         if not project.is_dir():
             raise ValueError(f"нет папки проекта: {project}")
         protected = request.get("protected_paths")
+        markers = planmod.clean_zone_list(request.get("game_markers"))
         report_dir = check_report_dir(str(request.get("report_dir") or REPORT_DIR))
         if command == "inventory":
             if (project / report_dir).exists():
@@ -600,7 +609,7 @@ def main() -> int:
                     f"папка {report_dir}/ уже существует: остановись и спроси владельца, как быть "
                     "(анализ не должен перезаписать или смешать её содержимое со своим отчётом)"
                 )
-            result = inventory(project, protected, report_dir=report_dir)
+            result = inventory(project, protected, report_dir=report_dir, game_markers=markers)
         elif command == "baseline":
             raw_run: Any = request.get("run") or []
             run = (
@@ -615,7 +624,7 @@ def main() -> int:
                 allow_build_steps=request.get("allow_build_steps") is True,
             )
         elif command == "write":
-            result = write_artifacts(project, protected, report_dir)
+            result = write_artifacts(project, protected, report_dir, markers)
         elif command == "verify":
             result = verify(project, request.get("before"), request.get("report_dir"))
         else:
