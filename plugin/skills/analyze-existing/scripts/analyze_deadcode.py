@@ -1,9 +1,9 @@
 # ruff: noqa: E501
 """Кандидаты в мёртвый код и вопросы владельцу (docs/design/analyze-existing.md, «Что анализ не делает и почему»).
 
-Анализ ничего не удаляет: найденное попадает в QUESTIONS.md. По каждому кандидату три вопроса: вызывают ли его снаружи,
-нет ли рефлексии или динамического вызова, нет ли запуска планировщиком. Поиск приблизительный: имя, которое в проекте
-встречается один раз (в самом объявлении), считается кандидатом.
+Анализ ничего не удаляет: найденное попадает в QUESTIONS.md простыми вопросами по файлам. Поиск приблизительный: имя,
+которое в проекте встречается один раз (в самом объявлении), считается кандидатом. Обработчики фреймворков (`do_GET`,
+`Awake`, `Postfix`), методы с атрибутами и сгенерированные файлы отсеиваются: вызова в коде у них нет, но они живые.
 """
 
 from __future__ import annotations
@@ -21,6 +21,23 @@ TEXT_SUFFIXES = {
 MAX_FILE_BYTES = 1_500_000
 MAX_CANDIDATES = 50
 SKIP_NAMES = {"main", "Main", "setup", "teardown", "setUp", "tearDown"}
+# Имена, которые вызывает сам фреймворк, а не код проекта: по счёту вхождений они всегда «одинокие», но не мёртвые.
+FRAMEWORK_NAMES = {
+    # http.server, unittest, ast, logging, threading
+    "log_message", "log_request", "log_error", "handle", "handle_one_request", "setUpClass",
+    "tearDownClass", "asyncSetUp", "asyncTearDown", "default", "emit", "format", "run", "close",
+    # Unity и BepInEx
+    "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnEnable", "OnDisable", "OnDestroy",
+    "OnGUI", "OnApplicationQuit", "Load", "Unload", "Initialize", "Finalize",
+    # Harmony-патчи находятся по имени, а не по вызову
+    "Prefix", "Postfix", "Transpiler", "Finalizer", "Patch",
+    # .NET
+    "Dispose", "ToString", "Equals", "GetHashCode", "Execute", "Invoke", "Configure", "ConfigureServices",
+}  # fmt: skip
+FRAMEWORK_PATTERNS = re.compile(r"^(do_[A-Z]+|visit_\w+|on_\w+|On[A-Z]\w+|handle_\w+)$")
+ATTRIBUTE_LINE = re.compile(
+    r"^\s*\[[A-Za-z_][\w.]*(\(.*\))?(\s*,\s*[A-Za-z_][\w.]*(\(.*\))?)*\]\s*$"
+)
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PS_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+")
 CS_DECL = re.compile(
@@ -33,17 +50,26 @@ CS_METHOD = re.compile(
     re.MULTILINE,
 )
 PS_FUNCTION = re.compile(r"^\s*function\s+([A-Za-z][\w-]*)", re.MULTILINE | re.IGNORECASE)
-QUESTIONS = (
-    "Вызывается ли снаружи проекта (другой скрипт, внешняя программа, плагин, документация)?",
-    "Нет ли рефлексии или динамического вызова по имени (C# reflection, `getattr`, строка с именем)?",
-    "Нет ли запуска по расписанию или из CI (планировщик задач, cron, workflow)?",
-)
 
 
 def is_generated(path: str) -> bool:
     """Сгенерированный или декомпилированный код: кандидатов в нём не ищем."""
     lowered = path.lower()
     return "decompiled" in lowered or lowered.endswith((".g.cs", ".designer.cs"))
+
+
+def is_framework_name(name: str) -> bool:
+    """Обработчик, который зовёт фреймворк по имени (do_GET, Awake, Postfix…): вызова в коде проекта нет и не будет."""
+    return name in FRAMEWORK_NAMES or bool(FRAMEWORK_PATTERNS.match(name))
+
+
+def has_attribute(text: str, line: int) -> bool:
+    """Над объявлением C# стоит атрибут (например [HarmonyPatch], [Fact]): его читает фреймворк, а не вызов."""
+    lines = text.splitlines()
+    index = line - 2
+    while index >= 0 and not lines[index].strip():
+        index -= 1
+    return index >= 0 and bool(ATTRIBUTE_LINE.match(lines[index]))
 
 
 def is_test_path(path: str) -> bool:
@@ -127,13 +153,17 @@ def candidates(project: Path, rel: list[str]) -> dict[str, Any]:
                 or name in SKIP_NAMES
                 or len(name) < 3
                 or name.startswith(("test", "Test"))
+                or is_framework_name(name)
+                or (path.endswith(".cs") and has_attribute(text, line))
             ):
                 continue
             if counts[name] <= 1 and (path, name) not in seen:
                 seen.add((path, name))
                 rows.append({"name": name, "kind": kind, "path": path, "line": line})
     rows.sort(key=lambda r: (r["path"], r["line"]))
-    return {"total": len(rows), "shown": rows[:MAX_CANDIDATES]}
+    names = {".py": "python", ".cs": "csharp", ".ps1": "powershell", ".psm1": "powershell"}
+    by_language = Counter(names[Path(r["path"]).suffix.lower()] for r in rows)
+    return {"total": len(rows), "shown": rows[:MAX_CANDIDATES], "by_language": dict(by_language)}
 
 
 def questions_markdown(base: list[dict[str, str]], dead: dict[str, Any]) -> str:
@@ -150,17 +180,34 @@ def questions_markdown(base: list[dict[str, str]], dead: dict[str, Any]) -> str:
     ]
     for item in base:
         lines.append(f"| {item['id']} | {item['question']} | |")
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in dead["shown"]:
+        groups.setdefault(str(row["path"]), []).append(row)
     lines += [
         "",
-        "## Мёртвый код: кандидаты",
+        "## Возможно ненужный код",
         "",
-        f"Кандидатов: {dead['total']} (показано {len(dead['shown'])}). Имя встречается в проекте один раз, в объявлении. "
-        "По каждому три вопроса: "
-        + " ".join(f"({n}) {q}" for n, q in enumerate(QUESTIONS, start=1)),
+        f"Нашлось имён, которые нигде больше не встречаются: {dead['total']} (показано {len(dead['shown'])}). "
+        "Обработчики фреймворков (`do_GET`, `Awake`, `Postfix` и т. п.), код с атрибутами и сгенерированные файлы "
+        "отсеяны заранее и сюда не попали. Один вопрос на файл. Ответ достаточно одной буквой: "
+        "**А** — это нужно (запускают снаружи: вручную, по расписанию, другой программой или игрой); "
+        "**Б** — это старое, можно убрать после проверки; **В** — не знаю.",
         "",
-        "| Кандидат | Где | Вызов снаружи? | Рефлексия? | Расписание? | Решение (удалить / оставить keep-until) |",
-        "|---|---|---|---|---|---|",
+        "| Файл | Имена, которых нигде больше нет | Вопрос | Ответ (А / Б / В) |",
+        "|---|---|---|---|",
     ]
-    for row in dead["shown"]:
-        lines.append(f"| `{row['name']}` ({row['kind']}) | {row['path']}:{row['line']} | | | | |")
+    for path, rows in groups.items():
+        names = ", ".join(f"`{r['name']}`" for r in rows[:8]) + (
+            f" и ещё {len(rows) - 8}" if len(rows) > 8 else ""
+        )
+        lines.append(f"| {path} | {names} | {file_question(path)} | |")
     return chr(10).join(lines) + chr(10)
+
+
+def file_question(path: str) -> str:
+    """Простой вопрос про файл: только то, что знает владелец (кто и как запускает), а не то, что видно в коде."""
+    if path.lower().endswith((".ps1", ".psm1")):
+        return "Этот скрипт вы запускаете сами или он запускается по расписанию?"
+    if path.lower().endswith(".cs"):
+        return "Это нужно игре или плагину, который эту часть вызывает по имени, или осталось от старого?"
+    return "Эти функции вы запускаете из командной строки или другой программой, или они остались от старого?"

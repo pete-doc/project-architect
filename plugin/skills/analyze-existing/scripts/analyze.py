@@ -6,14 +6,16 @@
 
     {"command": "inventory", "project_dir": ".", "protected_paths": ["data/", "saves/"]}
         факты, равноценные файлы, инструменты по языкам, горячие точки, кандидаты в мёртвый код, риски, план приведения
-    {"command": "baseline", "project_dir": ".", "run": ["ruff", "pyright"]}
+    {"command": "baseline", "project_dir": ".", "run": ["ruff", "pyright"], "protected_paths": [...], "allow_download": false}
         только если владелец разрешил: запуск перечисленных инструментов в режиме «только отчёт», результаты в
-        parch-analysis/baseline/ (без списка «run» ничего не запускается)
+        parch-analysis/baseline/ (без списка «run» ничего не запускается); allow_download разрешает скачать jscpd,
+        allow_build_steps разрешает собирать C#, если в проектах есть шаги после сборки
     {"command": "write", "project_dir": ".", "protected_paths": [...]}
         parch-analysis/: QUESTIONS.md, PLAN.md, drafts/GOAL.md, drafts/ADR-DRAFTS.md, facts.json
     {"command": "verify", "project_dir": "."}
         изменилось ли что-то в проекте, кроме parch-analysis/ (состояние «до» inventory сохраняет вне проекта)
 
+Повторный анализ идёт в новую папку: любая команда принимает "report_dir" вида parch-analysis-2.
 Папка analysis/ и любые другие папки проекта принадлежат владельцу и считаются кодом. Если parch-analysis/ уже есть
 (и не создана этим анализом), inventory отказывается работать. Исходный документ: docs/design/analyze-existing.md.
 """
@@ -27,6 +29,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any, cast
 
@@ -46,6 +49,10 @@ SKIP_DIRS = {
 MAX_FILES = 50_000
 REPORT_DIR = "parch-analysis"  # единственное место, где анализу разрешено создавать файлы
 MARKER = ".parch-analysis"
+TEST_FILE = re.compile(r"(^|/)(tests?/|test_|.*\.(test|spec)\.|.*Tests?\.cs$)")
+REPORT_NAME = re.compile(
+    r"^parch-analysis[A-Za-z0-9_-]*$"
+)  # повторный анализ идёт в новую папку: parch-analysis-2
 LANGUAGE_SUFFIXES = {
     "python": (".py",),
     "typescript": (".ts", ".tsx"),
@@ -120,6 +127,14 @@ def snapshot(project: Path) -> str | None:
     )
 
 
+def check_report_dir(name: str) -> str:
+    if not REPORT_NAME.match(name):
+        raise ValueError(
+            f"имя папки отчёта {name!r} не подходит: нужно parch-analysis или parch-analysis-<слово>"
+        )
+    return name
+
+
 def snapshot_file(project: Path) -> Path:
     """Где inventory сохраняет состояние «до»: вне проекта, чтобы в проекте ничего не появлялось."""
     key = hashlib.sha1(str(project).encode("utf-8")).hexdigest()[:12]
@@ -132,7 +147,7 @@ def walk(project: Path) -> list[Path]:
     while stack and len(found) < MAX_FILES:
         for item in sorted(stack.pop().iterdir()):
             if item.is_dir():
-                if item.name not in SKIP_DIRS:
+                if item.name not in SKIP_DIRS and not item.name.startswith(REPORT_DIR):
                     stack.append(item)
             else:
                 found.append(item)
@@ -309,7 +324,13 @@ def markdown_count(path: Path) -> int:
     return len([p for p in path.rglob("*.md") if p.name.lower() != "readme.md"])
 
 
-def inventory(project: Path, protected: list[str] | None = None) -> dict[str, Any]:
+def inventory(
+    project: Path,
+    protected: list[str] | None = None,
+    save_snapshot: bool = True,
+    report_dir: str = REPORT_DIR,
+) -> dict[str, Any]:
+    """Факты о проекте. `save_snapshot=False` не трогает сохранённое состояние «до» (так зовёт его `write`)."""
     zones = planmod.clean_zone_list(protected or [])
     files = walk(project)
     rel = [f.relative_to(project).as_posix() for f in files]
@@ -318,7 +339,7 @@ def inventory(project: Path, protected: list[str] | None = None) -> dict[str, An
     instruction_paths = {i["path"] for i in instructions}
     outside = [
         p for p in rel
-        if p.endswith(".md") and not p.startswith("docs/") and not p.startswith(f"{REPORT_DIR}/")
+        if p.endswith(".md") and not p.startswith("docs/") and not p.startswith(REPORT_DIR)
         and p not in instruction_paths and p.rsplit("/", 1)[-1] not in OK_MARKDOWN
     ]  # fmt: skip
     goal = project / "docs" / "GOAL.md"
@@ -330,9 +351,16 @@ def inventory(project: Path, protected: list[str] | None = None) -> dict[str, An
     incidents_path = eqmod.equivalent_path(equivalents, "incidents")
     decisions_path = eqmod.equivalent_path(equivalents, "decisions")
     status = snapshot(project)
-    if status is not None:
+    if status is not None and save_snapshot:
         snapshot_file(project).write_text(
-            json.dumps({"project": str(project), "snapshot": status, "extra_allowed": []}),
+            json.dumps(
+                {
+                    "project": str(project),
+                    "snapshot": status,
+                    "extra_allowed": [],
+                    "report_dir": check_report_dir(report_dir),
+                }
+            ),
             encoding="utf-8",
         )
     facts: dict[str, Any] = {
@@ -345,8 +373,11 @@ def inventory(project: Path, protected: list[str] | None = None) -> dict[str, An
             "snapshot_saved": status is not None,
         },
         "languages": languages,
-        "test_files": sum(
-            bool(re.search(r"(^|/)(tests?/|test_|.*\.(test|spec)\.|.*Tests?\.cs$)", p)) for p in rel
+        "test_files": sum(bool(TEST_FILE.search(p)) for p in rel),
+        "test_files_by_language": dict(
+            Counter(
+                report.language_of(p) for p in rel if TEST_FILE.search(p) and report.language_of(p)
+            )
         ),
         "workflows": workflow_facts(project),
         "instruction_files": instructions,
@@ -385,7 +416,12 @@ def inventory(project: Path, protected: list[str] | None = None) -> dict[str, An
     facts["dead_code"] = deadcode.candidates(project, rel)
     facts["risks"] = report.risks(facts, facts["hotspots"], facts["dead_code"], facts["tools"])
     facts["health_card"] = report.health_card(
-        languages, facts["tools"], facts["hotspots"], facts["dead_code"], [], facts["test_files"]
+        languages,
+        facts["tools"],
+        facts["hotspots"],
+        facts["dead_code"],
+        [],
+        facts["test_files_by_language"],
     )
     plan_rows = planmod.build_plan(equivalents, rel, zones)
     facts["protected_paths"] = zones
@@ -394,24 +430,41 @@ def inventory(project: Path, protected: list[str] | None = None) -> dict[str, An
     return facts
 
 
-def report_dir_state(project: Path) -> Path:
+def report_dir_state(project: Path, report_dir: str = REPORT_DIR) -> Path:
     """Папка отчёта: новая или созданная этим анализом (с маркером). Чужую папку не трогаем."""
-    folder = project / REPORT_DIR
+    folder = project / check_report_dir(report_dir)
     if folder.exists() and not (folder / MARKER).is_file():
         raise ValueError(
-            f"папка {REPORT_DIR}/ уже существует и создана не этим анализом: остановись и спроси владельца"
+            f"папка {report_dir}/ уже существует и создана не этим анализом: остановись и спроси владельца"
         )
     folder.mkdir(exist_ok=True)
     (folder / MARKER).write_text("создано /parch:analyze-existing" + chr(10), encoding="utf-8")
     return folder
 
 
-def baseline(project: Path, run: list[str]) -> dict[str, Any]:
+def baseline(
+    project: Path,
+    run: list[str],
+    report_dir: str = REPORT_DIR,
+    protected: list[str] | None = None,
+    allow_download: bool = False,
+    allow_build_steps: bool = False,
+) -> dict[str, Any]:
     """Запуск разрешённых инструментов в режиме «только отчёт»; без списка ничего не запускается."""
-    names = [p.suffix.lower() for p in walk(project)]
+    files = walk(project)
+    names = [p.suffix.lower() for p in files]
     languages = {lang: sum(n in sfx for n in names) for lang, sfx in LANGUAGE_SUFFIXES.items()}
-    folder = report_dir_state(project)
-    results = tools.run_baseline(project, run, languages)
+    folder = report_dir_state(project, report_dir)
+    results = tools.run_baseline(
+        project,
+        run,
+        languages,
+        rel=[f.relative_to(project).as_posix() for f in files],
+        protected=tuple(planmod.clean_zone_list(protected or [])),
+        report_dir=folder,
+        allow_download=allow_download,
+        allow_build_steps=allow_build_steps,
+    )
     written = tools.write_baseline(folder, results)
     if any(r["tool"].startswith("dotnet") and r.get("status") == "выполнен" for r in results):
         saved = snapshot_file(project)
@@ -439,10 +492,12 @@ def load_baseline(folder: Path) -> list[dict[str, Any]]:
     return results
 
 
-def write_artifacts(project: Path, protected: list[str] | None) -> dict[str, Any]:
-    """Пишет в parch-analysis/: QUESTIONS.md, PLAN.md, черновики GOAL и решений, facts.json."""
-    facts = inventory(project, protected)
-    folder = report_dir_state(project)
+def write_artifacts(
+    project: Path, protected: list[str] | None, report_dir: str = REPORT_DIR
+) -> dict[str, Any]:
+    """Пишет в папку отчёта: QUESTIONS.md, PLAN.md, черновики GOAL и решений, facts.json."""
+    facts = inventory(project, protected, save_snapshot=False, report_dir=report_dir)
+    folder = report_dir_state(project, report_dir)
     results = load_baseline(folder)
     facts["baseline"] = [{k: v for k, v in r.items() if k != "output_tail"} for r in results]
     facts["health_card"] = report.health_card(
@@ -451,7 +506,7 @@ def write_artifacts(project: Path, protected: list[str] | None) -> dict[str, Any
         facts["hotspots"],
         facts["dead_code"],
         results,
-        facts["test_files"],
+        facts["test_files_by_language"],
     )
     written: list[str] = []
 
@@ -459,7 +514,7 @@ def write_artifacts(project: Path, protected: list[str] | None) -> dict[str, Any
         target = folder / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8", newline=chr(10))
-        written.append(f"{REPORT_DIR}/{relative}")
+        written.append(f"{report_dir}/{relative}")
 
     put("QUESTIONS.md", deadcode.questions_markdown(facts["questions"], facts["dead_code"]))
     put("PLAN.md", planmod.plan_markdown(facts["plan"], facts["protected_paths"]))
@@ -477,15 +532,18 @@ def write_artifacts(project: Path, protected: list[str] | None) -> dict[str, Any
     }
 
 
-def verify(project: Path, before: str | None) -> dict[str, Any]:
+def verify(project: Path, before: str | None, report_dir: str | None = None) -> dict[str, Any]:
     now = snapshot(project)
     saved = snapshot_file(project)
     extra: list[str] = []
+    folder_name = report_dir
     if saved.is_file():
         saved_data = json.loads(saved.read_text(encoding="utf-8"))
         if saved_data["project"] == str(project):
             before = before if before is not None else saved_data["snapshot"]
             extra = list(saved_data.get("extra_allowed", []))
+            folder_name = folder_name or saved_data.get("report_dir")
+    folder_name = check_report_dir(folder_name or REPORT_DIR)
     if now is None:
         return {
             "ok": None,
@@ -498,7 +556,7 @@ def verify(project: Path, before: str | None) -> dict[str, Any]:
 
     def allowed(line: str) -> bool:
         path = changed_path(line)
-        return path.startswith(f"{REPORT_DIR}/") or any(part in extra for part in path.split("/"))
+        return path.startswith(f"{folder_name}/") or any(part in extra for part in path.split("/"))
 
     changed = [
         line.split(chr(9))[0] for line in now.splitlines() if line not in old and not allowed(line)
@@ -506,7 +564,7 @@ def verify(project: Path, before: str | None) -> dict[str, Any]:
     return {
         "ok": not changed,
         "changed": changed,
-        "note": f"изменения вне {REPORT_DIR}/ найдены" if changed else "код не менялся",
+        "note": f"изменения вне {folder_name}/ найдены" if changed else "код не менялся",
     }
 
 
@@ -521,23 +579,31 @@ def main() -> int:
         if not project.is_dir():
             raise ValueError(f"нет папки проекта: {project}")
         protected = request.get("protected_paths")
+        report_dir = check_report_dir(str(request.get("report_dir") or REPORT_DIR))
         if command == "inventory":
-            if (project / REPORT_DIR).exists():
+            if (project / report_dir).exists():
                 raise ValueError(
-                    f"папка {REPORT_DIR}/ уже существует: остановись и спроси владельца, как быть "
+                    f"папка {report_dir}/ уже существует: остановись и спроси владельца, как быть "
                     "(анализ не должен перезаписать или смешать её содержимое со своим отчётом)"
                 )
-            result = inventory(project, protected)
+            result = inventory(project, protected, report_dir=report_dir)
         elif command == "baseline":
             raw_run: Any = request.get("run") or []
             run = (
                 [str(x) for x in cast("list[object]", raw_run)] if isinstance(raw_run, list) else []
             )
-            result = baseline(project, run)
+            result = baseline(
+                project,
+                run,
+                report_dir,
+                protected,
+                allow_download=request.get("allow_download") is True,
+                allow_build_steps=request.get("allow_build_steps") is True,
+            )
         elif command == "write":
-            result = write_artifacts(project, protected)
+            result = write_artifacts(project, protected, report_dir)
         elif command == "verify":
-            result = verify(project, request.get("before"))
+            result = verify(project, request.get("before"), request.get("report_dir"))
         else:
             raise ValueError("command должен быть inventory, baseline, write или verify")
     except (ValueError, OSError) as error:

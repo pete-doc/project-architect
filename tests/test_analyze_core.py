@@ -439,18 +439,17 @@ def test_questions_ask_the_three_questions_for_every_candidate() -> None:
         "total": 1,
         "shown": [{"name": "orphan_func", "kind": "функция", "path": "a.py", "line": 3}],
     }
+    # PR 1b: три формальных вопроса заменены одним простым вопросом на файл (название теста оставлено ради храповика).
     text = deadcode.questions_markdown([{"id": "P4", "question": "Где хранится?"}], dead)
     for fact in (
-        "Вызывается ли снаружи",
-        "рефлексии",
-        "запуска по расписанию",
-        "`orphan_func`",
-        "a.py:3",
+        "| a.py | `orphan_func` |",
+        "вы запускаете из командной строки или другой программой",
+        "А / Б / В",
         "| P4 |",
-        "удалить / оставить keep-until",
     ):
         assert fact in text, fact
     assert "ничего не удаляет" in text
+    assert "рефлексии" not in text and "keep-until" not in text
 
 
 # ---------- риски и карточка здоровья ----------
@@ -484,11 +483,12 @@ def test_the_health_card_says_not_measured_until_tools_were_run(owner_project: P
 
 
 def test_the_health_card_uses_baseline_results_when_they_exist() -> None:
-    ran = [{"tool": "dotnet-build", "status": "выполнен", "returncode": 1, "lines": 3}]
+    metrics = {"projects": 6, "built": 5, "failed": ["a.csproj"], "warnings": 7, "errors": 2}
+    ran = [{"tool": "dotnet-build", "status": "выполнен", "returncode": 1, "metrics": metrics}]
     rows = report.health_card({"csharp": 2}, {"csharp": []}, [], {"total": 0, "shown": []}, ran, 4)
-    assert {r["signal"]: r["value"] for r in rows}[
-        "Сборка и тесты проходят"
-    ] == "сборка C# не проходит"
+    assert {r["signal"]: r["value"] for r in rows}["Сборка и тесты проходят"] == (
+        "сборка: собирается проектов 5 из 6, предупреждений 7, ошибок 2; не собрались: a.csproj"
+    )
 
 
 # ---------- команда write и проверка «ничего не менялось» ----------

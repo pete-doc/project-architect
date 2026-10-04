@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from analyze_deadcode import is_generated
+
 CODE_SUFFIXES = {".py", ".cs", ".ts", ".tsx", ".ps1", ".psm1"}
 MAX_COMMITS = 5000
 TOP = 10
@@ -66,8 +68,8 @@ def hotspots(project: Path, rel: list[str], top: int = TOP) -> list[dict[str, An
             lines = len((project / name).read_text(encoding="utf-8", errors="replace").splitlines())
         except OSError:
             continue
-        if re.search(r"(^|/)(tests?/|test_)", name):
-            continue  # сам тест не горячая точка проекта
+        if re.search(r"(^|/)(tests?/|test_)", name) or is_generated(name):
+            continue  # сам тест и сгенерированный файл не горячая точка проекта
         rows.append(
             {
                 "path": name,
