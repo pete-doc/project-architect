@@ -197,7 +197,7 @@ def questions_markdown(base: list[dict[str, str]], dead: dict[str, Any]) -> str:
         "|---|---|---|---|",
     ]
     for path, rows in groups.items():
-        names = ", ".join(f"`{r['name']}`" for r in rows[:8]) + (
+        names = ", ".join(f"`{r['name']}` (строка {r['line']})" for r in rows[:8]) + (
             f" и ещё {len(rows) - 8}" if len(rows) > 8 else ""
         )
         lines.append(f"| {path} | {names} | {file_question(path)} | |")

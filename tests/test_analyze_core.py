@@ -442,7 +442,7 @@ def test_questions_ask_the_three_questions_for_every_candidate() -> None:
     # PR 1b: три формальных вопроса заменены одним простым вопросом на файл (название теста оставлено ради храповика).
     text = deadcode.questions_markdown([{"id": "P4", "question": "Где хранится?"}], dead)
     for fact in (
-        "| a.py | `orphan_func` |",
+        "| a.py | `orphan_func` (строка 3) |",
         "вы запускаете из командной строки или другой программой",
         "А / Б / В",
         "| P4 |",

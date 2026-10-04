@@ -387,7 +387,7 @@ def test_questions_are_one_simple_question_per_file_in_groups() -> None:
         ],
     }
     text = deadcode.questions_markdown([], dead)
-    assert text.count("| ops/x.ps1 |") == 1 and "`a_one`, `a_two`" in text
+    assert text.count("| ops/x.ps1 |") == 1 and "`a_one` (строка 1), `a_two` (строка 5)" in text
     assert "по расписанию" in text and "игре или плагину" in text
     assert "рефлексия" not in text.lower()
 
