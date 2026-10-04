@@ -55,6 +55,7 @@ class Block:
     passes: bool = False
     shown: str = "planned"
     acceptance_state: str = "absent"
+    budget_override: object = None  # incident_budget блока из features.json
 
 
 @dataclass
@@ -112,6 +113,7 @@ def read_blocks(project: Path, criteria: dict[str, str]) -> tuple[list[Block], l
             depends_on=strings(item.get("depends_on")),
             acceptance=strings(item.get("acceptance_tests")),
             status=str(item.get("status", "planned")),
+            budget_override=item.get("incident_budget"),
         )
         if not block.id:
             problems.append("в features.json есть блок без идентификатора (id)")
@@ -136,6 +138,64 @@ def incident_counts(project: Path) -> dict[str, int]:
             if found:
                 counts[found["block"]] = counts.get(found["block"], 0) + 1
     return counts
+
+
+def parch_ci_module() -> Any:
+    """Общие правила разбора (бюджет, разделы отчётов) живут в parch_ci.py рядом с этим файлом."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import parch_ci
+
+    return parch_ci
+
+
+def plural(number: int, forms: tuple[str, str, str]) -> str:
+    """1 инцидент, 2-4 инцидента, 5 и 11-14 инцидентов."""
+    if 11 <= number % 100 <= 14:
+        return forms[2]
+    return forms[0] if number % 10 == 1 else forms[1] if 2 <= number % 10 <= 4 else forms[2]
+
+
+def block_reports(project: Path, block_id: str) -> list[Path]:
+    folder = project / "state" / "incidents"
+    found = [p for p in folder.iterdir() if folder.is_dir()] if folder.is_dir() else []
+    return sorted(p for p in found if (m := INCIDENT_FILE.match(p.name)) and m["block"] == block_id)
+
+
+STUCK_OPTIONS = (
+    "    1. Отказаться: критерий помечается как не выполняемый (нужно ваше «да», это изменение цели)",
+    "    2. Обходной путь: планировщик заводит блок под него, этот закрывается через него",
+    "    3. Продолжать: одна новая попытка с другим подходом (отчёт обязан назвать, чем он другой), "
+    "бюджет блока поднимается на 1",
+)
+
+
+def stuck_card(block: Block, board: Board, project: Path) -> str:
+    """Карточка решения для застрявшего блока (STANDARD.md, 6.6): три варианта ответа одним словом."""
+    ci = parch_ci_module()
+    reports = block_reports(project, block.id)
+    texts = [p.read_text(encoding="utf-8") for p in reports]
+    sessions = sum(int(n) for text in texts for n in re.findall(r"Сессий:\s*(\d+)", text))
+    head = f"**{block.id} «{block.title}»** застрял: {block.incidents} " + plural(
+        block.incidents, ("инцидент", "инцидента", "инцидентов")
+    )
+    if sessions:
+        head += f", {sessions} " + plural(sessions, ("сессия", "сессии", "сессий"))
+    needed = ", ".join(f"{g} «{board.criteria[g]}»" for g in block.goals if g in board.criteria)
+    workaround = "в отчёте не указан"
+    if texts:
+        impact = ci.markdown_section(texts[-1], "Влияние на цель") or ""
+        found = re.search(r"Обходной путь:\s*(.+)", impact)
+        if found and found[1].strip().lower().rstrip(".") not in {"", "нет"}:
+            workaround = found[1].strip()
+    return chr(10).join(
+        [
+            head,
+            f"  - Нужен для: {needed or 'цель блока не указана'}.",
+            f"  - Обходной путь (из отчёта {reports[-1].name if reports else 'нет отчёта'}): {workaround}",
+            "  - Ваши варианты:",
+            *STUCK_OPTIONS,
+        ]
+    )
 
 
 def matches(entry: str, key: str) -> bool:
@@ -368,7 +428,9 @@ def render(
     ]
     decisions += adr_waiting(project)
     decisions += [
-        f"**{b.id} «{b.title}»** {STATUS_VIEW[b.shown][1]}"
+        stuck_card(b, board, project)
+        if b.shown == "stuck"
+        else f"**{b.id} «{b.title}»** {STATUS_VIEW[b.shown][1]}"
         + (f", приёмка в `state/acceptance/{b.id}.md`" if b.acceptance_state == "pending" else "")
         + (f" (инцидентов: {b.incidents})" if b.incidents else "")
         for b in board.blocks
@@ -617,6 +679,14 @@ def build(
     outcomes = read_outcomes(report)
     accepted = {b.id: acceptance_state(project, b.id) for b in blocks}
     compute(board, outcomes, incident_counts(project), accepted)
+    ci = parch_ci_module()
+    for block in board.blocks:
+        budget = ci.incident_budget(project, block.budget_override)
+        if block.incidents >= budget and block.status not in {"stuck", "done", "dropped"}:
+            board.problems.append(
+                f"{block.id}: инцидентов {block.incidents} при бюджете {budget}, а статус не «застрял»: "
+                "статус ставит PR с последним отчётом, снять его может только решение владельца"
+            )
     return render(
         board, project, outcomes, commit, date, previous_total(previous), prs,
         source or ReportSource(), ci_runs,

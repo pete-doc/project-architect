@@ -522,6 +522,7 @@ def init_project(
     for doc in ("MODULES", "INTERFACES", "LESSONS", "QUESTIONS"):
         report.copy(f"docs/{doc}.md", f"docs/{doc}.md")
     report.copy("docs/adr/0000-template.md", "docs/adr/0000-template.md")
+    report.copy("docs/INCIDENT_TEMPLATE.md", "docs/INCIDENT_TEMPLATE.md")
     report.copy("state/features.json", "state/features.json")
     report.copy("state/STATUS.md", "state/STATUS.md")
     report.write("docs/GOAL.md", render_goal(name, goal))

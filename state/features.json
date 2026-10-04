@@ -216,7 +216,7 @@
       ],
       "spec": "docs/specs/F13-incidents-stuck.md",
       "acceptance_tests": [],
-      "status": "planned",
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     },
