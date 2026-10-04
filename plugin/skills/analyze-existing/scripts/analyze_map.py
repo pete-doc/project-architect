@@ -269,7 +269,7 @@ def mentions(text: str, name: str) -> bool:
     )
 
 
-def references(text: str, path: str) -> bool:
+def references(text: str, path: str, same_language: bool = True) -> bool:
     """Тест обращается к файлу кода: путь или имя с расширением, импорт модуля или вызов класса.
 
     Просто слово, равное имени файла без расширения (`run`, `harvest`), обращением не считается: так слово из
@@ -281,6 +281,10 @@ def references(text: str, path: str) -> bool:
     plain = text.replace(chr(92), "/")
     if re.search(rf"(?<![\w.\-]){re.escape(name)}(?!\w)", plain, re.IGNORECASE):
         return True
+    if (
+        not same_language
+    ):  # импорт и вызов класса возможны только внутри одного языка, между языками нужно имя файла
+        return False
     word = re.escape(stem)
     patterns = {
         "python": rf"^\s*(?:from\s+[\w.]*\b{word}\s+import\b|import\s+[\w.,\s]*\b{word}\b|from\s+[\w.]+\s+import\s+[^\n]*\b{word}\b)",
@@ -405,34 +409,67 @@ def code_lines(text: str) -> list[str]:
     return [ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "//"))]
 
 
-def risk_reasons(
-    project: Path, seam: dict[str, Any], zones: list[str], markers: list[str]
-) -> list[str]:
-    """Чем шов трогает игру, сейвы или `data/` (группа «а»): файл в зоне, запись вне проекта, путь зоны или слово игры в коде.
+def compile_marker(word: str) -> re.Pattern[str]:
+    """Слово игры: обычная подстрока; с приставкой `re:` регулярное выражение (например, `re:Stop-Process[^\\n]*\\bfm\\b`)."""
+    return re.compile(word[3:] if word.startswith("re:") else re.escape(word), re.IGNORECASE)
 
+
+def file_reasons(
+    project: Path, path: str, zones: list[str], markers: list[str], outside: set[str]
+) -> list[str]:
+    """Чем один файл трогает игру, сейвы или `data/`: он в зоне, пишет вне проекта, пишет в зону или называет слово игры."""
+    reasons: list[str] = []
+    if in_zone(path, zones):
+        reasons.append("файл в неприкосновенной зоне")
+    if path in outside:
+        reasons.append("пишет вне проекта")
+    lines = code_lines(read(project, path))
+    for zone in (z.strip("/") for z in zones if "." not in z.rsplit("/", 1)[-1]):
+        in_line = re.compile(rf"(?<![\w.]){re.escape(zone)}[/{chr(92)}{chr(92)}]", re.IGNORECASE)
+        if any(in_line.search(ln) and ZONE_WRITE.search(ln) for ln in lines):
+            reasons.append(f"пишет в {zone}/")  # чтение зоны шов не делает рискованным
+    text = chr(10).join(lines)
+    for word in (m for m in markers if m.strip()):
+        if compile_marker(word).search(text):
+            reasons.append(f"«{word}»")
+    return reasons
+
+
+def call_edges(project: Path, own: list[str]) -> dict[str, list[str]]:
+    """Кто кого запускает или подключает: {файл: [файлы проекта, к которым он обращается (путь, импорт, вызов)]}."""
+    texts = {p: chr(10).join(code_lines(read(project, p))) for p in own}
+    lowered = {p: t.lower() for p, t in texts.items()}
+    return {
+        f: [
+            g
+            for g in own
+            if g != f
+            and Path(g).stem.lower() in lowered[f]
+            and references(texts[f], g, same_language=language_of(f) == language_of(g))
+        ]
+        for f in own
+    }
+
+
+def risk_reasons(
+    seam: dict[str, Any], direct: dict[str, list[str]], edges: dict[str, list[str]]
+) -> list[str]:
+    """Чем шов трогает игру, сейвы или `data/` (группа «а»): сам файл шва или скрипт, который он запускает или подключает.
+
+    Скрипт со словами игры считается и через один шаг: файл шва запускает X, а X запускает скрипт со словами игры.
     Пустой список: шов безопасный (группа «б»). Поиск по тексту, поэтому причины записаны в факты: их видно и проверяет агент.
     """
     reasons: list[str] = []
     for path in seam["files"]:
-        if in_zone(path, zones):
-            reasons.append(f"{path}: файл в неприкосновенной зоне")
-    reasons += [f"{path}: пишет вне проекта" for path in seam["outside_write"]]
-    dirs = [z.strip("/") for z in zones if "." not in z.rsplit("/", 1)[-1]]
-    words = [m for m in markers if m.strip()]
-    for path in seam["files"]:
-        if is_test_path(path):
-            continue
-        lines = code_lines(read(project, path))
-        for zone in dirs:
-            path_in_line = re.compile(
-                rf"(?<![\w.]){re.escape(zone)}[/{chr(92)}{chr(92)}]", re.IGNORECASE
-            )
-            if any(path_in_line.search(ln) and ZONE_WRITE.search(ln) for ln in lines):
-                reasons.append(f"{path}: пишет в {zone}/")  # чтение зоны шов не делает рискованным
-        text = chr(10).join(lines)
-        for word in words:
-            if re.search(re.escape(word), text, re.IGNORECASE):
-                reasons.append(f"{path}: «{word}»")
+        reasons += [f"{path}: {r}" for r in direct.get(path, [])]
+        for first in edges.get(path, []):
+            if direct.get(first):
+                reasons.append(f"{path}: запускает {first} ({direct[first][0]})")
+            for second in edges.get(first, []):
+                if second not in (path, first) and direct.get(second):
+                    reasons.append(
+                        f"{path}: через {first} запускает {second} ({direct[second][0]})"
+                    )
     return list(dict.fromkeys(reasons))
 
 
@@ -447,6 +484,8 @@ def seams(
     own = [p for p in code if not is_test_path(p)]
     tests = {p: executable_text(read(project, p)) for p in code if is_test_path(p)}
     outside = outside_writers(project, own)
+    direct = {p: file_reasons(project, p, zones or [], markers or [], set(outside)) for p in own}
+    edges = call_edges(project, own) if any(direct.values()) else {}
     found = launch_seams(project, own) + shared_file_seams(project, own)
     for number, seam in enumerate(sorted(found, key=lambda s: (s["kind"], s["files"][0])), start=1):
         seam["id"] = f"S{number}"
@@ -454,7 +493,7 @@ def seams(
         seam["contract_tests"], seam["weak_tests"] = contract_tests(seam, tests)
         seam["red"] = not seam["contract_tests"]
         seam["outside_write"] = [f for f in seam["files"] if f in outside]
-        seam["group_reasons"] = risk_reasons(project, seam, zones or [], markers or [])
+        seam["group_reasons"] = risk_reasons(seam, direct, edges)
         seam["group"] = "а" if seam["group_reasons"] else "б"
     found.sort(key=lambda s: (not s["red"], s["id"]))
     return found[:MAX_SEAMS]
