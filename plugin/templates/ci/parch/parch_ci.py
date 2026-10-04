@@ -731,7 +731,17 @@ IMPORTLINTER_EXAMPLE = (
     "  [importlinter]\n  root_package = ИМЯ_ПАКЕТА\n\n"
     "  [importlinter:contract:ui-not-db]\n  name = UI не обращается к хранилищу напрямую\n"
     "  type = forbidden\n  source_modules = ИМЯ_ПАКЕТА.ui\n  forbidden_modules = ИМЯ_ПАКЕТА.db\n"
-    "  allow_indirect_imports = True"
+    "  allow_indirect_imports = True\n\n"
+    "Уровни: верхний уровень может импортировать нижний, обратно нельзя:\n"
+    "  [importlinter:contract:levels]\n  name = Уровни: ui выше services выше db\n  type = layers\n"
+    "  layers =\n      ИМЯ_ПАКЕТА.ui\n      ИМЯ_ПАКЕТА.services\n      ИМЯ_ПАКЕТА.db\n\n"
+    "Низкоуровневая библиотека (здесь sqlite3) подключается только в одном модуле;\n"
+    "в [importlinter] нужна строка include_external_packages = True:\n"
+    "  [importlinter:contract:sqlite-only-in-db]\n"
+    "  name = Библиотека sqlite3 подключается только в ИМЯ_ПАКЕТА.db\n"
+    "  type = forbidden\n  source_modules = ИМЯ_ПАКЕТА\n  forbidden_modules = sqlite3\n"
+    "  ignore_imports = ИМЯ_ПАКЕТА.db -> sqlite3\n"
+    "Так запрещено всем модулям, включая новые, кроме одного исключения в ignore_imports."
 )
 
 
