@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 MOVE, RENAME, DELETE, RESTRUCTURE = "Перенести", "Переименовать", "Удалить", "Перестроить"
-ACTIONS = (MOVE, RENAME, DELETE, RESTRUCTURE)
+CONTRACT = "Контрактный тест"  # добавляется только тест; безопасно, идёт первым
+ACTIONS = (MOVE, RENAME, DELETE, RESTRUCTURE, CONTRACT)
 CODE_SUFFIXES = {".py", ".cs", ".ts", ".tsx", ".ps1", ".psm1"}
 LINKS = "обновить все ссылки (импорты, пути в скриптах, документы) и прогнать тесты"
 RISKY = "рискованно, нужно отдельное «да»"
+SEAM_TEST = "сначала контрактный тест шва"
 ZONE_YES = "неприкосновенная зона: нужно отдельное «да»"
 APPROVAL = "поимённое утверждение владельца"
 
@@ -25,6 +27,12 @@ APPROVAL = "поимённое утверждение владельца"
 def in_zone(path: str, zones: list[str]) -> bool:
     cleaned = path.replace(chr(92), "/").strip("/")
     return any(cleaned == z.strip("/") or cleaned.startswith(z.strip("/") + "/") for z in zones)
+
+
+def touches(old: str, seam_file: str) -> bool:
+    """План меняет файл шва или папку, в которой он лежит."""
+    base = old.rstrip("/")
+    return bool(base) and (seam_file == base or seam_file.startswith(base + "/"))
 
 
 def row(action: str, what: str, old: str, new: str, **extra: Any) -> dict[str, Any]:
@@ -42,6 +50,7 @@ def row(action: str, what: str, old: str, new: str, **extra: Any) -> dict[str, A
         "risk": "безопасно",
         "code_without_tests": False,
         "needs_owner_yes": False,
+        "seams_red": [],
     }
     base.update(extra)
     return base
@@ -75,6 +84,7 @@ def build_plan(
     protected: list[str],
     dead_confirmed: list[dict[str, Any]] | None = None,
     tag_date: str = "",
+    seams: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Строки плана от безопасных к рискованным. Удаления только по ответам владельца (`dead_confirmed`)."""
     rows: list[dict[str, Any]] = []
@@ -112,7 +122,31 @@ def build_plan(
                 )
         if item["action"] == DELETE:
             item["needs_owner_yes"] = True
-    order = {RENAME: 0, MOVE: 1, RESTRUCTURE: 2, DELETE: 3}
+        red_here = [
+            str(seam["id"])
+            for seam in seams or []
+            if seam["red"] and any(touches(str(item["old"]), f) for f in seam["files"])
+        ]
+        if red_here:  # изменение шва только после контрактного теста этого шва
+            item["seams_red"] = red_here
+            item["risk"], item["needs_owner_yes"] = RISKY, True
+            note = f"{SEAM_TEST} {', '.join(red_here)}"
+            item["precondition"] = (
+                f"{item['precondition']}; {note}" if item["precondition"] else note
+            )
+    for seam in seams or []:
+        if seam["red"]:
+            where = ", ".join(seam["evidence"][:2])
+            rows.append(
+                row(
+                    CONTRACT,
+                    f"шов {seam['id']} ({seam['kind']}: {seam['from']} → {seam['to']}, {where}) без контрактного теста",
+                    "",
+                    "",
+                    verify="новый тест падает, если формат файла или аргументы запуска на шве изменить",
+                )
+            )
+    order = {CONTRACT: -1, RENAME: 0, MOVE: 1, RESTRUCTURE: 2, DELETE: 3}
     rows.sort(key=lambda r: (r["needs_owner_yes"], order[r["action"]], str(r["old"])))
     return rows
 
@@ -142,6 +176,8 @@ def validate(rows: list[dict[str, Any]], protected: list[str]) -> list[str]:
         touched = [str(item.get("old") or ""), str(item.get("new") or "")]
         if any(p and in_zone(p, protected) for p in touched) and not item.get("needs_owner_yes"):
             problems.append(f"{where}: затронута неприкосновенная зона, нужно отдельное «да»")
+        if item.get("seams_red") and SEAM_TEST not in str(item.get("precondition")):
+            problems.append(f"{where}: изменение шва без контрактного теста этого шва")
         if (
             item["action"] in {MOVE, RENAME}
             and item.get("old")
@@ -168,6 +204,8 @@ def plan_markdown(rows: list[dict[str, Any]], protected: list[str]) -> str:
     ]
     for number, item in enumerate(rows, start=1):
         route = f"`{item['old']}` → `{item['new']}`" if item["new"] else f"`{item['old']}`"
+        if not item["old"]:
+            route = "—"
         guard = item["verify"] or (
             f"{item['proof']}; метка {item['archive_tag']}; {item['confirmation']}"
             if item["action"] == DELETE

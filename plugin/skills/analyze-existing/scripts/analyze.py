@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analyze_deadcode as deadcode
 import analyze_equivalents as eqmod
 import analyze_history as history
+import analyze_map as mapmod
 import analyze_plan as planmod
 import analyze_report as report
 import analyze_tools as tools
@@ -414,6 +415,8 @@ def inventory(
     facts["tools"] = tools.detect(project, rel, languages)
     facts["hotspots"] = history.hotspots(project, rel)
     facts["dead_code"] = deadcode.candidates(project, rel)
+    facts["modules"] = mapmod.modules(project, rel, zones)
+    facts["seams"] = mapmod.seams(project, rel)
     facts["risks"] = report.risks(facts, facts["hotspots"], facts["dead_code"], facts["tools"])
     facts["health_card"] = report.health_card(
         languages,
@@ -422,8 +425,9 @@ def inventory(
         facts["dead_code"],
         [],
         facts["test_files_by_language"],
+        facts["seams"],
     )
-    plan_rows = planmod.build_plan(equivalents, rel, zones)
+    plan_rows = planmod.build_plan(equivalents, rel, zones, seams=facts["seams"])
     facts["protected_paths"] = zones
     facts["plan"] = plan_rows
     facts["plan_problems"] = planmod.validate(plan_rows, zones)
@@ -507,6 +511,7 @@ def write_artifacts(
         facts["dead_code"],
         results,
         facts["test_files_by_language"],
+        facts["seams"],
     )
     written: list[str] = []
 
@@ -524,11 +529,14 @@ def write_artifacts(
     decisions = report.adr_drafts(project, facts["equivalents"])
     if decisions:
         put("drafts/ADR-DRAFTS.md", decisions)
+    put("drafts/MODULES.md", mapmod.modules_markdown(facts["modules"]))
+    put("drafts/INTERFACES.md", mapmod.interfaces_markdown(facts["seams"]))
     put("facts.json", json.dumps(facts, ensure_ascii=False, indent=2) + chr(10))
     return {
         "written": written,
         "plan_problems": facts["plan_problems"],
         "risks": len(facts["risks"]),
+        "red_seams": sum(1 for s in facts["seams"] if s["red"]),
     }
 
 

@@ -32,6 +32,7 @@ def health_card(
     dead: dict[str, Any],
     baseline: list[dict[str, Any]],
     test_files: int | dict[str, int],
+    seams: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Карточка здоровья по языкам: у каждого языка только его инструменты. Чего не измеряли, так и пишем."""
     by_tool = {str(b["tool"]): b for b in baseline}
@@ -66,11 +67,23 @@ def health_card(
             elif key == "dup":
                 value = dup_value(language, by_tool.get("jscpd"))
             elif key == "seams":
-                value = "оценивается в PR 2 (карта и швы)"
+                value = seams_value(language, seams)
             rows.append(
                 {"language": language, "signal": title, "value": value, "alarming_if": alarming}
             )
     return rows
+
+
+def seams_value(language: str, seams: list[dict[str, Any]] | None) -> str:
+    """Швы с участием языка; шов без контрактного теста — красный сигнал."""
+    if seams is None:
+        return "не измерялось"
+    mine = [s for s in seams if language == s["from"] or language in str(s["to"]).split(", ")]
+    if not mine:
+        return "швов между языками не найдено"
+    red = [s for s in mine if s["red"]]
+    text = f"швов с участием языка: {len(mine)}, без контрактного теста: {len(red)}"
+    return f"КРАСНЫЙ СИГНАЛ: {text}" if red else text
 
 
 LINT_TOOLS = {
@@ -204,6 +217,15 @@ def risks(
                 70,
                 "Инструкция агенту слишком длинная",
                 f"{names} при пределе 150: чем длиннее текст, тем хуже модель его выполняет, и важные правила теряются",
+            )
+        )
+    red_seams = [s for s in facts.get("seams", []) if s["red"]]
+    if red_seams:
+        found.append(
+            (
+                82,
+                f"Швы между языками без контрактного теста: {len(red_seams)}",
+                "ошибка на стыке (формат общего файла, аргументы запуска) не ловится ни одним тестом; менять такой шов нельзя, пока контрактного теста нет",
             )
         )
     untested = [h for h in hot if not h["has_test"]]
