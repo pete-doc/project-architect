@@ -250,7 +250,22 @@
         "F13"
       ],
       "spec": "docs/specs/F15-analyze-existing.md",
-      "acceptance_tests": [],
+      "acceptance_tests": [
+        "tests/test_analyze_core.py",
+        "tests/test_analyze_existing.py",
+        "tests/test_analyze_fixes.py",
+        "tests/test_analyze_map.py",
+        "tests/test_analyze_report_dir.py",
+        "tests/test_analyze_seam_chain.py",
+        "tests/test_analyze_seam_groups.py",
+        "tests/test_analyze_seam_launch.py",
+        "tests/test_analyze_seam_names.py",
+        "tests/test_analyze_seams.py",
+        "tests/test_catalog.py",
+        "tests/test_catalog_ratchet.py",
+        "tests/test_architecture_rules.py",
+        "tests/test_implementer.py"
+      ],
       "status": "in_progress",
       "passes": false,
       "incidents": 0

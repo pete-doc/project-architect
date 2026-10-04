@@ -7,7 +7,8 @@
    запрос не может.
    Когда запрос показать некому (режимы bypassPermissions и dontAsk, фоновый запуск), действие
    запрещается совсем.
-3. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений).
+3. Любая роль не создаёт новые .md вне docs/ (кроме короткого списка исключений; в репозитории
+   продукта ещё `plugin/templates/`, ADR-0016).
 
 Активен только в проектах с CONSTITUTION.md. Правки через Bash/PowerShell ловятся
 приблизительно; жёсткая защита: правила permissions (plugin/plugin/templates/claude/settings.json).
@@ -245,11 +246,18 @@ def _decide(
     return None
 
 
-def _md_creation_allowed(rel: str) -> bool:
+def _is_product_repo(project: Path) -> bool:
+    """Репозиторий самого продукта: в корне есть плагин (`plugin/.claude-plugin/plugin.json`)."""
+    return (project / "plugin" / ".claude-plugin" / "plugin.json").is_file()
+
+
+def _md_creation_allowed(rel: str, project: Path) -> bool:
     parts = PurePosixPath(rel).parts
     name = parts[-1]
     if "docs" in parts[:-1]:
         return True
+    if parts[:2] == ("plugin", "templates") and _is_product_repo(project):
+        return True  # шаблоны для целевых проектов (ADR-0016); путь уже приведён без `..`
     if len(parts) == 1 and name in _ALLOWED_ROOT_MD:
         return True
     if name == "skill.md" and "skills" in parts[:-1]:
@@ -268,7 +276,7 @@ def _exists_ignoring_case(project: Path, rel: str) -> bool:
 
 
 def _md_block(rel: str, project: Path) -> Block | None:
-    if not rel.endswith(".md") or _md_creation_allowed(rel):
+    if not rel.endswith(".md") or _md_creation_allowed(rel, project):
         return None
     if _exists_ignoring_case(project, rel):
         return None
