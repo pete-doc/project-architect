@@ -35,9 +35,11 @@ def seam_project(tmp_path: Path) -> Path:
         tmp_path / "plugin" / "Tool.csproj",
         "<Project><Description>Плагин игры</Description></Project>\n",
     )
-    write(
+    write(  # настоящий контрактный тест: запускает обе стороны (launch.py и round.ps1) и сверяет код возврата
         tmp_path / "tests" / "test_launch.py",
-        "def test_round_script_is_started() -> None:\n    assert 'round.ps1'\n",
+        "import subprocess\n\nfrom ops import launch\n\n\ndef test_round_exit_code() -> None:\n    launch.go()\n"
+        '    done = subprocess.run(["powershell", "-File", "scripts/round.ps1"], capture_output=True)\n'
+        "    assert done.returncode == 0\n",
     )
     git(tmp_path, "init", "-q")
     git(tmp_path, "add", ".")
@@ -78,12 +80,15 @@ def test_seams_are_found_between_languages_and_red_without_a_contract_test(
 
 
 def test_a_test_that_names_the_shared_file_turns_the_seam_green(seam_project: Path) -> None:
+    # PR 2b: засчитывается только тест, который называет обе стороны шва и сверяет формат; одного имени файла мало
     write(
-        seam_project / "tests" / "ConfigTests.cs",
-        'class ConfigTests { string F = "autopilot.txt"; }\n',
+        seam_project / "tests" / "test_config_contract.py",
+        "from ops import panel\n\n\n"
+        "def test_header_matches() -> None:\n    panel.save()\n    header = open('config/autopilot.txt').readline()\n"
+        "    assert header.startswith('task=') and 'autopilot.txt' in open('plugin/Tool.cs').read()\n",
     )
     shared = found(seam_project)["общий файл|autopilot.txt|csharp>python"]
-    assert shared["red"] is False and shared["contract_tests"] == ["tests/ConfigTests.cs"]
+    assert shared["red"] is False and shared["contract_tests"] == ["tests/test_config_contract.py"]
 
 
 def test_things_that_are_not_seams_are_not_reported(tmp_path: Path) -> None:
@@ -144,7 +149,10 @@ def test_the_plan_starts_with_a_contract_test_row_for_every_red_seam(seam_projec
     rows = analyze.inventory(seam_project, [])["plan"]
     contract = [r for r in rows if r["action"] == "Контрактный тест"]
     assert len(contract) == 2 and rows[:2] == contract
-    assert all(r["needs_owner_yes"] is False and "тест падает" in r["verify"] for r in contract)
+    assert all(
+        r["needs_owner_yes"] is False and "падает при изменении шва" in r["verify"]
+        for r in contract
+    )
 
 
 def test_changing_a_seam_file_needs_its_contract_test_first(seam_project: Path) -> None:

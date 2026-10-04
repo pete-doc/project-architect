@@ -21,6 +21,7 @@ LINKS = "обновить все ссылки (импорты, пути в ск�
 RISKY = "рискованно, нужно отдельное «да»"
 SEAM_TEST = "сначала контрактный тест шва"
 ZONE_YES = "неприкосновенная зона: нужно отдельное «да»"
+OUTSIDE_YES = "неприкосновенная зона, нужно отдельное «да»"  # файл пишет за пределы проекта
 APPROVAL = "поимённое утверждение владельца"
 
 
@@ -115,7 +116,9 @@ def build_plan(
         if item["action"] in {MOVE, RENAME} and item["old"]:
             code = code_files_under(str(item["old"]), rel)
             if code and not all(has_test_for(p, rel) for p in code):
-                item["risk"], item["needs_owner_yes"] = RISKY, True
+                if item["risk"] != ZONE_YES:  # метка зоны не затирается пометкой «рискованно»
+                    item["risk"] = RISKY
+                item["needs_owner_yes"] = True
                 item["code_without_tests"] = True
                 item["precondition"] = (
                     "сначала характеризационный тест, фиксирующий нынешнее поведение"
@@ -129,7 +132,9 @@ def build_plan(
         ]
         if red_here:  # изменение шва только после контрактного теста этого шва
             item["seams_red"] = red_here
-            item["risk"], item["needs_owner_yes"] = RISKY, True
+            if item["risk"] != ZONE_YES:
+                item["risk"] = RISKY
+            item["needs_owner_yes"] = True
             note = f"{SEAM_TEST} {', '.join(red_here)}"
             item["precondition"] = (
                 f"{item['precondition']}; {note}" if item["precondition"] else note
@@ -137,13 +142,18 @@ def build_plan(
     for seam in seams or []:
         if seam["red"]:
             where = ", ".join(seam["evidence"][:2])
+            outside = list(seam.get("outside_write") or [])
+            note = f"; шов пишет за пределы проекта ({', '.join(outside)})" if outside else ""
             rows.append(
                 row(
                     CONTRACT,
-                    f"шов {seam['id']} ({seam['kind']}: {seam['from']} → {seam['to']}, {where}) без контрактного теста",
+                    f"шов {seam['id']} ({seam['kind']}: {seam['from']} → {seam['to']}, {where}) без контрактного теста{note}",
                     "",
                     "",
-                    verify="новый тест падает, если формат файла или аргументы запуска на шве изменить",
+                    verify="новый тест, который запускает или читает обе стороны шва и сверяет формат (колонки, поля, код возврата), падает при изменении шва",
+                    risk=f"{OUTSIDE_YES} на любое изменение файла шва; сам тест безопасен"
+                    if outside
+                    else "безопасно",
                 )
             )
     order = {CONTRACT: -1, RENAME: 0, MOVE: 1, RESTRUCTURE: 2, DELETE: 3}
@@ -191,7 +201,11 @@ def validate(rows: list[dict[str, Any]], protected: list[str]) -> list[str]:
     return problems
 
 
-def plan_markdown(rows: list[dict[str, Any]], protected: list[str]) -> str:
+def plan_markdown(
+    rows: list[dict[str, Any]],
+    protected: list[str],
+    outside: dict[str, list[str]] | None = None,
+) -> str:
     """PLAN.md для parch-analysis/: таблица действий и предохранители."""
     lines = [
         "# План приведения к стандарту (черновик анализа)",
@@ -218,6 +232,13 @@ def plan_markdown(rows: list[dict[str, Any]], protected: list[str]) -> str:
         )
     if not rows:
         lines.append("| | | Действий не требуется | | | |")
+    if outside:
+        lines += [
+            "",
+            f"Файлы, которые по тексту пишут за пределы проекта (папка игры, BepInEx, Steam): {OUTSIDE_YES}. "
+            + ", ".join(f"`{path}`" for path in sorted(outside))
+            + ".",
+        ]
     lines += [
         "",
         "Предохранители: перенос только вместе с обновлением всех ссылок и зелёными тестами; переносы через `git mv`; "
