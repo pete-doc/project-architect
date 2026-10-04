@@ -301,6 +301,22 @@
       "status": "planned",
       "passes": false,
       "incidents": 0
+    },
+    {
+      "id": "F19",
+      "title": "Приведение реального проекта к стандарту по утверждённому плану",
+      "goal": [
+        "G4"
+      ],
+      "depends_on": [
+        "F15",
+        "F17"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
     }
   ]
 }
