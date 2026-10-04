@@ -214,7 +214,7 @@
       "depends_on": [
         "F12"
       ],
-      "spec": "",
+      "spec": "docs/specs/F13-incidents-stuck.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
@@ -228,7 +228,8 @@
         "G6"
       ],
       "depends_on": [
-        "F11"
+        "F11",
+        "F18"
       ],
       "spec": "",
       "acceptance_tests": [],
@@ -238,12 +239,12 @@
     },
     {
       "id": "F15",
-      "title": "/parch:analyze-existing",
+      "title": "Полный analyze-existing: карта модулей и швов, восстановленные решения, черновик цели, план приведения к стандарту",
       "goal": [
         "G4"
       ],
       "depends_on": [
-        "F14"
+        "F13"
       ],
       "spec": "",
       "acceptance_tests": [],
@@ -253,13 +254,14 @@
     },
     {
       "id": "F16",
-      "title": "Janitor и ревью",
+      "title": "Janitor и ИИ-ревью агентом внутри Claude Code (без платного API в CI)",
       "goal": [
         "G2",
         "G6"
       ],
       "depends_on": [
-        "F13"
+        "F13",
+        "F14"
       ],
       "spec": "",
       "acceptance_tests": [],
@@ -289,7 +291,7 @@
         "G6"
       ],
       "depends_on": [
-        "F14"
+        "F15"
       ],
       "spec": "",
       "acceptance_tests": [],
