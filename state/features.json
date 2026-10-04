@@ -312,7 +312,7 @@
         "F15",
         "F17"
       ],
-      "spec": "",
+      "spec": "docs/specs/F19-migration-pilot.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
