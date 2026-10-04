@@ -181,7 +181,7 @@ def test_agents_md_points_to_the_single_command() -> None:
 
 def test_the_f15_stub_keeps_every_owner_requirement() -> None:
     spec = (REPO / "docs" / "specs" / "F15-analyze-existing.md").read_text(encoding="utf-8")
-    assert "заготовка, не утверждена" in spec
+    assert "Статус: ждёт вашего «утверждаю»" in spec or "Статус: утверждена владельцем" in spec
     for fact in (
         "Каталог возможностей",
         "проверяет его свежесть",
@@ -190,7 +190,7 @@ def test_the_f15_stub_keeps_every_owner_requirement() -> None:
         "по уровням",
         "только в одном модуле",
         "Протокол из 5 шагов",
-        "раздел «Основания» в PR",
+        "разделом «Основания»",
         "**Перенести**",
         "**Переименовать под имена стандарта**",
         "**Удалить**",
@@ -201,9 +201,24 @@ def test_the_f15_stub_keeps_every_owner_requirement() -> None:
         "git mv",
         "отдельного «да»",
     ):
-        assert fact.lower() in spec.lower(), fact
+        assert fact.lower() in " ".join(spec.lower().split()), fact  # перенос строки не мешает
     features = json.loads((REPO / "state" / "features.json").read_text(encoding="utf-8"))[
         "features"
     ]
     f15 = next(f for f in features if f["id"] == "F15")
     assert f15["spec"] == "docs/specs/F15-analyze-existing.md"
+
+
+def test_the_f15_spec_asks_the_owner_five_questions_and_the_backlog_records_the_doctor_probes() -> (
+    None
+):
+    spec = (REPO / "docs" / "specs" / "F15-analyze-existing.md").read_text(encoding="utf-8")
+    questions = spec.split("## Что нужно от вас", 1)[1].split("## Риски", 1)[0]
+    assert all(f"\n{n}. " in questions for n in range(1, 6))
+    for fact in ("PR 1.", "PR 2.", "PR 3.", "PR 4.", "tests/test_catalog.py", "implementer"):
+        assert fact in spec, fact
+    backlog = (REPO / "docs" / "BACKLOG.md").read_text(encoding="utf-8")
+    assert (
+        "`guard_shell_writes` и `loop_guard`" in backlog
+        and "три одинаковые ошибки подряд" in backlog
+    )

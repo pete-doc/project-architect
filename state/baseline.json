@@ -1204,6 +1204,7 @@
       "tests/test_preflight.py::test_lessons_log_follows_the_rule_and_links_the_closed_automation",
       "tests/test_preflight.py::test_the_baseline_step_names_the_platform_of_the_report[posix]",
       "tests/test_preflight.py::test_the_baseline_step_names_the_platform_of_the_report[windows]",
+      "tests/test_preflight.py::test_the_f15_spec_asks_the_owner_five_questions_and_the_backlog_records_the_doctor_probes",
       "tests/test_preflight.py::test_the_f15_stub_keeps_every_owner_requirement",
       "tests/test_preflight.py::test_the_first_step_failing_runs_no_later_step",
       "tests/test_preflight.py::test_the_run_stops_at_the_first_failing_step_and_returns_its_code",
