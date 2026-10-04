@@ -146,7 +146,11 @@ def test_red_seams_are_a_red_signal_per_language_and_a_risk(seam_project: Path) 
 
 
 def test_the_plan_starts_with_a_contract_test_row_for_every_red_seam(seam_project: Path) -> None:
-    rows = analyze.inventory(seam_project, [])["plan"]
+    zones = [
+        "scripts/round.ps1",
+        "ops/panel.py",
+    ]  # оба шва трогают зону: группа (а), строка у каждого
+    rows = analyze.inventory(seam_project, zones)["plan"]
     contract = [r for r in rows if r["action"] == "Контрактный тест"]
     assert len(contract) == 2 and rows[:2] == contract
     assert all(
