@@ -269,22 +269,39 @@ def mentions(text: str, name: str) -> bool:
     )
 
 
-def side_groups(seam: dict[str, Any]) -> list[set[str]]:
-    """Стороны шва: для каждого языка набор имён его файлов (имя файла и имя без расширения)."""
-    groups: dict[str, set[str]] = {}
-    own_names = {
-        Path(str(k)).stem.lower() for k in seam["keys"]
-    }  # имя самого общего файла стороной не считается
+def references(text: str, path: str) -> bool:
+    """Тест обращается к файлу кода: путь или имя с расширением, импорт модуля или вызов класса.
+
+    Просто слово, равное имени файла без расширения (`run`, `harvest`), обращением не считается: так слово из
+    обычного текста теста закрывало шов, к которому тест не прикасается.
+    """
+    name, stem = Path(path).name, Path(path).stem
+    if len(stem) < 3:
+        return False
+    plain = text.replace(chr(92), "/")
+    if re.search(rf"(?<![\w.\-]){re.escape(name)}(?!\w)", plain, re.IGNORECASE):
+        return True
+    word = re.escape(stem)
+    patterns = {
+        "python": rf"^\s*(?:from\s+[\w.]*\b{word}\s+import\b|import\s+[\w.,\s]*\b{word}\b|from\s+[\w.]+\s+import\s+[^\n]*\b{word}\b)",
+        "csharp": rf"\bnew\s+{word}\b|(?<![\w.]){word}\s*[.(<]|typeof\(\s*{word}\s*\)",
+        "typescript": rf"from\s+['\"][^'\"]*/{word}['\"]|require\(\s*['\"][^'\"]*{word}(?:\.\w+)?['\"]\s*\)|import\(\s*['\"][^'\"]*{word}",
+        "powershell": rf"Import-Module\s+\S*{word}",
+    }.get(language_of(path) or "")
+    return bool(patterns and re.search(patterns, plain, re.MULTILINE))
+
+
+def side_groups(seam: dict[str, Any]) -> list[list[str]]:
+    """Стороны шва: для каждого языка файлы этого языка."""
+    groups: dict[str, list[str]] = {}
     for path in seam["files"]:
-        name = Path(path).name
-        names = {name.lower(), Path(path).stem.lower()} - own_names
-        groups.setdefault(language_of(path), set()).update(names)
+        groups.setdefault(language_of(path), []).append(path)
     return list(groups.values())
 
 
 def covers_both_sides(seam: dict[str, Any], text: str) -> bool:
-    """Тест называет код каждой стороны шва; у запуска без скрипта проекта сторона-цель определяется по слову запуска."""
-    if not all(any(mentions(text, n) for n in names) for names in side_groups(seam)):
+    """Тест обращается (путь, импорт, вызов) к коду каждой стороны шва; у запуска без скрипта проекта сторона-цель определяется по слову запуска."""
+    if not all(any(references(text, p) for p in paths) for paths in side_groups(seam)):
         return False
     if seam["kind"] == "запуск":
         target = next(t for lang, t in TARGET_TOKENS if lang == seam["to"])
@@ -511,8 +528,9 @@ def interfaces_markdown(found: list[dict[str, Any]]) -> str:
         "",
         f"Швов: {len(found)}, без контрактного теста: {red}.",
         "",
-        "Контрактным считается только тест, который называет код обеих сторон шва (запускает или читает обе) и сверяет "
-        "формат (колонки, поля, код возврата). Тест, который только называет файл или скрипт, не засчитывается: он "
+        "Контрактным считается только тест, который обращается к коду обеих сторон шва (путь к файлу, импорт или вызов; "
+        "слова, совпавшего с именем файла, мало) и сверяет формат (колонки, поля, код возврата). Тест, который только "
+        "называет файл или скрипт, не засчитывается: он "
         "показан отдельно, шов остаётся красным. Два теста, каждый про свою сторону, тоже не засчитываются.",
         "",
         "| № | Вид | От → к | Где | Контрактный тест | Пишет вне проекта |",
