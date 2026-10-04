@@ -11,6 +11,7 @@ heredoc или `-c`, который пишет файл. Разрешено: о�
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -49,10 +50,10 @@ ALLOWED_NAMES = {
 }  # fmt: skip
 ALLOWED_MARKERS = (
     "test-report", ".coverage", "coverage.xml", "htmlcov", "junit", "tempfile", "gettempdir",
-    "$TEMP", "${TEMP}", "%TEMP%", "$env:TEMP", "$env:TMP", "$TMPDIR", "$RUNNER_TEMP", "/tmp/",
+    "$TEMP", "${TEMP}", "%TEMP%", "$env:TEMP", "$env:TMP", "$TMPDIR", "$RUNNER_TEMP",
 )  # fmt: skip
 TEMP_PREFIXES = (
-    "$TEMP", "${TEMP}", "%TEMP%", "$env:TEMP", "$env:TMP", "$TMPDIR", "$RUNNER_TEMP", "/tmp/",
+    "$TEMP", "${TEMP}", "%TEMP%", "$env:TEMP", "$env:TMP", "$TMPDIR", "$RUNNER_TEMP",
 )  # fmt: skip
 WRITERS = {"tee", "set-content", "add-content", "out-file"}
 
@@ -92,6 +93,10 @@ def target_allowed(target: str, project: Path, command: str) -> bool:
     if cleaned.startswith(TEMP_PREFIXES):
         # переменную временной папки не должна подменять сама команда (TEMP=проект ... > $TEMP/x)
         return not re.search(r"\b(?:TEMP|TMP|TMPDIR)=", command)
+    if cleaned.startswith("/tmp/") and os.name == "nt":
+        cleaned = str(
+            Path(tempfile.gettempdir()) / cleaned[5:]
+        )  # /tmp в Git Bash это временная папка Windows
     if not Path(cleaned).is_absolute():
         return False
     try:
