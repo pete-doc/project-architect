@@ -51,6 +51,23 @@ TARGET_TOKENS = (
 )
 SCRIPT_NAME = re.compile(r"[\w./\\\-]+\.(?:ps1|py|mjs|cjs)\b", re.IGNORECASE)
 CODE_LANGUAGES = {"python", "csharp", "powershell", "typescript"}
+FORMAT_CHECK = re.compile(
+    r"header|column|fieldnames|DictReader|csv\.reader|json\.loads?|JsonSerializer|JsonDocument|schema|\.keys\(\)"
+    r"|returncode|exit[ _]?code|ExitCode|LASTEXITCODE|splitlines|ReadAllLines|startswith|\bkeys?\b|\bfields?\b",
+    re.IGNORECASE,
+)
+ASSERTION = re.compile(r"assert|Assert|Should|Expect|self\.fail|raise AssertionError")
+# Запись за пределы проекта: в файле есть путь вне репозитория (диск, папка игры, BepInEx, Steam) и операция записи.
+OUTSIDE_PATH = re.compile(
+    r"(?<![\w/])[A-Za-z]:[\\/]|program files|steamapps|bepinex|gamedir|%appdata%|\$env:(?:appdata|localappdata|programfiles|userprofile)|~[\\/]|(?<![\w.])/(?:etc|usr|var|opt)/",
+    re.IGNORECASE,
+)
+WRITE_OPS = re.compile(
+    r"Copy-Item|Move-Item|Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Rename-Item|Expand-Archive"
+    r"|Register-ScheduledTask|schtasks\s+/create|shutil\.(?:copy\w*|move|rmtree)|os\.(?:remove|rename|replace|makedirs)"
+    r"|\.write_text|\.write_bytes|File\.(?:Copy|Move|Delete|WriteAll\w+|Create)|Directory\.(?:CreateDirectory|Delete|Move)"
+    r"|fs\.(?:write\w*|copy\w*|rm\w*|unlink|mkdir|rename)"
+)
 LAUNCH_WORDS = re.compile(r"powershell|pwsh|subprocess|dotnet|node|python|Process", re.IGNORECASE)
 
 
@@ -229,35 +246,166 @@ def shared_file_seams(project: Path, files: list[str]) -> list[dict[str, Any]]:
     return seams
 
 
-def contract_tests(seam: dict[str, Any], tests: dict[str, str]) -> list[str]:
-    """Тесты, которые называют шов: имя общего файла или скрипта; для запуска без имени нужен ещё признак запуска."""
-    keys = {str(k).lower() for k in seam["keys"]}
-    named = bool(keys)
-    if not named:
-        keys = {Path(f).stem.lower() for f in seam["files"][:1]}
-    found: list[str] = []
+DOCSTRING = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'')
+
+
+def executable_text(text: str) -> str:
+    """Текст теста без комментариев и docstring: имя в пояснении не значит, что тест трогает этот код."""
+    lines = [
+        ln
+        for ln in DOCSTRING.sub("", text).splitlines()
+        if not ln.lstrip().startswith(("#", "//", "*", "/*"))
+    ]
+    return chr(10).join(lines)
+
+
+def mentions(text: str, name: str) -> bool:
+    """Имя встречается в тексте как отдельное слово (без учёта регистра); слишком короткие имена не считаются."""
+    return len(name) >= 3 and bool(
+        re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", text, re.IGNORECASE)
+    )
+
+
+def side_groups(seam: dict[str, Any]) -> list[set[str]]:
+    """Стороны шва: для каждого языка набор имён его файлов (имя файла и имя без расширения)."""
+    groups: dict[str, set[str]] = {}
+    own_names = {
+        Path(str(k)).stem.lower() for k in seam["keys"]
+    }  # имя самого общего файла стороной не считается
+    for path in seam["files"]:
+        name = Path(path).name
+        names = {name.lower(), Path(path).stem.lower()} - own_names
+        groups.setdefault(language_of(path), set()).update(names)
+    return list(groups.values())
+
+
+def covers_both_sides(seam: dict[str, Any], text: str) -> bool:
+    """Тест называет код каждой стороны шва; у запуска без скрипта проекта сторона-цель определяется по слову запуска."""
+    if not all(any(mentions(text, n) for n in names) for names in side_groups(seam)):
+        return False
+    if seam["kind"] == "запуск":
+        target = next(t for lang, t in TARGET_TOKENS if lang == seam["to"])
+        keys = [str(k) for k in seam["keys"]]
+        return any(mentions(text, k) for k in keys) if keys else bool(target.search(text))
+    return any(mentions(text, str(k)) for k in seam["keys"])
+
+
+ASSIGNED = re.compile(r"(?:\$|(?<![\w.]))([A-Za-z_]\w{2,})\s*=(?!=)")
+
+
+COPY_OP = re.compile(r"Copy-Item|Move-Item|shutil\.(?:copy\w*|move)|File\.(?:Copy|Move)")
+FIRST_ARG = re.compile(r"^\W*[^\s,)]+[\s,]+")
+
+
+def outside_part(line: str) -> str:
+    """Часть строки, куда идёт запись: у копирования и переноса это приёмник (второй аргумент), источник только читается."""
+    op = WRITE_OPS.search(line)
+    if op and COPY_OP.fullmatch(op.group(0)):
+        rest = line[op.end() :]
+        first = FIRST_ARG.match(rest)
+        return rest[first.end() :] if first else rest
+    return line
+
+
+def without_root(line: str, roots: list[str]) -> str:
+    """Строка без абсолютных путей самого проекта: путь внутрь своего репозитория не «вне проекта»."""
+    for root in roots:
+        line = re.sub(re.escape(root), "", line, flags=re.IGNORECASE)
+    return line
+
+
+def tainted_names(lines: list[str], roots: list[str]) -> dict[str, int]:
+    """Переменные, в которые попал путь вне проекта (прямо или через другую такую переменную): {имя: номер строки}."""
+    names: dict[str, int] = {}
+    for _ in range(3):  # цепочка присваиваний: $GameDir -> $target -> ...
+        for number, line in enumerate(lines, start=1):
+            if line.lstrip().startswith(("#", "//")):
+                continue
+            for match in ASSIGNED.finditer(line):
+                name = match.group(1)
+                rest = without_root(line[match.end() :], roots)
+                if name not in names and (
+                    OUTSIDE_PATH.search(rest) or any(uses(rest, other) for other in names)
+                ):
+                    names[name] = number
+    return names
+
+
+def uses(text: str, name: str) -> bool:
+    """Переменная названа в тексте: `$имя` или слово не внутри строки, не после точки (так `.log` не принимается за `log`)."""
+    escaped = re.escape(name)
+    return bool(re.search(rf"\${escaped}(?!\w)|(?<![\w.$\"'/\\]){escaped}(?![\w\"'])", text))
+
+
+def outside_writers(project: Path, files: list[str]) -> dict[str, list[str]]:
+    """Файлы, которые по тексту пишут за пределы проекта: {путь: [строка с путём, строка с операцией записи]}.
+
+    Запись внешняя, если в строке с операцией записи есть путь вне репозитория (диск, папка игры, BepInEx, Steam)
+    или переменная, в которую такой путь попал раньше. Просто упоминание папки игры без записи в неё не считается.
+    """
+    found: dict[str, list[str]] = {}
+    root = str(project.resolve())
+    roots = [root, root.replace(chr(92), "/"), root.replace(chr(92), chr(92) * 2)]
+    for path in files:
+        lines = read(project, path).splitlines()
+        names = tainted_names(lines, roots)
+        for number, line in enumerate(lines, start=1):
+            if line.lstrip().startswith(("#", "//")) or not WRITE_OPS.search(line):
+                continue
+            target = without_root(outside_part(line), roots)
+            direct = OUTSIDE_PATH.search(target) is not None
+            via = next((n for n in names if uses(target, n)), None)
+            if direct or via:
+                origin = number if direct else names[via or ""]
+                found[path] = [f"{path}:{origin}", f"{path}:{number}"]
+                break
+    return found
+
+
+def contract_tests(seam: dict[str, Any], tests: dict[str, str]) -> tuple[list[str], list[str]]:
+    """(контрактные тесты, тесты, которые только называют шов).
+
+    Контрактным считается тест, который называет код обеих сторон шва (запускает или читает обе) и сверяет формат
+    (колонки, поля, код возврата). Тест, который только называет файл или скрипт, не засчитывается.
+    """
+    keys = [str(k) for k in seam["keys"]] or [Path(f).stem for f in seam["files"][:1]]
+    strong: list[str] = []
+    weak: list[str] = []
     for path, text in tests.items():
-        if path in seam["files"]:
+        if path in seam["files"] or not any(mentions(text, k) for k in keys):
             continue
-        lowered = text.lower()
-        if any(k in lowered for k in keys) and (named or LAUNCH_WORDS.search(text)):
-            found.append(path)
-    return sorted(found)[:5]
+        if covers_both_sides(seam, text) and FORMAT_CHECK.search(text) and ASSERTION.search(text):
+            strong.append(path)
+        elif seam["keys"] or LAUNCH_WORDS.search(text):  # без имени шва нужен ещё признак запуска
+            weak.append(path)
+    return sorted(strong)[:5], sorted(weak)[:5]
 
 
 def seams(project: Path, rel: list[str]) -> list[dict[str, Any]]:
     """Швы между языками с пометкой «красный», если контрактного теста нет."""
     code = [p for p in rel if language_of(p) in CODE_LANGUAGES and not is_generated(p)]
     own = [p for p in code if not is_test_path(p)]
-    tests = {p: read(project, p) for p in code if is_test_path(p)}
+    tests = {p: executable_text(read(project, p)) for p in code if is_test_path(p)}
+    outside = outside_writers(project, own)
     found = launch_seams(project, own) + shared_file_seams(project, own)
     for number, seam in enumerate(sorted(found, key=lambda s: (s["kind"], s["files"][0])), start=1):
         seam["id"] = f"S{number}"
         seam["keys"] = sorted(seam["keys"])
-        seam["contract_tests"] = contract_tests(seam, tests)
+        seam["contract_tests"], seam["weak_tests"] = contract_tests(seam, tests)
         seam["red"] = not seam["contract_tests"]
+        seam["outside_write"] = [f for f in seam["files"] if f in outside]
     found.sort(key=lambda s: (not s["red"], s["id"]))
     return found[:MAX_SEAMS]
+
+
+def outside_writes(project: Path, rel: list[str]) -> dict[str, list[str]]:
+    """Файлы проекта, которые по тексту пишут за пределы репозитория (папка игры, BepInEx, Steam, другие диски)."""
+    code = [
+        p
+        for p in rel
+        if language_of(p) in CODE_LANGUAGES and not is_generated(p) and not is_test_path(p)
+    ]
+    return outside_writers(project, code)
 
 
 def by_language(found: list[dict[str, Any]], language: str) -> tuple[int, int]:
@@ -269,7 +417,12 @@ def by_language(found: list[dict[str, Any]], language: str) -> tuple[int, int]:
 # ---------- черновики ----------
 
 
-def modules_markdown(rows: list[dict[str, Any]]) -> str:
+ZONE_NOTE = "неприкосновенная зона, нужно отдельное «да»"
+
+
+def modules_markdown(
+    rows: list[dict[str, Any]], outside: dict[str, list[str]] | None = None
+) -> str:
     lines = [
         f"# MODULES — карта модулей ({DRAFT_MARK})",
         "",
@@ -286,6 +439,19 @@ def modules_markdown(rows: list[dict[str, Any]]) -> str:
         )
     if not rows:
         lines.append("| | | | | Кода не найдено | |")
+    if outside:
+        lines += [
+            "",
+            "## Файлы, которые пишут за пределы проекта",
+            "",
+            f"По тексту эти файлы пишут в папки вне репозитория (папка игры, BepInEx, Steam, другие диски): {ZONE_NOTE}. "
+            "Поиск приблизительный: сначала агент читает файл и подтверждает или снимает пометку.",
+            "",
+            "| Файл | Где путь вне проекта | Где запись | Пометка |",
+            "|---|---|---|---|",
+        ]
+        for path, places in sorted(outside.items()):
+            lines.append(f"| {path} | `{places[0]}` | `{places[1]}` | {ZONE_NOTE} |")
     return chr(10).join(lines) + chr(10)
 
 
@@ -300,8 +466,12 @@ def interfaces_markdown(found: list[dict[str, Any]]) -> str:
         "",
         f"Швов: {len(found)}, без контрактного теста: {red}.",
         "",
-        "| № | Вид | От → к | Где | Контрактный тест |",
-        "|---|---|---|---|---|",
+        "Контрактным считается только тест, который называет код обеих сторон шва (запускает или читает обе) и сверяет "
+        "формат (колонки, поля, код возврата). Тест, который только называет файл или скрипт, не засчитывается: он "
+        "показан отдельно, шов остаётся красным. Два теста, каждый про свою сторону, тоже не засчитываются.",
+        "",
+        "| № | Вид | От → к | Где | Контрактный тест | Пишет вне проекта |",
+        "|---|---|---|---|---|---|",
     ]
     for s in found:
         where = ", ".join(f"`{e}`" for e in s["evidence"])
@@ -310,9 +480,16 @@ def interfaces_markdown(found: list[dict[str, Any]]) -> str:
             if s["contract_tests"]
             else "**нет (красный)**"
         )
+        if s["weak_tests"] and not s["contract_tests"]:
+            tests += (
+                " (только называют шов, не засчитаны: "
+                + ", ".join(f"`{t}`" for t in s["weak_tests"])
+                + ")"
+            )
+        outside = ", ".join(f"`{f}`: {ZONE_NOTE}" for f in s["outside_write"]) or "—"
         lines.append(
-            f"| {s['id']} | {s['kind']}: {', '.join(s['keys']) or 'запуск процесса'} | {s['from']} → {s['to']} | {where} | {tests} |"
+            f"| {s['id']} | {s['kind']}: {', '.join(s['keys']) or 'запуск процесса'} | {s['from']} → {s['to']} | {where} | {tests} | {outside} |"
         )
     if not found:
-        lines.append("| | | Швов между языками не найдено | | |")
+        lines.append("| | | Швов между языками не найдено | | | |")
     return chr(10).join(lines) + chr(10)

@@ -417,6 +417,8 @@ def inventory(
     facts["dead_code"] = deadcode.candidates(project, rel)
     facts["modules"] = mapmod.modules(project, rel, zones)
     facts["seams"] = mapmod.seams(project, rel)
+    facts["outside_writes"] = mapmod.outside_writes(project, rel)
+    auto_zones = sorted(facts["outside_writes"])  # файлы, пишущие вне проекта, для плана те же зоны
     facts["risks"] = report.risks(facts, facts["hotspots"], facts["dead_code"], facts["tools"])
     facts["health_card"] = report.health_card(
         languages,
@@ -427,10 +429,11 @@ def inventory(
         facts["test_files_by_language"],
         facts["seams"],
     )
-    plan_rows = planmod.build_plan(equivalents, rel, zones, seams=facts["seams"])
+    plan_rows = planmod.build_plan(equivalents, rel, [*zones, *auto_zones], seams=facts["seams"])
     facts["protected_paths"] = zones
+    facts["protected_files_auto"] = auto_zones
     facts["plan"] = plan_rows
-    facts["plan_problems"] = planmod.validate(plan_rows, zones)
+    facts["plan_problems"] = planmod.validate(plan_rows, [*zones, *auto_zones])
     return facts
 
 
@@ -522,14 +525,17 @@ def write_artifacts(
         written.append(f"{report_dir}/{relative}")
 
     put("QUESTIONS.md", deadcode.questions_markdown(facts["questions"], facts["dead_code"]))
-    put("PLAN.md", planmod.plan_markdown(facts["plan"], facts["protected_paths"]))
+    put(
+        "PLAN.md",
+        planmod.plan_markdown(facts["plan"], facts["protected_paths"], facts["outside_writes"]),
+    )
     goal = report.goal_draft(project, facts["equivalents"])
     if goal:
         put("drafts/GOAL.md", goal)
     decisions = report.adr_drafts(project, facts["equivalents"])
     if decisions:
         put("drafts/ADR-DRAFTS.md", decisions)
-    put("drafts/MODULES.md", mapmod.modules_markdown(facts["modules"]))
+    put("drafts/MODULES.md", mapmod.modules_markdown(facts["modules"], facts["outside_writes"]))
     put("drafts/INTERFACES.md", mapmod.interfaces_markdown(facts["seams"]))
     put("facts.json", json.dumps(facts, ensure_ascii=False, indent=2) + chr(10))
     return {
