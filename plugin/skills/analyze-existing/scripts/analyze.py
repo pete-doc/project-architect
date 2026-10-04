@@ -601,7 +601,12 @@ def main() -> int:
         if not project.is_dir():
             raise ValueError(f"нет папки проекта: {project}")
         protected = request.get("protected_paths")
-        markers = planmod.clean_zone_list(request.get("game_markers"))
+        raw_markers: Any = request.get("game_markers")
+        markers = (
+            [m for m in cast("list[object]", raw_markers) if isinstance(m, str) and m.strip()]
+            if isinstance(raw_markers, list)
+            else []
+        )  # слова игры не чистятся как пути: в них бывают обратные слэши регулярок
         report_dir = check_report_dir(str(request.get("report_dir") or REPORT_DIR))
         if command == "inventory":
             if (project / report_dir).exists():
