@@ -387,7 +387,7 @@ def test_a_module_without_any_rule_fails(shop: CsShop) -> None:
         "src/Shop/Reports/Report.cs",
         'namespace Shop.Reports;\n\npublic static class Report\n{\n    public static string Title => "Report";\n}\n',
     )
-    shop.append("docs/MODULES.md", "| Reports | src/Shop/Reports | Отчёты | C# | active |\n")
+    shop.append("docs/MODULES.md", "| Reports | src/Shop/Reports | Отчёты | C# | active | F1 |\n")
     out = shop.fails("architecture")
     assert "src/Shop/Reports" in out
     assert "не охвачены" in out
