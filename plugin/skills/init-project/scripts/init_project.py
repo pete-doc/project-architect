@@ -553,6 +553,8 @@ def init_project(
         create_csharp_files(project, report)
     if "powershell" in languages:
         report.copy("powershell/PSScriptAnalyzerSettings.psd1", "PSScriptAnalyzerSettings.psd1")
+    # Шаблон описания PR («Основания») не зависит от языка и CI: кладётся в любой проект.
+    report.copy("github/pull_request_template.md", ".github/pull_request_template.md")
     if any(lang in CI_TEMPLATES for lang in languages):
         report.copy("ci/parch/parch_ci.py", CI_SCRIPT)
         report.copy("ci/parch/parch_status.py", ".github/parch/parch_status.py")
