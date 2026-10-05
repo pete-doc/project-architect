@@ -235,8 +235,10 @@
         "F18"
       ],
       "spec": "docs/specs/F14-standard-full.md",
-      "acceptance_tests": [],
-      "status": "planned",
+      "acceptance_tests": [
+        "tests/test_standard_full.py"
+      ],
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     },

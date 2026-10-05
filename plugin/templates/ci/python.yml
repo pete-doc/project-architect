@@ -45,6 +45,7 @@ jobs:
       - run: python .github/parch/parch_ci.py suppressions
       - run: python .github/parch/parch_ci.py modules
       - run: python .github/parch/parch_ci.py catalog
+      - run: python .github/parch/parch_ci.py standard
       - run: python .github/parch/parch_ci.py deps
       - run: python .github/parch/parch_ci.py architecture
       - run: python .github/parch/parch_ci.py dead-code
