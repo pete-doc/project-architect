@@ -3,7 +3,7 @@
 
 Плохие примеры, которые проверка обязана остановить: роль с инструментами записи (ревьюер правил бы то, что ревьюит), роль
 длиннее 40 строк, без описания, из списка ролей, которым разрешено править тесты; команда ревью без запуска агента в чистом
-контексте; правило слияния без ревью.
+контексте или закрытая для рабочей сессии (тогда обязательное ревью невыполнимо); правило слияния без ревью.
 """
 
 import json
@@ -73,7 +73,7 @@ def under_a_test_role_name(text: str) -> str:
         (with_write_tools, "инструменты записи"),
         (too_long, "длиннее 40 строк"),
         (without_description, "нет description"),
-        (under_a_test_role_name, "имя не reviewer"),
+        (under_a_test_role_name, "роль из тех, кому разрешено править тесты"),
     ],
 )
 def test_a_reviewer_role_that_breaks_the_rules_is_rejected(
@@ -118,6 +118,12 @@ def skill_problems(text: str) -> list[str]:
         problems.append("не требует чистого контекста")
     if "по-русски" not in text:
         problems.append("не требует пересказа по-русски")
+    if fields.get("disable-model-invocation") == "true":
+        # правило AGENTS.md: ревью запускает сама рабочая сессия; при этом флаге Claude Code блокирует
+        # вызов команды моделью, и обязательное ревью стало бы невыполнимым
+        problems.append("рабочая сессия не может запустить команду сама")
+    if fields.get("user-invocable") == "false":
+        problems.append("владелец не может запустить команду")  # ревью остальных PR по запросу
     return problems
 
 
@@ -131,6 +137,16 @@ def test_the_review_command_runs_the_agent_in_a_clean_context_and_retells_in_rus
         ("parch:reviewer", "кто-нибудь", "не запускает агента"),
         ("чистом контексте", "общем контексте", "не требует чистого контекста"),
         ("по-русски", "кратко", "не требует пересказа по-русски"),
+        (
+            'argument-hint: "[номер PR]"\n',
+            'argument-hint: "[номер PR]"\ndisable-model-invocation: true\n',
+            "рабочая сессия не может запустить команду сама",
+        ),
+        (
+            'argument-hint: "[номер PR]"\n',
+            'argument-hint: "[номер PR]"\nuser-invocable: false\n',
+            "владелец не может запустить команду",
+        ),
     ],
 )
 def test_a_review_command_without_the_key_steps_is_rejected(
@@ -142,5 +158,8 @@ def test_a_review_command_without_the_key_steps_is_rejected(
 
 def test_agents_md_requires_the_review_before_asking_the_owner_to_merge() -> None:
     text = AGENTS_MD.read_text(encoding="utf-8")
-    assert "/parch:review" in text and "до просьбы «сливай»" in text
+    rule = next(p for p in text.split("\n\n") if "/parch:review" in p)
+    assert "до просьбы «сливай»" in rule
+    assert "(не выполнено 2 или 3)" in rule  # обязательно только для PR, которые сливает владелец
+    assert "Остальным PR ревью по запросу" in rule
     assert len(text.splitlines()) <= 150  # бюджет текста для ИИ (раздел 12 стандарта)

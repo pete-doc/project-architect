@@ -2,7 +2,6 @@
 name: review
 description: Запускает ревью PR в чистом контексте (роль reviewer) и пересказывает результат владельцу по-русски на языке последствий. Обязательна перед просьбой «сливай» для PR, которые сливает сам владелец (hooks, .github/, templates/ci/, тесты, baseline, AGENTS.md и другие из ADR-0003), для остальных PR по запросу.
 argument-hint: "[номер PR]"
-disable-model-invocation: true
 ---
 
 # Ревью PR
@@ -29,6 +28,6 @@ disable-model-invocation: true
 
 ## Правило слияния
 
-PR из списка ADR-0003 (`.github/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `plugin/templates/ci/`, `tests/` кроме новых
-тестов, `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `state/baseline.json`, `state/acceptance/`, правила проверок в
-`pyproject.toml`) или с ADR в статусе `proposed` нельзя отдавать владельцу на «сливай» без этого ревью (спецификация F16).
+PR, который сливает владелец (условия 2 или 3 раздела «Слияние PR» в `AGENTS.md`: защищённые пути из ADR-0003 или ADR в
+статусе `proposed`), нельзя отдавать ему на «сливай» без этого ревью (спецификация F16). Поэтому команду запускает и сама
+рабочая сессия, без просьбы владельца.
