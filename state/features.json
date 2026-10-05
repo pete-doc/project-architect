@@ -284,8 +284,10 @@
         "F14"
       ],
       "spec": "docs/specs/F16-janitor-review.md",
-      "acceptance_tests": [],
-      "status": "planned",
+      "acceptance_tests": [
+        "tests/test_reviewer.py"
+      ],
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     },
