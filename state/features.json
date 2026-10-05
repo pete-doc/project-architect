@@ -266,7 +266,8 @@
         "tests/test_catalog_ts_ps.py",
         "tests/test_architecture_rules.py",
         "tests/test_implementer.py",
-        "tests/test_libraries.py"
+        "tests/test_libraries.py",
+        "tests/test_pr_template.py"
       ],
       "status": "in_progress",
       "passes": false,
