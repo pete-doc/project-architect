@@ -263,8 +263,11 @@
         "tests/test_analyze_seams.py",
         "tests/test_catalog.py",
         "tests/test_catalog_ratchet.py",
+        "tests/test_catalog_ts_ps.py",
         "tests/test_architecture_rules.py",
-        "tests/test_implementer.py"
+        "tests/test_implementer.py",
+        "tests/test_libraries.py",
+        "tests/test_pr_template.py"
       ],
       "status": "in_progress",
       "passes": false,
@@ -282,8 +285,10 @@
         "F14"
       ],
       "spec": "docs/specs/F16-janitor-review.md",
-      "acceptance_tests": [],
-      "status": "planned",
+      "acceptance_tests": [
+        "tests/test_reviewer.py"
+      ],
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     },

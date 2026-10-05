@@ -1,7 +1,7 @@
 {
   "name": "parch",
   "description": "ProjectArchitect: роли агентов, hooks и skills для контроля ИИ-разработки",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "author": {
     "name": "pete-doc"
   }
