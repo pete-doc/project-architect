@@ -263,6 +263,7 @@
         "tests/test_analyze_seams.py",
         "tests/test_catalog.py",
         "tests/test_catalog_ratchet.py",
+        "tests/test_catalog_ts_ps.py",
         "tests/test_architecture_rules.py",
         "tests/test_implementer.py",
         "tests/test_libraries.py"
