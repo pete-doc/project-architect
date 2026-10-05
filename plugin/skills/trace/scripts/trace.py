@@ -74,17 +74,49 @@ def find_module(target: str, rows: list[parch_ci.ModuleRow]) -> parch_ci.ModuleR
     return best
 
 
+def looks_like_path(target: str) -> bool:
+    return any(ch in target for ch in "/\\") or target.startswith(".") or Path(target).is_absolute()
+
+
+def project_relative(project: Path, target: str) -> str | None:
+    """Путь от корня проекта: абсолютные пути и `..` приводятся к корню; None, если путь вне проекта."""
+    raw = Path(target.strip().strip("`").replace("\\", "/"))
+    resolved = raw if raw.is_absolute() else project / raw
+    try:
+        return resolved.resolve().relative_to(project.resolve()).as_posix().rstrip("/") or "."
+    except ValueError:
+        return None
+
+
 def trace(project: Path, target: str) -> dict[str, Any]:
     goal_name, _, criteria = parch_status.read_goal(project)
     _, rows = parch_ci.modules_with_blocks(project)
     catalog = catalog_rows(project)
-    wanted = norm(target)
     function: dict[str, str] | None = None
-    path = wanted
-    named = [r for r in catalog if r["name"] == target or r["name"].endswith("." + target)]
-    if named and not (project / wanted).exists():
-        function = named[0]
-        path = function["file"]
+    if looks_like_path(target):
+        found_path = project_relative(project, target)
+        if found_path is None:
+            return {
+                "found": False,
+                "target": target,
+                "message": f"«{target}» лежит вне папки проекта, к блокам и целям проекта не относится",
+            }
+        path = found_path
+    else:
+        named = [r for r in catalog if r["name"] == target or r["name"].endswith("." + target)]
+        if len(named) > 1:
+            where = ", ".join(f"{r['name']} ({r['file']})" for r in named)
+            return {
+                "found": False,
+                "ambiguous": named,
+                "target": target,
+                "message": f"имя «{target}» совпало у нескольких функций: {where}; укажите файл, чтобы я не выбирал за вас",
+            }
+        if named:
+            function = named[0]
+            path = function["file"]
+        else:
+            path = norm(target)
     module = find_module(path, rows)
     if module is None:
         return {
@@ -118,7 +150,12 @@ def trace(project: Path, target: str) -> dict[str, Any]:
         "function": function,
         "blocks": blocks,
     }
-    if not blocks:
+    if not blocks and module.status.startswith("keep-until"):
+        result["message"] = (
+            f"модуль {module.path} без блока оставлен по решению владельца ({module.status}): "
+            "блока он не требует, на удаление не предлагается"
+        )
+    elif not blocks:
         result["message"] = (
             f"модуль {module.path} найден, но блока у него нет: код без цели, кандидат на удаление (решение за владельцем)"
         )

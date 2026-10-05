@@ -33,6 +33,7 @@ MODULES = """# MODULES
 | pricing | src/shop/pricing | Цены | Python | active | F2 |
 | legacy | src/legacy | Старое | Python | active | |
 | ghost | src/ghost | Призрак | Python | active | F9 |
+| archive | src/archive | Держим | Python | keep-until:2027-01-01 | |
 """
 
 CATALOG = """# Каталог возможностей
@@ -43,6 +44,8 @@ CATALOG = """# Каталог возможностей
 |---|---|---|
 | `src/shop/orders.py` | `place_order` | Оформляет заказ. |
 | `src/shop/pricing/discount.py` | `apply_discount` | Применяет скидку. |
+| `src/legacy/old.py` | `cleanup` | Чистит старое. |
+| `src/shop/pricing/discount.py` | `cleanup` | Чистит скидки. |
 """
 
 
@@ -136,6 +139,59 @@ def test_a_block_missing_from_the_registry_is_reported_as_unknown(tmp_path: Path
     result = trace(project(tmp_path), "src/ghost/x.py")
     assert result["found"] is True and result["blocks"][0]["id"] == "F9"
     assert result["blocks"][0]["known"] is False and result["blocks"][0]["goals"] == []
+
+
+def test_an_absolute_path_is_taken_relative_to_the_project(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    for target in (
+        str(root / "src" / "shop" / "orders.py"),
+        str(root / "src" / "shop" / "orders.py").replace("/", "\\"),
+    ):
+        result = trace(root, target)
+        assert result["found"] is True and result["module"]["path"] == "src/shop", target
+        assert result["blocks"][0]["id"] == "F1"
+
+
+def test_a_path_with_dot_dot_is_normalized_before_the_search(tmp_path: Path) -> None:
+    result = trace(project(tmp_path), "src/shop/pricing/../orders.py")
+    assert result["found"] is True and result["module"]["path"] == "src/shop"
+
+
+def test_a_path_outside_the_project_is_named_as_such_not_as_unrelated_code(tmp_path: Path) -> None:
+    root = project(tmp_path / "proj")
+    result = trace(root, str(tmp_path / "other" / "x.py"))
+    assert result["found"] is False and "вне папки проекта" in result["message"]
+    assert "не относится ни к одному модулю" not in result["message"]
+    assert trace(root, "../other/x.py")["message"].count("вне папки проекта") == 1
+
+
+def test_a_keep_until_module_without_a_block_is_not_offered_for_removal(tmp_path: Path) -> None:
+    result = trace(project(tmp_path), "src/archive/x.py")
+    assert result["found"] is True and result["blocks"] == []
+    assert (
+        "оставлен по решению владельца" in result["message"]
+        and "keep-until:2027-01-01" in result["message"]
+    )
+    assert "кандидат на удаление" not in result["message"]
+
+
+def test_a_function_name_shared_by_several_functions_lists_them_instead_of_choosing(
+    tmp_path: Path,
+) -> None:
+    result = trace(project(tmp_path), "cleanup")
+    assert result["found"] is False and "blocks" not in result
+    assert [r["file"] for r in result["ambiguous"]] == [
+        "src/legacy/old.py",
+        "src/shop/pricing/discount.py",
+    ]
+    assert "укажите файл" in result["message"]
+
+
+def test_a_file_named_like_a_catalog_function_does_not_hide_the_function(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    write(root / "place_order", "")  # файл с именем функции в корне проекта
+    result = trace(root, "place_order")
+    assert result["found"] is True and result["function"]["name"] == "place_order"
 
 
 def test_a_missing_target_is_an_error_not_a_guess(tmp_path: Path) -> None:
