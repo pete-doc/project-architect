@@ -1,0 +1,222 @@
+# Проверки продукта на CircleCI (ADR-0020), повторяют `.github/workflows/ci.yml`.
+# Параметры приходят из setup-конфига (`.circleci/config.yml`): состав PR по `.github/scope.py`.
+#
+# Кредиты (бесплатный план 30 000 в месяц): Docker small 5, large 20; Windows medium 40 за минуту.
+# Таймаутов на задание у CircleCI нет: вместо них `no_output_timeout` на долгих шагах и команда
+# `timeout` вокруг тестов (общий предел плана Free: 1 час на задание).
+version: 2.1
+
+orbs:
+  win: circleci/windows@5.0
+
+parameters:
+  code:
+    type: boolean
+    default: true
+  hooks:
+    type: boolean
+    default: false
+  node:
+    type: boolean
+    default: true
+  csharp:
+    type: boolean
+    default: true
+  powershell:
+    type: boolean
+    default: true
+  selector:
+    type: string
+    default: "not slow or lang_python or lang_typescript or lang_csharp or lang_powershell"
+
+jobs:
+  # PR только с текстом: тестов нет, идёт один standard (как в ci.yml).
+  check-text:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: standard (стоимость CI и бюджет текста)
+          no_output_timeout: 5m
+          command: python plugin/templates/ci/parch/parch_ci.py standard
+
+  # PR с кодом: проверки, быстрые тесты и медленные тесты только тех языков, чьи файлы изменил PR.
+  # Образ с Node: jscpd (проверка дублей) ставится через node; нужен Python и TypeScript.
+  check:
+    docker:
+      - image: cimg/python:3.12-node
+    resource_class: large # 4 vCPU, 8 ГБ: тесты идут параллельно (pytest -n auto)
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - pip-v1-{{ checksum "requirements-dev.txt" }}
+      - run:
+          name: Зависимости разработки
+          no_output_timeout: 10m
+          command: pip install -r requirements-dev.txt
+      - save_cache:
+          key: pip-v1-{{ checksum "requirements-dev.txt" }}
+          paths:
+            - ~/.cache/pip
+      - run: ruff check .
+      - run: ruff format --check .
+      # Стоимость CI и бюджет текста (STANDARD.md, 7.2 и 12): таймауты, отмена, триггеры, раннеры.
+      - run:
+          name: standard
+          no_output_timeout: 5m
+          command: python plugin/templates/ci/parch/parch_ci.py standard
+      - when:
+          condition: << pipeline.parameters.node >>
+          steps:
+            - restore_cache:
+                keys:
+                  - npm-v1-{{ checksum "tests/projects/ts_shop/package-lock.json" }}
+      # Тесты C# запускают настоящий dotnet; версия SDK закреплена точно в global.json тестового проекта.
+      - when:
+          condition: << pipeline.parameters.csharp >>
+          steps:
+            - run:
+                name: Ключ кэша NuGet (все packages.lock.json)
+                command: cat tests/projects/cs_shop/global.json $(find tests/projects/cs_shop -name packages.lock.json | sort) > /tmp/dotnet-key.txt
+            - restore_cache:
+                keys:
+                  - dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+                  - dotnet-v1-
+            - run:
+                name: .NET SDK по global.json
+                no_output_timeout: 10m
+                command: |
+                  sudo apt-get update -qq && sudo apt-get install -y -qq libicu-dev
+                  if [ ! -x "$HOME/.dotnet/dotnet" ]; then
+                    curl -sSfL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+                    bash /tmp/dotnet-install.sh --jsonfile tests/projects/cs_shop/global.json --install-dir "$HOME/.dotnet"
+                  fi
+                  echo 'export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"' >> "$BASH_ENV"
+      # Тесты PowerShell запускают настоящий PSScriptAnalyzer; версия та же, что в шаблоне CI.
+      - when:
+          condition: << pipeline.parameters.powershell >>
+          steps:
+            - restore_cache:
+                keys:
+                  - pwsh-v1-7.4.6-psa-1.25.0
+            - run:
+                name: PowerShell 7 и PSScriptAnalyzer 1.25.0
+                no_output_timeout: 10m
+                command: |
+                  sudo apt-get update -qq && sudo apt-get install -y -qq libicu-dev
+                  if [ ! -x "$HOME/pwsh/pwsh" ]; then
+                    curl -sSfL -o /tmp/pwsh.tar.gz https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz
+                    mkdir -p "$HOME/pwsh" && tar -xzf /tmp/pwsh.tar.gz -C "$HOME/pwsh"
+                    chmod +x "$HOME/pwsh/pwsh"
+                  fi
+                  echo 'export PATH="$HOME/pwsh:$PATH"' >> "$BASH_ENV"
+                  "$HOME/pwsh/pwsh" -NoProfile -Command "if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -eq '1.25.0')) { Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force }"
+            - save_cache:
+                key: pwsh-v1-7.4.6-psa-1.25.0
+                paths:
+                  - ~/pwsh
+                  - ~/.local/share/powershell/Modules
+      - run: pyright
+      # Метка parch-partial в отчёте: храповик не примет его за полный прогон.
+      - run:
+          name: Урезанный прогон тестов
+          no_output_timeout: 25m
+          # -n 4 явно: в контейнере CircleCI `-n auto` видит ядра хоста, а не 4 vCPU класса large.
+          command: timeout 1500 pytest -v -n 4 -m "<< pipeline.parameters.selector >>" -o junit_suite_name=parch-partial --junitxml=test-report-partial.xml
+      # Отчёт нужен и при падении тестов (как `if: always()` в GitHub).
+      - store_test_results:
+          when: always
+          path: test-report-partial.xml
+      - store_artifacts:
+          when: always
+          path: test-report-partial.xml
+      # «Храповик» в режиме --partial: упавшие, новые пропуски и удалённые тесты останавливают и
+      # урезанный прогон, но он сообщает, что слияния не даёт.
+      - run: python plugin/templates/ci/parch/parch_ci.py tests --language python --partial --report test-report-partial.xml
+      - run: python plugin/templates/ci/parch/parch_ci.py skips --language python --partial --report test-report-partial.xml
+      # Кэши npm и .NET сохраняются после тестов: пакеты скачиваются самими тестами, до них кэш пуст.
+      - when:
+          condition: << pipeline.parameters.node >>
+          steps:
+            - save_cache:
+                when: always
+                key: npm-v1-{{ checksum "tests/projects/ts_shop/package-lock.json" }}
+                paths:
+                  - ~/.npm
+      - when:
+          condition: << pipeline.parameters.csharp >>
+          steps:
+            - save_cache:
+                when: always
+                key: dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+                paths:
+                  - ~/.dotnet
+                  - ~/.nuget/packages
+
+  # Целевая платформа продукта Windows 11: hooks и запускающий файл проверяются на Windows,
+  # но только если PR их меняет (Windows 40 кредитов в минуту).
+  windows-hooks:
+    executor: win/server-2022 # windows.medium по умолчанию
+    steps:
+      - checkout
+      - run:
+          name: Python 3.12 (ставится, если его нет)
+          no_output_timeout: 15m
+          command: |
+            $py = $null
+            try { $v = (& py -3.12 --version) 2>$null; if ($v) { $py = (& py -3.12 -c "import sys;print(sys.executable)") } } catch {}
+            if (-not $py) {
+              choco install python312 -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $py = "C:\Python312\python.exe"
+              if (-not (Test-Path $py)) { Write-Host "Python не установился"; exit 1 }
+            }
+            Write-Host "python: $py"
+            [System.IO.File]::WriteAllText("$env:TEMP\py.txt", $py)
+      - restore_cache:
+          keys:
+            - pip-win-v1-{{ checksum "requirements-dev.txt" }}
+      - run:
+          name: Зависимости разработки
+          no_output_timeout: 15m
+          command: |
+            $py = Get-Content "$env:TEMP\py.txt"
+            & $py -m pip install --cache-dir C:\pip-cache -r requirements-dev.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - save_cache:
+          key: pip-win-v1-{{ checksum "requirements-dev.txt" }}
+          paths:
+            - C:\pip-cache
+      - run:
+          name: Тесты hooks и запускающего файла
+          no_output_timeout: 15m
+          command: |
+            $py = Get-Content "$env:TEMP\py.txt"
+            # Общий предел 15 минут (как timeout-minutes: 15 в GitHub): зависший тест с выводом
+            # иначе шёл бы до часа по 40 кредитов в минуту.
+            $p = Start-Process -FilePath $py -ArgumentList "-m", "pytest", "-v", "tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py" -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(900000)) { Stop-Process -Id $p.Id -Force; Write-Host "Тесты hooks: предел 15 минут"; exit 1 }
+            exit $p.ExitCode
+
+workflows:
+  # PR только с текстом: один standard на маленьком контейнере.
+  text-only:
+    when:
+      not: << pipeline.parameters.code >>
+    jobs:
+      - check-text
+  # PR с кодом: проверки и урезанный прогон тестов.
+  fast:
+    when: << pipeline.parameters.code >>
+    jobs:
+      - check
+  # Windows только если PR меняет hooks, шаблоны, .github или .circleci.
+  windows:
+    when: << pipeline.parameters.hooks >>
+    jobs:
+      - windows-hooks

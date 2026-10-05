@@ -1,0 +1,65 @@
+# CI продукта на CircleCI (ADR-0020). Параллельно с GitHub Actions: те не выключены.
+#
+# Это setup-конфиг (динамическая конфигурация): он считает состав PR прежним `.github/scope.py`
+# и передаёт результат в `.circleci/continue_config.yml`, где лежат сами проверки. Так задание Windows
+# вообще не запускается (и не стоит кредитов), если PR не меняет hooks.
+#
+# Запуск: на каждую отправку в ветку, включая черновики. Ветки `main` и `status` пропускаются
+# (в main попадает только проверенное, status это табло, ADR-0012).
+# Отмена устаревших прогонов настраивается в проекте CircleCI, не здесь: Project Settings ->
+# Advanced -> Auto-cancel Redundant Workflows.
+version: 2.1
+
+setup: true
+
+orbs:
+  continuation: circleci/continuation@1.1.0
+
+jobs:
+  scope:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small # 5 кредитов/мин, задание около минуты
+    steps:
+      - checkout
+      - run:
+          name: Состав PR (без gh CLI, через git diff с базовой веткой)
+          no_output_timeout: 3m
+          environment:
+            PARCH_SCOPE_OUT: /tmp # куда писать scope.txt и params.json (в тестах другая папка)
+          command: |
+            out="${PARCH_SCOPE_OUT:-/tmp}"
+            base=main
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              git fetch --no-tags --unshallow origin || true
+            fi
+            # quotePath=false: имена не ASCII идут как есть, а не в кавычках с экранированием.
+            if git fetch --no-tags origin "+refs/heads/${base}:refs/remotes/origin/${base}" \
+               && files=$(git -c core.quotePath=false diff --name-only "origin/${base}...HEAD"); then
+              # Правка самого CircleCI-конфига считается правкой CI: идут все языки и hooks
+              # (для scope.py это путь под .github/, он ведёт себя так же).
+              case "$files" in
+                .circleci/*|*$'\n'.circleci/*) files="$files"$'\n'".github/circleci" ;;
+              esac
+              printf '%s\n' "$files" | python3 .github/scope.py > "$out/scope.txt"
+            else
+              echo "Не удалось получить список файлов PR: идут проверки всех языков."
+              python3 .github/scope.py --unknown > "$out/scope.txt"
+            fi
+            cat "$out/scope.txt"
+            # name=value -> JSON: selector строкой, остальное true/false
+            awk -F= 'BEGIN { printf "{" } NF { v = ($1 == "selector") ? "\"" $2 "\"" : (($2 == "true") ? "true" : "false"); printf "%s\"%s\": %s", (n++ ? ", " : ""), $1, v } END { print "}" }' "$out/scope.txt" > "$out/params.json"
+            cat "$out/params.json"
+      - continuation/continue:
+          configuration_path: .circleci/continue_config.yml
+          parameters: /tmp/params.json
+
+workflows:
+  scope:
+    jobs:
+      - scope:
+          filters:
+            branches:
+              ignore:
+                - main
+                - status
