@@ -312,8 +312,10 @@
         "F15"
       ],
       "spec": "docs/specs/F18-traceability.md",
-      "acceptance_tests": [],
-      "status": "planned",
+      "acceptance_tests": [
+        "tests/test_traceability.py"
+      ],
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     },

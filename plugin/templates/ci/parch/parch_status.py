@@ -348,6 +348,61 @@ def open_questions(project: Path) -> list[str]:
     return found
 
 
+def traceability_lines(project: Path, board: Board) -> list[str]:
+    """Раздел «Прослеживаемость»: модули без блока (кандидаты на удаление) и блоки без модулей (F18).
+
+    Нужна колонка «Блок» в `docs/MODULES.md`; без неё раздела нет (проверка `modules` говорит об этом отдельно).
+    """
+    path = project / "docs" / "MODULES.md"
+    if not path.is_file():
+        return []
+    column: int | None = None
+    status_column: int | None = None
+    without: list[str] = []
+    linked: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        lowered = [c.lower() for c in cells]
+        if len(cells) >= 2 and lowered[1] in {"путь", "path"}:
+            column = next((i for i, c in enumerate(lowered) if c in {"блок", "block"}), None)
+            status_column = next(
+                (i for i, c in enumerate(lowered) if c in {"статус", "status"}), None
+            )
+            continue
+        if column is None or len(cells) <= column or not cells[1] or set(cells[1]) <= set("-: "):
+            continue
+        blocks = [
+            b for b in re.split(r"[\s,;]+", cells[column]) if b and b not in {"?", "-", "—", "–"}
+        ]
+        linked.update(blocks)
+        status = (
+            cells[status_column].lower()
+            if status_column is not None and status_column < len(cells)
+            else ""
+        )
+        if not blocks and not status.startswith("keep-until"):
+            without.append(cells[1])
+    if column is None:
+        return []
+    alive = {"in_progress", "waiting_owner", "done", "blocked", "stuck"}
+    no_modules = [b.id for b in board.blocks if b.status in alive and b.id not in linked]
+    lines = ["## Прослеживаемость"]
+    if without:
+        shown = ", ".join(f"`{m}`" for m in without[:8]) + (" и другие" if len(without) > 8 else "")
+        lines.append(
+            f"- Модулей без блока: {len(without)} (кандидаты на удаление, решение за вами): {shown}"
+        )
+    if no_modules:
+        lines.append(
+            f"- Блоков без модулей в `docs/MODULES.md`: {len(no_modules)}: {', '.join(no_modules)}"
+        )
+    if len(lines) == 1:
+        lines.append("- у каждого модуля есть блок, у каждого начатого блока есть модуль")
+    return lines
+
+
 def short(text: str, limit: int = LABEL_LIMIT) -> str:
     text = text.replace('"', "'").replace("|", "/")
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -454,6 +509,8 @@ def render(
     out += ["## В работе"] + (working or ["- ничего не открыто"]) + [""]
     if board.blocks:
         out += plan_table(board) + [""]
+        trace = traceability_lines(project, board)
+        out += trace + [""] if trace else []
         out += [
             "## Зависимости блоков",
             "По одной небольшой диаграмме на критерий готовности. Пунктирные блоки относятся к другому критерию и показаны только как «от чего зависит».",

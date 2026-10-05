@@ -205,7 +205,7 @@ def test_module_missing_from_modules_md_is_caught(shop: Shop) -> None:
 def test_module_outside_the_architecture_rules_is_caught(shop: Shop) -> None:
     (shop.root / "src" / "billing").mkdir()
     shop.write("src/billing/__init__.py", '"""Счета."""\n')
-    shop.append("docs/MODULES.md", "| billing | src/billing | Счета | Python | active |\n")
+    shop.append("docs/MODULES.md", "| billing | src/billing | Счета | Python | active | F1 |\n")
     shop.passes("modules")
     out = shop.fails("architecture")
     assert "billing" in out

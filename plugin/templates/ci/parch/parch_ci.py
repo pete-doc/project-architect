@@ -445,7 +445,148 @@ def modules_table(project: Path) -> list[str]:
     return paths
 
 
-def check_modules(project: Path, language: str) -> Result:
+MODULES_DEBT_FILE = "state/modules-baseline.json"
+EMPTY_BLOCK_CELLS = {"", "?", "-", "—", "–"}  # так в таблице записано «блока нет»
+
+
+@dataclass
+class ModuleRow:
+    path: str
+    status: str
+    blocks: list[str]
+
+
+def modules_with_blocks(project: Path) -> tuple[bool, list[ModuleRow]]:
+    """(есть ли колонка «Блок», строки таблицы MODULES.md): путь, статус, блоки модуля."""
+    path = project / "docs" / "MODULES.md"
+    if not path.is_file():
+        raise ToolError("нет docs/MODULES.md: карта модулей обязательна")
+    column: int | None = None
+    status_column: int | None = None
+    rows: list[ModuleRow] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        lowered = [c.lower() for c in cells]
+        if len(cells) >= 2 and lowered[1] in {"путь", "path"}:
+            column = next((i for i, c in enumerate(lowered) if c in {"блок", "block"}), None)
+            status_column = next(
+                (i for i, c in enumerate(lowered) if c in {"статус", "status"}), None
+            )
+            continue
+        if len(cells) < 2 or not cells[1] or set(cells[1]) <= set("-: "):
+            continue
+        status = (
+            cells[status_column] if status_column is not None and status_column < len(cells) else ""
+        )
+        raw = cells[column] if column is not None and column < len(cells) else ""
+        blocks = [b for b in re.split(r"[\s,;]+", raw) if b not in EMPTY_BLOCK_CELLS]
+        rows.append(ModuleRow(normalize_path(cells[1]), status.lower(), blocks))
+    return column is not None, rows
+
+
+def feature_ids(project: Path) -> set[str] | None:
+    path = project / "state" / "features.json"
+    if not path.is_file():
+        return None
+    return {
+        str(as_dict(item).get("id"))
+        for item in as_list(read_json(path).get("features"))
+        if as_dict(item).get("id")
+    }
+
+
+def read_modules_debt(project: Path) -> set[str] | None:
+    path = project / MODULES_DEBT_FILE
+    if not path.is_file():
+        return None
+    return set(as_strings(read_json(path).get("without_block")))
+
+
+def write_modules_debt(project: Path, debt: set[str]) -> None:
+    path = project / MODULES_DEBT_FILE
+    if not debt:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps({"version": 1, "without_block": sorted(debt)}, ensure_ascii=False, indent=2)
+    path.write_text(text + "\n", encoding="utf-8", newline="\n")
+
+
+def check_module_blocks(
+    project: Path, result: Result, update: bool = False, accept_new: bool = False
+) -> None:
+    """Связь «модуль → блок» (F18): блок существует; новый модуль без блока падает, старый нет."""
+    has_column, rows = modules_with_blocks(project)
+    if not has_column:
+        # Колонка нужна всегда. Единственное послабление: проект записан как существующий и ещё
+        # не перенесён (`existing_project` в baseline, его ставит init-project при подключении
+        # проекта с готовым кодом) и файла долга по блокам нет. Удалив колонку, проверку
+        # отключить нельзя: на новом проекте и на проекте с долгом это провал.
+        existing = Baseline(project).data.get("existing_project") is True
+        has_debt_file = read_modules_debt(project) is not None
+        if existing and not has_debt_file:
+            result.note(
+                "В docs/MODULES.md нет колонки «Блок»: проект записан как существующий и ещё "
+                "не перенесён, поэтому только предупреждение. Добавьте колонку (образец: шаблон "
+                "MODULES.md продукта), впишите блок каждому модулю и запишите долг: "
+                "modules --update --accept-new."
+            )
+            return
+        reason = (
+            "есть файл долга по блокам, значит перенос начался"
+            if has_debt_file
+            else "проект не записан как существующий, колонка обязательна"
+        )
+        result.fail(
+            f"В docs/MODULES.md нет колонки «Блок» ({reason}): без неё модули не связаны с "
+            "блоками цели. Верните колонку «Блок» в таблицу (образец: шаблон MODULES.md продукта)."
+        )
+        return
+    known = feature_ids(project)
+    if known is not None:
+        unknown = sorted(
+            f"{row.path}: блок {b}" for row in rows for b in row.blocks if b not in known
+        )
+        if unknown:
+            result.fail(
+                "В MODULES.md указан блок, которого нет в state/features.json "
+                "(опечатка или блок удалён):",
+                *shown(unknown),
+            )
+    current = {
+        row.path for row in rows if not row.blocks and not row.status.startswith("keep-until")
+    }
+    debt = read_modules_debt(project)
+    fresh = sorted(current if debt is None else current - debt)
+    if fresh and not accept_new:
+        result.fail(
+            "У этих модулей нет блока (колонка «Блок» в docs/MODULES.md): код без цели "
+            "кандидат на удаление. "
+            "Впишите блок из state/features.json или статус keep-until:ДАТА по решению владельца:",
+            *shown(fresh),
+        )
+        return
+    if update:
+        new_debt = current if accept_new else current & (debt or set())
+        if new_debt != (debt or set()):
+            write_modules_debt(project, new_debt)
+            result.note(f"Долг по блокам записан: модулей без блока {len(new_debt)}.")
+    elif debt is not None and debt - current:
+        result.note(
+            f"У {len(debt - current)} модулей из долга появился блок или они исчезли: "
+            "сократите baseline командой modules --update."
+        )
+    if current:
+        result.note(
+            f"Модулей без блока: {len(current)} (в долге у владельца, число только снижается)."
+        )
+
+
+def check_modules(
+    project: Path, language: str, update: bool = False, accept_new: bool = False
+) -> Result:
     result = Result()
     found = COLLECTORS[language].modules(project)
     listed = set(modules_table(project))
@@ -463,6 +604,7 @@ def check_modules(project: Path, language: str) -> Result:
         result.note(
             "Внимание: в MODULES.md записаны несуществующие пути (устарели):", *shown(stale)
         )
+    check_module_blocks(project, result, update, accept_new)
     return result
 
 
@@ -3610,6 +3752,8 @@ def main(argv: list[str] | None = None) -> int:
             result = check_skips(project, args.language, report, args.partial)
         elif args.check == "catalog":
             result = check_catalog(project, args.language, args.update, args.accept_new)
+        elif args.check == "modules":
+            result = check_modules(project, args.language, args.update, args.accept_new)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:
