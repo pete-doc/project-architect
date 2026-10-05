@@ -3275,7 +3275,7 @@ STANDARD_BASE_RUNNER = "ubuntu-latest"
 # слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
 STATE_WORKFLOW = "state"
 AGENTS_MAX_LINES = 150
-STANDARD_NOT_YET = "связность features.json и MODULES.md, раздел «Основания» в PR"
+STANDARD_NOT_YET = "карточка соответствия P1–P12 в STATUS.md и показ изменений версии стандарта"
 WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
 
 
@@ -3569,6 +3569,16 @@ def incident_report_problems(project: Path, block_ids: set[str] | None) -> list[
     return problems
 
 
+def incident_problems_by_file(project: Path, block_ids: set[str] | None) -> dict[str, str]:
+    """Нарушения отчётов по файлам: ключ `incident:<имя файла>`, для долга проекта."""
+    grouped: dict[str, list[str]] = {}
+    prefix = "state/incidents/"
+    for message in incident_report_problems(project, block_ids):
+        name = message.split(": ", 1)[0].removeprefix(prefix)
+        grouped.setdefault(name, []).append(message)
+    return {f"incident:{name}": "; ".join(items) for name, items in grouped.items()}
+
+
 def incident_budget_problems(project: Path) -> list[str]:
     """Блок, исчерпавший бюджет инцидентов, обязан иметь статус stuck (его ставит PR с отчётом)."""
     path = project / "state" / "features.json"
@@ -3621,6 +3631,7 @@ def check_standard(
     del language
     result = Result()
     problems: list[str] = []
+    incidents_in_debt = False
     try:
         import parch_standard  # лежит рядом (.github/parch/), копируется вместе с этим файлом
     except ImportError:
@@ -3630,8 +3641,21 @@ def check_standard(
         )
         composition_notes: list[str] = []
     else:
-        composition_problems, composition_notes = parch_standard.check(project, update, accept_new)
+        # Подключённый проект: отчёты об инцидентах идут через долг (исторические отчёты записывает
+        # владелец, новые проверяются полностью); неподключённый проверяется как раньше, ниже.
+        managed = parch_standard.is_managed(project)
+        extra = incident_problems_by_file(project, block_ids_of(project)) if managed else None
+        pr_body = os.environ.get("PARCH_PR_BODY")
+        composition_problems, composition_notes = parch_standard.check(
+            project, update, accept_new, extra, pr_body
+        )
         problems.extend(composition_problems)
+        if pr_body is None and os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+            composition_notes.append(
+                "Предупреждение: PARCH_PR_BODY не передан, раздел «Основания» не проверен: "
+                "обновите шаблон CI проекта (шаг standard с env PARCH_PR_BODY)."
+            )
+        incidents_in_debt = managed
     workflows = sorted((project / ".github" / "workflows").glob("*.y*ml"))
     adr_text = accepted_adr_text(project)
     for path in workflows:
@@ -3640,7 +3664,8 @@ def check_standard(
     if os_problem:
         problems.append(os_problem)
     problems.extend(blocked_without_incident_problems(project))
-    problems.extend(incident_report_problems(project, block_ids_of(project)))
+    if not incidents_in_debt:
+        problems.extend(incident_report_problems(project, block_ids_of(project)))
     problems.extend(incident_budget_problems(project))
     agents = project / "AGENTS.md"
     if agents.is_file():

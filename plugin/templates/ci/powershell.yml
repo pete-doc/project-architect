@@ -28,7 +28,10 @@ jobs:
       - run: python .github/parch/parch_ci.py psscriptanalyzer --language powershell
       - run: python .github/parch/parch_ci.py thin --language powershell
       - run: python .github/parch/parch_ci.py catalog --language powershell
+      # Описание PR передаётся через env (не в командной строке): проверка раздела «Основания».
       - run: python .github/parch/parch_ci.py standard --language powershell
+        env:
+          PARCH_PR_BODY: ${{ github.event.pull_request.body }}
       - run: python .github/parch/parch_ci.py libraries --language powershell
       - run: python .github/parch/parch_ci.py suppressions --language powershell
       - run: python .github/parch/parch_ci.py settings --language powershell
