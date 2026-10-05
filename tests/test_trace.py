@@ -194,6 +194,33 @@ def test_a_file_named_like_a_catalog_function_does_not_hide_the_function(tmp_pat
     assert result["found"] is True and result["function"]["name"] == "place_order"
 
 
+def test_a_bare_file_name_is_found_in_the_project_and_not_taken_for_a_function(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    write(root / "src" / "shop" / "orders.py", "")
+    result = trace(root, "orders.py")
+    assert result["found"] is True and result["module"]["path"] == "src/shop"
+
+
+def test_a_bare_name_that_is_neither_a_function_nor_a_file_says_so_honestly(tmp_path: Path) -> None:
+    result = trace(project(tmp_path), "nothing_like_it.py")
+    assert result["found"] is False
+    assert (
+        "не нашёл ни функции" in result["message"]
+        and "не относится ни к одному модулю" not in result["message"]
+    )
+
+
+def test_a_bare_file_name_shared_by_several_files_lists_them(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    write(root / "src" / "shop" / "util.py", "")
+    write(root / "src" / "legacy" / "util.py", "")
+    result = trace(root, "util.py")
+    assert result["found"] is False and "укажите путь целиком" in result["message"]
+    assert [r["file"] for r in result["ambiguous"]] == ["src/legacy/util.py", "src/shop/util.py"]
+
+
 def test_a_missing_target_is_an_error_not_a_guess(tmp_path: Path) -> None:
     done = subprocess.run(
         [sys.executable, str(TRACE)],

@@ -78,6 +78,21 @@ def looks_like_path(target: str) -> bool:
     return any(ch in target for ch in "/\\") or target.startswith(".") or Path(target).is_absolute()
 
 
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "bin", "obj", "dist", "build"}
+
+
+def files_named(project: Path, name: str) -> list[str]:
+    """Файлы и папки проекта с таким именем (без пути), пути от корня; служебные папки пропущены."""
+    if any(ch in name for ch in "*?[]"):
+        return []
+    found: list[str] = []
+    for path in project.rglob(name):
+        parts = path.relative_to(project).parts
+        if not any(p in SKIP_DIRS for p in parts[:-1]):
+            found.append(path.relative_to(project).as_posix())
+    return sorted(found)[:20]
+
+
 def project_relative(project: Path, target: str) -> str | None:
     """Путь от корня проекта: абсолютные пути и `..` приводятся к корню; None, если путь вне проекта."""
     raw = Path(target.strip().strip("`").replace("\\", "/"))
@@ -116,7 +131,21 @@ def trace(project: Path, target: str) -> dict[str, Any]:
             function = named[0]
             path = function["file"]
         else:
-            path = norm(target)
+            files = files_named(project, target)
+            if len(files) > 1:
+                return {
+                    "found": False,
+                    "ambiguous": [{"file": f} for f in files],
+                    "target": target,
+                    "message": f"имя «{target}» совпало у нескольких файлов: {', '.join(files)}; укажите путь целиком",
+                }
+            if not files:
+                return {
+                    "found": False,
+                    "target": target,
+                    "message": f"не нашёл ни функции в каталоге, ни файла или папки с именем «{target}» в проекте",
+                }
+            path = files[0]
     module = find_module(path, rows)
     if module is None:
         return {
