@@ -234,7 +234,7 @@
         "F11",
         "F18"
       ],
-      "spec": "",
+      "spec": "docs/specs/F14-standard-full.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
@@ -281,7 +281,7 @@
         "F13",
         "F14"
       ],
-      "spec": "",
+      "spec": "docs/specs/F16-janitor-review.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
@@ -311,7 +311,7 @@
       "depends_on": [
         "F15"
       ],
-      "spec": "",
+      "spec": "docs/specs/F18-traceability.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,

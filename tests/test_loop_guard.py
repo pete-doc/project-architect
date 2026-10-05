@@ -146,8 +146,11 @@ def test_the_report_does_not_lift_the_ban_on_code_edits(looped: Path) -> None:
 def test_the_first_detection_is_recorded_once_as_a_flag(looped: Path) -> None:
     write_src(looped)
     write_src(looped)
-    lines = (looped / ".claude" / "audit" / "2026-10-04.jsonl").read_text(encoding="utf-8")
-    flags = [json.loads(x) for x in lines.splitlines() if '"decision": "loop"' in x]
+    logs = sorted(
+        (looped / ".claude" / "audit").glob("*.jsonl")
+    )  # хук пишет в файл сегодняшней даты
+    lines = [row for log_file in logs for row in log_file.read_text(encoding="utf-8").splitlines()]
+    flags = [json.loads(x) for x in lines if '"decision": "loop"' in x]
     assert len(flags) == 1 and flags[0]["hook"] == "loop_guard"
 
 
