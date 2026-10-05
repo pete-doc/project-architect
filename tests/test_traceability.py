@@ -105,14 +105,73 @@ def test_keep_until_frees_a_module_from_having_a_block(shop: Path) -> None:
     assert ci(shop).returncode == 0
 
 
-def test_a_project_without_the_block_column_is_only_warned(tmp_path: Path) -> None:
+NO_COLUMN = "| Модуль | Путь | Назначение | Язык | Статус |\n|---|---|---|---|---|\n| shop | src/shop | Магазин | Python | active |\n"
+
+
+def test_a_new_project_whose_block_column_was_deleted_fails(tmp_path: Path) -> None:
+    """Удалив колонку, проверку не отключить: на новом проекте это провал."""
+    package(tmp_path, "shop")
+    features(tmp_path, "F1")
+    write(tmp_path / "docs" / "MODULES.md", NO_COLUMN)
+    done = ci(tmp_path)
+    assert done.returncode == 1 and "нет колонки «Блок»" in done.stdout
+    assert "колонка обязательна" in done.stdout
+
+
+def test_a_project_with_a_debt_file_whose_block_column_was_deleted_fails(shop: Path) -> None:
+    modules(
+        shop,
+        "| shop | src/shop | Магазин | Python | active | F1 |",
+        "| billing | src/billing | Счета | Python | active | |",
+    )
+    write(shop / "state" / "baseline.json", json.dumps({"version": 1, "existing_project": True}))
+    assert ci(shop, "--update", "--accept-new").returncode == 0
+    assert debt(shop) == ["src/billing"]
+    write(shop / "docs" / "MODULES.md", NO_COLUMN)
+    done = ci(shop)
+    assert done.returncode == 1 and "нет колонки «Блок»" in done.stdout
+    assert "файл долга" in done.stdout  # даже для проекта, записанного как существующий
+
+
+def test_an_existing_project_without_the_column_and_without_debt_is_only_warned(
+    tmp_path: Path,
+) -> None:
     package(tmp_path, "shop")
     write(
-        tmp_path / "docs" / "MODULES.md",
-        "| Модуль | Путь | Назначение | Язык | Статус |\n|---|---|---|---|---|\n| shop | src/shop | Магазин | Python | active |\n",
+        tmp_path / "state" / "baseline.json", json.dumps({"version": 1, "existing_project": True})
     )
+    write(tmp_path / "docs" / "MODULES.md", NO_COLUMN)
     done = ci(tmp_path)
-    assert done.returncode == 0 and "нет колонки «Блок»" in done.stdout
+    assert done.returncode == 0 and "только предупреждение" in done.stdout
+
+
+def test_an_existing_project_that_only_claims_nothing_about_itself_is_strict(
+    tmp_path: Path,
+) -> None:
+    """Baseline есть, но признака «существующий» нет (или он не `true`): колонка обязательна."""
+    package(tmp_path, "shop")
+    write(
+        tmp_path / "state" / "baseline.json", json.dumps({"version": 1, "existing_project": "yes"})
+    )
+    write(tmp_path / "docs" / "MODULES.md", NO_COLUMN)
+    assert ci(tmp_path).returncode == 1
+
+
+def test_init_marks_a_project_that_already_has_code_as_existing(tmp_path: Path) -> None:
+    from test_skills import init
+
+    package(tmp_path, "shop")
+    init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["existing_project"] is True
+
+
+def test_init_does_not_mark_a_new_project_as_existing(tmp_path: Path) -> None:
+    from test_skills import init
+
+    init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert "existing_project" not in baseline
 
 
 def test_old_modules_without_a_block_sit_under_the_ratchet(shop: Path) -> None:

@@ -520,9 +520,28 @@ def check_module_blocks(
     """Связь «модуль → блок» (F18): блок существует; новый модуль без блока падает, старый нет."""
     has_column, rows = modules_with_blocks(project)
     if not has_column:
-        result.note(
-            "В docs/MODULES.md нет колонки «Блок»: связь модулей с блоками цели не проверяется. "
-            "Добавьте колонку (образец: шаблон MODULES.md продукта) и впишите блок каждому модулю."
+        # Колонка нужна всегда. Единственное послабление: проект записан как существующий и ещё
+        # не перенесён (`existing_project` в baseline, его ставит init-project при подключении
+        # проекта с готовым кодом) и файла долга по блокам нет. Удалив колонку, проверку
+        # отключить нельзя: на новом проекте и на проекте с долгом это провал.
+        existing = Baseline(project).data.get("existing_project") is True
+        has_debt_file = read_modules_debt(project) is not None
+        if existing and not has_debt_file:
+            result.note(
+                "В docs/MODULES.md нет колонки «Блок»: проект записан как существующий и ещё "
+                "не перенесён, поэтому только предупреждение. Добавьте колонку (образец: шаблон "
+                "MODULES.md продукта), впишите блок каждому модулю и запишите долг: "
+                "modules --update --accept-new."
+            )
+            return
+        reason = (
+            "есть файл долга по блокам, значит перенос начался"
+            if has_debt_file
+            else "проект не записан как существующий, колонка обязательна"
+        )
+        result.fail(
+            f"В docs/MODULES.md нет колонки «Блок» ({reason}): без неё модули не связаны с "
+            "блоками цели. Верните колонку «Блок» в таблицу (образец: шаблон MODULES.md продукта)."
         )
         return
     known = feature_ids(project)

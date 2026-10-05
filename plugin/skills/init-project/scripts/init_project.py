@@ -180,8 +180,15 @@ def test_smoke() -> None:
 '''
 
 
-def initial_baseline(project: Path, languages: list[str]) -> dict[str, Any]:
-    """Начальный baseline: известные тесты, пропуски, подавления и настройки каждого языка."""
+def initial_baseline(
+    project: Path, languages: list[str], existing_code: bool = False
+) -> dict[str, Any]:
+    """Начальный baseline: известные тесты, пропуски, подавления и настройки каждого языка.
+
+    `existing_project: true` ставится, если в проекте уже был код при подключении: новые правила
+    прослеживаемости для такого проекта сначала только предупреждают (колонка «Блок» в
+    MODULES.md), пока владелец не запишет долг.
+    """
     first_tests = {
         "python": ["tests/test_smoke.py::test_smoke"],
         "typescript": ["smoke.test.ts::smoke"],
@@ -196,6 +203,8 @@ def initial_baseline(project: Path, languages: list[str]) -> dict[str, Any]:
         "skipped_tests": {},
         "config": {},
     }
+    if existing_code:
+        baseline["existing_project"] = True
     for lang in languages:
         rules = parch_ci.RULES[lang]
         if lang in first_tests:
@@ -517,6 +526,11 @@ def init_project(
         raise ValueError(f"languages: выберите из {', '.join(LANGUAGES)}; получено {languages}")
     if not name.strip():
         raise ValueError("нужно название проекта (name)")
+    existing_code = any(
+        parch_ci.COLLECTORS[lang].has_sources(project)
+        for lang in languages
+        if lang in parch_ci.COLLECTORS
+    )  # до того, как init что-либо создаст: код уже есть значит проект существующий
     project.mkdir(parents=True, exist_ok=True)
     report = Report(project)
     for doc in ("MODULES", "INTERFACES", "LESSONS", "QUESTIONS"):
@@ -545,7 +559,8 @@ def init_project(
         report.copy("ci/parch/parch_catalog.py", ".github/parch/parch_catalog.py")
         report.copy("ci/state.yml", ".github/workflows/state.yml")
         report.write(
-            "state/baseline.json", json.dumps(initial_baseline(project, languages), indent=2) + "\n"
+            "state/baseline.json",
+            json.dumps(initial_baseline(project, languages, existing_code), indent=2) + "\n",
         )
     for lang in languages:
         if lang in CI_TEMPLATES:

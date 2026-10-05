@@ -271,7 +271,7 @@ def test_a_package_from_the_list_with_a_registry_version_is_accepted(shop: TsSho
 def test_module_missing_from_modules_md_is_caught(shop: TsShop) -> None:
     shop.write("src/billing/index.ts", "export const billing = 1;\n")
     assert "src/billing" in shop.fails("modules")
-    shop.append("docs/MODULES.md", "| billing | src/billing | Счета | TypeScript | active |\n")
+    shop.append("docs/MODULES.md", "| billing | src/billing | Счета | TypeScript | active | F1 |\n")
     shop.passes("modules")
     assert "src/billing" in shop.fails("architecture")  # без правил архитектуры тоже нельзя
 
