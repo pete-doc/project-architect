@@ -97,7 +97,9 @@ def markdown_allowed(rel: str) -> bool:
         return name in ROOT_MD
     if parts[0].lower().startswith("parch-analysis") or parts[0] in ALLOWED_TOP:
         return True
-    return name == "skill.md" or parts[-2] == "agents"
+    if parts[:-1] in (("agents",), ("plugin", "agents")):
+        return True
+    return name == "skill.md" and len(parts) >= 3 and parts[-3] == "skills"
 
 
 def markdown_violations(project: Path) -> dict[str, str]:

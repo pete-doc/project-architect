@@ -200,10 +200,19 @@ def test_claude_md_that_only_mentions_agents_md_still_fails(tmp_path: Path) -> N
 
 def test_markdown_is_not_hidden_in_nested_docs_agents_or_build_folders(tmp_path: Path) -> None:
     root = managed(tmp_path)
-    for rel in ("src/docs/a.md", "src/agents/deep/b.md", "build/c.md", "env/d.md", "bin/e.md"):
+    hidden = (
+        "src/docs/a.md",
+        "src/agents/deep/b.md",
+        "src/agents/x.md",
+        "src/SKILL.md",
+        "build/c.md",
+        "env/d.md",
+        "bin/e.md",
+    )
+    for rel in hidden:
         write(root / rel)
     done = standard(root)
-    for rel in ("src/docs/a.md", "src/agents/deep/b.md", "build/c.md", "env/d.md", "bin/e.md"):
+    for rel in hidden:
         assert rel in done.stdout, rel
 
 
