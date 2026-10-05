@@ -313,7 +313,8 @@
       ],
       "spec": "docs/specs/F18-traceability.md",
       "acceptance_tests": [
-        "tests/test_traceability.py"
+        "tests/test_traceability.py",
+        "tests/test_trace.py"
       ],
       "status": "in_progress",
       "passes": false,
