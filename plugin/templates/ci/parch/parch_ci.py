@@ -5,6 +5,8 @@
 
 Проверки:
   tests         число тестов не уменьшилось: каждый тест из baseline на месте
+  libraries     низкоуровневая библиотека подключается только в одном модуле (правила в
+                state/architecture.json; C#, TypeScript, PowerShell; код в parch_libraries.py)
   modules       каждый модуль кода есть в docs/MODULES.md
   catalog       у публичных функций есть однострочное описание, каталог не отстал от кода
                 (--update пересобирает docs/CAPABILITIES.md; код в parch_catalog.py, Python и C#);
@@ -3663,9 +3665,22 @@ def check_catalog(
     return result
 
 
+def check_libraries(project: Path, language: str) -> Result:
+    """Правило «библиотека в одном модуле» из state/architecture.json."""
+    import parch_libraries  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
+
+    problems, notes = parch_libraries.check(project, language)
+    result = Result()
+    if problems:
+        result.fail(*problems)
+    result.note(*notes)
+    return result
+
+
 CHECKS: dict[str, Callable[[Path, str], Result]] = {
     "tests": check_tests,
     "catalog": check_catalog,
+    "libraries": check_libraries,
     "modules": check_modules,
     "deps": check_deps,
     "dead-code": check_dead_code,
