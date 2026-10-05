@@ -2,9 +2,10 @@
 """Каталог возможностей проекта и обязательные описания публичных функций (F15, PR 3).
 
 Каталог `docs/CAPABILITIES.md` собирается автоматически из однострочных описаний публичных функций (Python: первая
-строка docstring; C#: первая строка `<summary>`). Проверка падает, если у публичной функции нет описания или каталог
+строка docstring; C#: первая строка `<summary>`; TypeScript: первая строка JSDoc `/** */` над экспортируемой функцией;
+PowerShell: `.SYNOPSIS` или строка `# ...` над функцией). Проверка падает, если у публичной функции нет описания или каталог
 не совпадает с кодом (отстал). `--update` пересобирает каталог. Описания пишет человек или ИИ, каталог руками не правят.
-Языки: Python и C#; TypeScript и PowerShell следующим шагом.
+Старые функции без описания допускаются под храповиком (`state/catalog-baseline.json`), новые нет.
 """
 
 from __future__ import annotations
@@ -215,13 +216,164 @@ def cs_entries(project: Path) -> tuple[list[Entry], list[Missing]]:
     return entries, missing
 
 
+# ---------- TypeScript ----------
+
+TS_EXPORT = re.compile(
+    r"^export\s+(?:default\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*[<(]"
+    r"|^export\s+const\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*(?::[^=]+)?=>"
+    r"|^export\s+const\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s+)?function\b"
+)
+TS_TEST_NAME = re.compile(r"\.(?:test|spec)\.tsx?$|\.d\.ts$")
+
+
+def ts_doc_block(lines: list[str], index: int) -> str:
+    """JSDoc `/** ... */` над объявлением (декораторы между ними пропускаются): строки без тегов `@`."""
+    cursor = index - 1
+    while cursor >= 0 and lines[cursor].strip().startswith("@"):
+        cursor -= 1
+    if cursor < 0 or not lines[cursor].strip().endswith("*/"):
+        return ""
+    block: list[str] = []
+    while cursor >= 0:
+        block.append(lines[cursor].strip())
+        if lines[cursor].strip().startswith("/**"):
+            break
+        cursor -= 1
+    else:
+        return ""
+    text: list[str] = []
+    for raw in reversed(block):
+        part = re.sub(r"^/\*\*|\*/$|^\*", "", raw.strip()).strip()
+        if part.startswith("@"):
+            break
+        if part:
+            text.append(part)
+    return re.sub(r"\s+", " ", " ".join(text)).strip()
+
+
+def ts_entries(project: Path) -> tuple[list[Entry], list[Missing]]:
+    entries: list[Entry] = []
+    missing: list[Missing] = []
+    for suffix in (".ts", ".tsx"):
+        for path in source_files(project, suffix):
+            if TS_TEST_NAME.search(path.name) or "__tests__" in path.parts:
+                continue
+            rel = relative(project, path)
+            try:
+                lines = path.read_text(encoding="utf-8-sig").splitlines()
+            except (UnicodeDecodeError, OSError):
+                continue
+            for index, line in enumerate(lines):
+                found = TS_EXPORT.match(line)
+                if not found:
+                    continue
+                name = next(g for g in found.groups() if g)
+                where = f"{rel}:{index + 1}"
+                description = ts_doc_block(lines, index)
+                if not description:
+                    missing.append(
+                        Missing(where, name, "нет описания (`/** ... */` с одной строкой сути)")
+                    )
+                elif len(description) > MAX_DESCRIPTION:
+                    missing.append(
+                        Missing(where, name, f"описание длиннее {MAX_DESCRIPTION} знаков")
+                    )
+                else:
+                    entries.append(Entry("typescript", rel, name, description, where))
+    return entries, missing
+
+
+# ---------- PowerShell ----------
+
+PS_FUNCTION = re.compile(r"^\s*(?:function|filter)\s+([\w.-]+)", re.IGNORECASE)
+PS_SYNOPSIS = re.compile(r"\.SYNOPSIS\s*\r?\n?\s*(.+)", re.IGNORECASE)
+PS_TEST_NAME = re.compile(r"\.tests?\.ps1$", re.IGNORECASE)
+
+
+def ps_block_text(block: str) -> str:
+    found = PS_SYNOPSIS.search(block)
+    return re.sub(r"\s+", " ", found.group(1)).strip() if found else ""
+
+
+def ps_description(lines: list[str], index: int) -> str:
+    """Описание функции: `.SYNOPSIS` в блоке `<# #>` над функцией или в первых строках тела; иначе строка `# ...` над ней."""
+    cursor = index - 1
+    if cursor >= 0 and lines[cursor].strip().endswith("#>"):
+        block: list[str] = []
+        while cursor >= 0:
+            block.append(lines[cursor])
+            if "<#" in lines[cursor]:
+                break
+            cursor -= 1
+        text = ps_block_text("\n".join(reversed(block)))
+        if text:
+            return text
+    body = "\n".join(lines[index + 1 : index + 14])
+    inner = re.search(r"<#(.*?)#>", body, re.DOTALL)
+    if inner and ".SYNOPSIS" in inner.group(1).upper():
+        text = ps_block_text(inner.group(1))
+        if text:
+            return text
+    cursor = index - 1
+    comment: list[str] = []
+    while (
+        cursor >= 0
+        and lines[cursor].strip().startswith("#")
+        and not lines[cursor].strip().startswith("#>")
+    ):
+        comment.append(lines[cursor].strip().lstrip("#").strip())
+        cursor -= 1
+    return comment[-1] if comment else ""
+
+
+def ps_entries(project: Path) -> tuple[list[Entry], list[Missing]]:
+    entries: list[Entry] = []
+    missing: list[Missing] = []
+    for suffix in (".ps1", ".psm1"):
+        for path in source_files(project, suffix):
+            if PS_TEST_NAME.search(path.name):
+                continue
+            rel = relative(project, path)
+            try:
+                lines = path.read_text(encoding="utf-8-sig").splitlines()
+            except (UnicodeDecodeError, OSError):
+                continue
+            for index, line in enumerate(lines):
+                found = PS_FUNCTION.match(line)
+                if not found or found.group(1).startswith("_"):
+                    continue
+                name = found.group(1)
+                where = f"{rel}:{index + 1}"
+                description = ps_description(lines, index)
+                if not description:
+                    missing.append(
+                        Missing(
+                            where,
+                            name,
+                            "нет описания (`.SYNOPSIS` или строка `# ...` над функцией)",
+                        )
+                    )
+                elif len(description) > MAX_DESCRIPTION:
+                    missing.append(
+                        Missing(where, name, f"описание длиннее {MAX_DESCRIPTION} знаков")
+                    )
+                else:
+                    entries.append(Entry("powershell", rel, name, description, where))
+    return entries, missing
+
+
 # ---------- каталог ----------
 
 
 def render(entries: list[Entry]) -> str:
     """Текст каталога: стабильный порядок, чтобы повторная сборка давала тот же файл."""
     lines = [HEADER]
-    for language, title in (("python", "Python"), ("csharp", "C#")):
+    for language, title in (
+        ("python", "Python"),
+        ("csharp", "C#"),
+        ("typescript", "TypeScript"),
+        ("powershell", "PowerShell"),
+    ):
         mine = sorted(
             (e for e in entries if e.language == language), key=lambda e: (e.module, e.name)
         )
@@ -235,9 +387,13 @@ def render(entries: list[Entry]) -> str:
 
 
 def collect(project: Path) -> tuple[list[Entry], list[Missing]]:
-    py_found, py_missing = py_entries(project)
-    cs_found, cs_missing = cs_entries(project)
-    return py_found + cs_found, py_missing + cs_missing
+    found: list[Entry] = []
+    missing: list[Missing] = []
+    for collector in (py_entries, cs_entries, ts_entries, ps_entries):
+        part, gaps = collector(project)
+        found += part
+        missing += gaps
+    return found, missing
 
 
 def debt_key(item: Missing) -> str:

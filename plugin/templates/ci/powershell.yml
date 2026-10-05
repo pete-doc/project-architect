@@ -27,5 +27,6 @@ jobs:
         run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
       - run: python .github/parch/parch_ci.py psscriptanalyzer --language powershell
       - run: python .github/parch/parch_ci.py thin --language powershell
+      - run: python .github/parch/parch_ci.py catalog --language powershell
       - run: python .github/parch/parch_ci.py suppressions --language powershell
       - run: python .github/parch/parch_ci.py settings --language powershell
