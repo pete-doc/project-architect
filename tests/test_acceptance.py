@@ -73,13 +73,16 @@ def test_a_manual_done_with_a_pending_acceptance_is_flagged(tmp_path: Path) -> N
 
 
 def test_the_product_pilot_block_waits_for_the_owner_acceptance_file() -> None:
+    """Имя прежнее (храповик не даёт переименовать); с 2026-10-05 проверяется принятое."""
+    from parch_status import acceptance_state
+
+    assert acceptance_state(REPO, "F17") == "accepted"
     text = board(REPO, report=False)
-    waiting = (
-        "**F17 «Пилот на реальном проекте»** ждёт владельца, приёмка в `state/acceptance/F17.md`"
-    )
-    assert waiting in text
+    assert "F17 «Пилот на реальном проекте»" in text  # блок на табло
+    assert "приёмка в `state/acceptance/F17.md`" not in text  # приёмка оформлена, не ждёт
     file = (REPO / "state" / "acceptance" / "F17.md").read_text(encoding="utf-8")
-    assert file.count("- [") == 5 and "Итог: ожидает приёмки владельца" in file
+    assert file.count("- [x]") == 5 and "- [ ]" not in file
+    assert "Итог: принято владельцем, 2026-10-05" in file
     for criterion in (
         "doctor",
         "analyze-existing",
