@@ -3618,13 +3618,20 @@ def check_standard(
     project: Path, language: str, update: bool = False, accept_new: bool = False
 ) -> Result:
     """Соответствие стандарту: стоимость CI, бюджет текста, отчёты, состав проекта (F14)."""
-    import parch_standard  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
-
     del language
     result = Result()
     problems: list[str] = []
-    composition_problems, composition_notes = parch_standard.check(project, update, accept_new)
-    problems.extend(composition_problems)
+    try:
+        import parch_standard  # лежит рядом (.github/parch/), копируется вместе с этим файлом
+    except ImportError:
+        problems.append(
+            "нет файла .github/parch/parch_standard.py рядом с parch_ci.py: правила состава "
+            "проекта не работают; скопируйте его из плагина (или повторите init-project)"
+        )
+        composition_notes: list[str] = []
+    else:
+        composition_problems, composition_notes = parch_standard.check(project, update, accept_new)
+        problems.extend(composition_problems)
     workflows = sorted((project / ".github" / "workflows").glob("*.y*ml"))
     adr_text = accepted_adr_text(project)
     for path in workflows:

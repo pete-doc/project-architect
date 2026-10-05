@@ -31,9 +31,9 @@ COMPETING = (
 )  # fmt: skip
 COMPETING_DIRS = (".cursor/rules",)
 SKIP_DIRS = {
-    ".git", ".venv", "venv", "env", "node_modules", "__pycache__", "bin", "obj", "dist", "build",
-    "site-packages", ".tox", ".mypy_cache", ".ruff_cache", ".pytest_cache", "coverage",
-}  # fmt: skip
+    ".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages", ".tox",
+    ".mypy_cache", ".ruff_cache", ".pytest_cache",
+}  # fmt: skip  # только зависимости и кэши; сборочные каталоги в чистой выгрузке CI не лежат
 ROOT_MD = {
     "agents.md",
     "claude.md",
@@ -82,7 +82,7 @@ def instruction_violations(project: Path) -> dict[str, str]:
     claude, agents = project / "CLAUDE.md", project / "AGENTS.md"
     if claude.is_file() and agents.is_file():
         text = claude.read_text(encoding="utf-8", errors="replace")
-        if not re.search(r"@AGENTS\.md|AGENTS\.md", text):
+        if not re.search(r"^\s*@AGENTS\.md\s*$", text, re.MULTILINE):
             found["instructions:CLAUDE.md"] = (
                 "CLAUDE.md не ссылается на AGENTS.md: две разные инструкции расходятся; "
                 "оставьте в CLAUDE.md строку `@AGENTS.md` и правила Claude Code"
@@ -97,9 +97,7 @@ def markdown_allowed(rel: str) -> bool:
         return name in ROOT_MD
     if parts[0].lower().startswith("parch-analysis") or parts[0] in ALLOWED_TOP:
         return True
-    if name == "skill.md" or "agents" in parts[:-1]:
-        return True
-    return "docs" in parts[:-1]
+    return name == "skill.md" or parts[-2] == "agents"
 
 
 def markdown_violations(project: Path) -> dict[str, str]:
@@ -126,10 +124,8 @@ def read_debt(project: Path) -> set[str] | None:
 
 
 def write_debt(project: Path, debt: set[str]) -> None:
+    """Файл остаётся и при пустом долге: иначе существующий проект вернулся бы к предупреждению."""
     path = project / DEBT_FILE
-    if not debt:
-        path.unlink(missing_ok=True)
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps({"version": 1, "violations": sorted(debt)}, ensure_ascii=False, indent=2)
     path.write_text(text + "\n", encoding="utf-8", newline="\n")
@@ -184,7 +180,7 @@ def check(
         return problems, notes
     if update:
         new_debt = set(found) if accept_new else set(found) & (debt or set())
-        if new_debt != (debt or set()):
+        if debt is None and accept_new or new_debt != (debt or set()):
             write_debt(project, new_debt)
             notes.append(f"Долг по составу проекта записан: нарушений {len(new_debt)}.")
     elif debt is not None and debt - set(found):

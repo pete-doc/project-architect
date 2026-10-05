@@ -183,7 +183,47 @@ def test_the_owner_records_the_debt_then_new_violations_fail_and_fixed_ones_shri
     (root / "notes" / "extra.md").unlink()
     (root / "notes" / "plan.md").unlink()
     assert standard(root, "--update").returncode == 0
-    assert not (root / "state" / "standard-baseline.json").exists()
+    # долг погашен, но файл остался: храповик не сбрасывается, новое нарушение снова падает
+    debt = json.loads((root / "state" / "standard-baseline.json").read_text(encoding="utf-8"))
+    assert debt["violations"] == []
+    write(root / "notes" / "again.md")
+    assert standard(root).returncode == 1
+
+
+def test_claude_md_that_only_mentions_agents_md_still_fails(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    write(root / "AGENTS.md", "# правила\n")
+    write(root / "CLAUDE.md", "Не читай AGENTS.md, у меня свои правила.\n")
+    done = standard(root)
+    assert done.returncode == 1 and "CLAUDE.md не ссылается на AGENTS.md" in done.stdout
+
+
+def test_markdown_is_not_hidden_in_nested_docs_agents_or_build_folders(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    for rel in ("src/docs/a.md", "src/agents/deep/b.md", "build/c.md", "env/d.md", "bin/e.md"):
+        write(root / rel)
+    done = standard(root)
+    for rel in ("src/docs/a.md", "src/agents/deep/b.md", "build/c.md", "env/d.md", "bin/e.md"):
+        assert rel in done.stdout, rel
+
+
+def test_a_missing_parch_standard_module_fails_loudly_instead_of_crashing(tmp_path: Path) -> None:
+    import shutil
+
+    ci = tmp_path / "ci"
+    ci.mkdir()
+    shutil.copy(SCRIPT, ci / "parch_ci.py")
+    for name in ("parch_catalog.py", "parch_libraries.py"):
+        shutil.copy(SCRIPT.parent / name, ci / name)
+    root = managed(tmp_path / "proj")
+    done = subprocess.run(
+        [sys.executable, str(ci / "parch_ci.py"), "standard", "--project", str(root)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert done.returncode == 1 and "parch_standard.py" in done.stdout
+    assert "Traceback" not in done.stderr
 
 
 def test_with_a_debt_file_a_removed_required_file_fails_even_on_an_existing_project(
