@@ -32,6 +32,7 @@ jobs:
       - run: python .github/parch/parch_ci.py skips --language typescript --report test-report.json
       - run: python .github/parch/parch_ci.py suppressions --language typescript
       - run: python .github/parch/parch_ci.py modules --language typescript
+      - run: python .github/parch/parch_ci.py catalog --language typescript
       - run: python .github/parch/parch_ci.py deps --language typescript
       - run: python .github/parch/parch_ci.py architecture --language typescript
       - run: python .github/parch/parch_ci.py dead-code --language typescript
