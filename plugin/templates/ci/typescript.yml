@@ -35,6 +35,7 @@ jobs:
       - run: python .github/parch/parch_ci.py catalog --language typescript
       - run: python .github/parch/parch_ci.py deps --language typescript
       - run: python .github/parch/parch_ci.py architecture --language typescript
+      - run: python .github/parch/parch_ci.py libraries --language typescript
       - run: python .github/parch/parch_ci.py dead-code --language typescript
       - run: python .github/parch/parch_ci.py duplicates --language typescript
       - run: python .github/parch/parch_ci.py coverage --language typescript

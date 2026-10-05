@@ -40,6 +40,7 @@ jobs:
       - run: python .github/parch/parch_ci.py catalog --language csharp
       - run: python .github/parch/parch_ci.py deps --language csharp
       - run: python .github/parch/parch_ci.py architecture --language csharp
+      - run: python .github/parch/parch_ci.py libraries --language csharp
       - run: python .github/parch/parch_ci.py dead-code --language csharp
       - run: python .github/parch/parch_ci.py duplicates --language csharp
       - run: python .github/parch/parch_ci.py coverage --language csharp
