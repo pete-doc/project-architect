@@ -96,11 +96,13 @@ def test_the_reviewer_tools_are_read_only_and_bash_is_guarded() -> None:
 
 
 def test_the_role_reviews_only_correctness_and_the_spec_and_ignores_style() -> None:
-    text = AGENT.read_text(encoding="utf-8")
+    text = " ".join(AGENT.read_text(encoding="utf-8").split())  # фраза может переноситься
     for must in (
         "корректность",
         "спецификаци",
         "стиль не обсуждаешь",
+        "не записывай файлы и через Bash",  # Bash нужен для gh, запрет записи через него только словами
+        "оставляешь комментарий через gh pr comment",
         "gh pr comment",
         "Замечаний нет",
     ):
