@@ -55,7 +55,8 @@ def run(project: Path, *args: str, report: str | None = None) -> subprocess.Comp
 
 
 def test_repository_ci_runs_the_ratchet_on_the_product_itself() -> None:
-    workflow = (REPO / ".github" / "workflows" / "full.yml").read_text(encoding="utf-8")
+    # CI продукта на CircleCI (ADR-0020): полный прогон и храповик в одном задании check
+    workflow = (REPO / ".circleci" / "continue_config.yml").read_text(encoding="utf-8")
     assert "--junitxml=test-report.xml" in workflow
     for check in ("tests", "skips"):
         line = f"parch_ci.py {check} --language python --report test-report.xml"

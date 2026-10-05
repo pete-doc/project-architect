@@ -1,25 +1,25 @@
 # ruff: noqa: E501
-"""CI на CircleCI (ADR-0020): структура `.circleci/` повторяет логику `.github/workflows/ci.yml`.
+"""CI на CircleCI (ADR-0020): единственный CI репозитория, структура `.circleci/`.
 
 В тестах нет YAML-библиотеки (её нет в зависимостях разработки), поэтому структура проверяется по тексту
-конфигов без комментариев; сам синтаксис проверяет `circleci config validate` (запуск описан в ADR-0020).
+конфигов без комментариев; синтаксис проверяет `circleci config validate` (запуск описан в ADR-0020).
 Скрипт состава PR из setup-конфига выполняется по-настоящему во временных git-репозиториях. У каждого
 правила есть «плохой пример», который проверка обязана остановить.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parent.parent
 SETUP_RAW = (REPO / ".circleci" / "config.yml").read_text(encoding="utf-8")
 CONTINUE_RAW = (REPO / ".circleci" / "continue_config.yml").read_text(encoding="utf-8")
 HOOK_TESTS = ("tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py")
+NOT_MAIN = "- not:\n            equal: [main, << pipeline.git.branch >>]"
 
 
 def uncommented(text: str) -> str:
@@ -51,8 +51,8 @@ def problems(setup: str, cont: str) -> list[str]:
         r"^setup: true$", setup, re.M
     ):
         found.append("setup-конфиг: нужны version 2.1 и setup: true")
-    if not re.search(r"ignore:\s*\n\s*- main\s*\n\s*- status", block(setup, "workflows:")):
-        found.append("запуск не исключает ветки main и status")
+    if not re.search(r"ignore:\s*\n\s*- status\s*$", block(setup, "workflows:")):
+        found.append("запуск не исключает ветку status")
     scope = block(setup, "  scope:")
     if re.search(r"\bgh (pr|api|run)\b", scope):
         found.append("состав PR берётся через gh CLI, нужен git diff")
@@ -70,25 +70,28 @@ def problems(setup: str, cont: str) -> list[str]:
     if windows_jobs != ["windows-hooks"]:
         found.append(f"Windows используют не только hooks: {windows_jobs}")
     workflows = block(cont, "workflows:")
-    if "when: << pipeline.parameters.hooks >>" not in block(workflows, "  windows:"):
+    if "<< pipeline.parameters.hooks >>" not in block(workflows, "  windows:"):
         found.append("windows-hooks без условия «PR меняет hooks»")
-    if "windows-hooks" in block(workflows, "  fast:"):
-        found.append("windows-hooks в workflow fast")
-    for name in ("check", "check-text", "windows-hooks"):
-        for step in re.split(r"\n      - ", block(jobs, f"  {name}:")):
+    if "windows-hooks" in block(workflows, "  full:"):
+        found.append("windows-hooks в workflow full")
+    for name in ("text-only", "full", "windows", "no-windows"):
+        if NOT_MAIN not in block(workflows, f"  {name}:"):
+            found.append(f"workflow {name} идёт и на main")
+    for name in ("install-dev", "full-tests", "check", "check-text", "windows-hooks", "state"):
+        section = "commands:" if name in ("install-dev", "full-tests") else "jobs:"
+        for step in re.split(r"\n      - ", block(block(cont, section), f"  {name}:")):
             if ("pytest" in step or "pip install" in step) and "no_output_timeout" not in step:
                 found.append(f"{name}: долгий шаг без no_output_timeout: {step.splitlines()[0]}")
-    check = block(jobs, "  check:")
-    if "timeout 1500 pytest" not in check or "-n 4" not in check:
-        found.append("check: тесты без общего предела времени (timeout 1500) или без -n 4")
+    tests = block(block(cont, "commands:"), "  full-tests:")
+    if 'timeout 1500 pytest -v -n 4 -m "" --junitxml=test-report.xml' not in tests:
+        found.append(
+            "full-tests: тесты без общего предела времени (timeout 1500), без -n 4 или без полного режима"
+        )
     for store in ("store_test_results", "store_artifacts"):
-        if not re.search(rf"- {store}:\n\s+when: always\n\s+path: test-report-partial\.xml", check):
-            found.append(f"check: {store} без when: always или с другим путём отчёта")
-    if (
-        "--junitxml=test-report-partial.xml" not in check
-        or check.count("--report test-report-partial.xml") != 2
-    ):
-        found.append("check: путь отчёта урезанного прогона расходится между шагами")
+        if not re.search(rf"- {store}:\n\s+when: always\n\s+path: test-report\.xml", tests):
+            found.append(f"full-tests: {store} без when: always или с другим путём отчёта")
+    if "--partial" in cont:
+        found.append("полный прогон не принимает урезанный отчёт (--partial)")
     if "WaitForExit(900000)" not in block(jobs, "  windows-hooks:"):
         found.append("windows-hooks: нет общего предела 15 минут на тесты")
     return found
@@ -98,12 +101,16 @@ def test_the_real_configs_have_no_problems() -> None:
     assert problems(SETUP, CONTINUE) == []
 
 
-def test_branches_main_and_status_are_not_built() -> None:
-    no_main = re.sub(r"- main\n", "", SETUP)
-    assert "запуск не исключает ветки main и status" in problems(no_main, CONTINUE)
-    assert "запуск не исключает ветки main и status" in problems(
+def test_branch_status_is_not_built_and_main_runs_only_the_state_board() -> None:
+    assert "запуск не исключает ветку status" in problems(
         SETUP.replace("- status", "- other"), CONTINUE
     )
+    bad = CONTINUE.replace(NOT_MAIN, "- not: true")  # ни у одного workflow нет «не main»
+    assert {"workflow full идёт и на main", "workflow windows идёт и на main"} <= set(
+        problems(SETUP, bad)
+    )
+    state = block(block(CONTINUE, "workflows:"), "  state:")
+    assert "equal: [main, << pipeline.git.branch >>]" in state and "- state" in state
 
 
 def test_the_pr_scope_must_not_use_the_gh_cli() -> None:
@@ -122,7 +129,7 @@ def test_windows_runs_only_in_the_hooks_job_and_only_when_hooks_change() -> None
         "  check-text:\n    docker:", "  check-text:\n    executor: win/server-2022\n    docker:"
     )
     assert any("Windows используют не только hooks" in p for p in problems(SETUP, bad))
-    bad = CONTINUE.replace("when: << pipeline.parameters.hooks >>", "when: true")
+    bad = CONTINUE.replace("<< pipeline.parameters.hooks >>", "true", 1)
     assert any("без условия" in p for p in problems(SETUP, bad))
 
 
@@ -142,52 +149,85 @@ def test_long_steps_have_a_no_output_timeout_and_a_total_limit() -> None:
 
 def test_the_test_report_is_stored_even_when_tests_fail() -> None:
     bad = CONTINUE.replace(
-        "          when: always\n          path: test-report-partial.xml",
-        "          path: test-report-partial.xml",
+        "          when: always\n          path: test-report.xml", "          path: test-report.xml"
     )
     assert any("when: always" in p for p in problems(SETUP, bad))
+
+
+def test_the_full_run_does_not_accept_a_partial_report() -> None:
     assert any(
-        "расходится" in p
-        for p in problems(
-            SETUP, CONTINUE.replace("--junitxml=test-report-partial.xml", "--junitxml=report.xml")
-        )
+        "--partial" in p
+        for p in problems(SETUP, CONTINUE + "\n      - run: parch_ci.py tests --partial")
     )
 
 
-def test_the_windows_job_runs_the_same_hook_tests_as_github_actions() -> None:
-    github = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "pytest -v " + " ".join(HOOK_TESTS) in github
+def test_every_pr_gets_the_checks_the_ruleset_requires() -> None:
+    # ruleset ветки main (ADR-0020): `ci/circleci: check` и `ci/circleci: windows-hooks` обязаны быть у каждого PR
+    workflows = block(CONTINUE, "workflows:")
+    assert "- check-text:\n          name: check" in block(workflows, "  text-only:")
+    assert "      - check\n" in block(workflows, "  full:") + "\n"
+    assert "- windows-hooks" in block(workflows, "  windows:")
+    assert "- skip-windows:\n          name: windows-hooks" in block(workflows, "  no-windows:")
+
+
+def test_the_state_board_is_published_only_from_main_and_never_prints_the_token() -> None:
+    state = block(block(CONTINUE, "jobs:"), "  state:")
+    assert "git push" in state and ":status" in state and "HEAD:main" not in state
+    assert (
+        'CIRCLE_BRANCH:-}" != "main"' in state and "CIRCLE_PR_NUMBER" in state
+    )  # не ветка main или сборка PR
+    assert (
+        "STATUS_PUSH_TOKEN" in state
+        and "echo $STATUS_PUSH_TOKEN" not in state
+        and "set -x" not in state
+    )
+    assert (
+        "--report-same-tree yes" in state and "timeout 1500 pytest" in state
+    )  # отчёт снят на этом коммите
+    # токен приходит только через context, подключённый к одному заданию state (ограничение context
+    # владелец делает в CircleCI, ADR-0020); конфиг PR-заданий его не называет и context не подключает
+    workflows = block(CONTINUE, "workflows:")
+    assert "context: status-publisher" in block(workflows, "  state:")
+    assert CONTINUE.count("context:") == 1
+    assert "STATUS_PUSH_TOKEN" not in block(block(CONTINUE, "jobs:"), "  check:")
+    # гонка двух слияний и потеря отчёта в новой ветке status
+    assert "git ls-remote origin refs/heads/main" in state
+    assert "cp test-report.xml /tmp/test-report.xml" in state
+    assert "+refs/heads/status:refs/remotes/origin/status" in state
+
+
+def test_the_windows_job_runs_the_same_hook_tests_as_before() -> None:
     windows = block(CONTINUE, "  windows-hooks:")
     for test in HOOK_TESTS:
         assert f'"{test}"' in windows, test
+        assert (REPO / test).is_file(), test
 
 
-def test_the_fast_job_runs_the_same_checks_as_github_actions() -> None:
-    job = block(CONTINUE, "  check:")
+def test_the_full_check_runs_every_check_the_old_ci_ran() -> None:
+    job = block(block(CONTINUE, "jobs:"), "  check:")
     for expected in (
         "run: ruff check .",
         "run: ruff format --check .",
         "parch_ci.py standard",
         "run: pyright",
-        "-o junit_suite_name=parch-partial",
-        "parch_ci.py tests --language python --partial --report test-report-partial.xml",
-        "parch_ci.py skips --language python --partial --report test-report-partial.xml",
+        "- full-tests",
+        "- install-tools",
     ):
         assert expected in job, expected
+    for check in ("tests", "skips"):
+        assert f"parch_ci.py {check} --language python --report test-report.xml" in job
+    assert job.index("- full-tests") < job.index("parch_ci.py tests --language python --report")
 
 
 def test_every_cache_is_restored_and_saved() -> None:
     for key in ("pip-v1-", "npm-v1-", "dotnet-v1-", "pwsh-v1-7.4.6-psa-1.25.0", "pip-win-v1-"):
         assert CONTINUE.count(f"- {key}") >= 1 and CONTINUE.count(f"key: {key}") >= 1, key
-    assert "-RequiredVersion 1.25.0" in CONTINUE  # версия PSScriptAnalyzer та же, что в ci.yml
+    assert "-RequiredVersion 1.25.0" in CONTINUE  # версия PSScriptAnalyzer та же, что в шаблоне CI
 
 
 def test_a_text_only_pr_runs_only_the_small_standard_job() -> None:
-    job = block(CONTINUE, "  check-text:")
+    job = block(block(CONTINUE, "jobs:"), "  check-text:")
     assert "resource_class: small" in job and "parch_ci.py standard" in job and "pytest" not in job
-    assert "not: << pipeline.parameters.code >>" in block(
-        block(CONTINUE, "workflows:"), "  text-only:"
-    )
 
 
 # ---------- скрипт состава PR выполняется по-настоящему ----------
@@ -242,54 +282,157 @@ def run_scope(tmp_path: Path, changed: list[str], with_origin: bool = True) -> d
     script.write_text(scope_script(), encoding="utf-8", newline="\n")
     done = subprocess.run(
         [bash, "scope.sh"], cwd=work, capture_output=True, text=True, encoding="utf-8",
-        env={**__import__("os").environ, "PARCH_SCOPE_OUT": out.as_posix()}, timeout=120,
+        env={**os.environ, "PARCH_SCOPE_OUT": out.as_posix()}, timeout=120,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr + done.stdout
     return json.loads((out / "params.json").read_text(encoding="utf-8"))
 
 
 def test_a_text_only_pr_has_no_code_and_no_windows(tmp_path: Path) -> None:
-    result = run_scope(tmp_path, ["docs/BACKLOG.md", "AGENTS.md"])
-    assert result["code"] is False and result["hooks"] is False
-    assert result["selector"] == "not slow"
+    assert run_scope(tmp_path, ["docs/BACKLOG.md", "AGENTS.md"]) == {"code": False, "hooks": False}
 
 
 def test_a_pr_that_changes_hooks_runs_windows_and_code(tmp_path: Path) -> None:
-    result = run_scope(tmp_path, ["plugin/hooks/guard_paths.py"])
-    assert result["code"] is True and result["hooks"] is True
+    assert run_scope(tmp_path, ["plugin/hooks/guard_paths.py"]) == {"code": True, "hooks": True}
 
 
 def test_a_pr_that_changes_the_circleci_config_runs_everything(tmp_path: Path) -> None:
     result = run_scope(tmp_path, [".circleci/continue_config.yml", "docs/BACKLOG.md"])
-    assert all(result[k] is True for k in ("code", "hooks", "node", "csharp", "powershell"))
-    assert "lang_csharp" in str(result["selector"])
+    assert result == {"code": True, "hooks": True}
 
 
 def test_non_ascii_file_names_are_not_lost(tmp_path: Path) -> None:
-    result = run_scope(tmp_path, ["plugin/hooks/хук.py", "docs/план.md"])
-    assert result["hooks"] is True and result["code"] is True
+    assert run_scope(tmp_path, ["plugin/hooks/хук.py", "docs/план.md"]) == {
+        "code": True,
+        "hooks": True,
+    }
 
 
-def test_when_the_base_branch_is_unreachable_every_language_runs(tmp_path: Path) -> None:
+def test_when_the_base_branch_is_unreachable_everything_runs(tmp_path: Path) -> None:
     result = run_scope(tmp_path, ["docs/BACKLOG.md"], with_origin=False)
-    assert all(result[k] is True for k in ("code", "hooks", "node", "csharp", "powershell"))
+    assert result == {"code": True, "hooks": True}
 
 
-def test_a_pr_with_one_language_selects_only_that_language(tmp_path: Path) -> None:
-    result = run_scope(tmp_path, ["tests/projects/cs_shop/Program.cs"])
-    assert result["csharp"] is True and result["powershell"] is False
-    assert "lang_csharp" in str(result["selector"]) and "lang_powershell" not in str(
-        result["selector"]
+def test_a_pr_with_only_tests_runs_code_but_not_windows(tmp_path: Path) -> None:
+    assert run_scope(tmp_path, ["tests/test_status.py"]) == {"code": True, "hooks": False}
+
+
+# ---------- ADR-0020, правила и GitHub Actions ----------
+
+
+def test_the_adr_names_the_windows_class_the_large_class_and_the_ruleset_checks() -> None:
+    adr = next((REPO / "docs" / "adr").glob("0020-*.md")).read_text(encoding="utf-8")
+    for fact in (
+        "windows.medium",
+        "win/server-2022",
+        "`large`",
+        "400 000",
+        "Auto-cancel",
+        "`ci/circleci: check`",
+        "`ci/circleci: windows-hooks`",
+        "режим совместимости",
+    ):
+        assert fact in adr, fact
+    assert "- Статус: accepted" in adr
+
+
+def test_agents_md_names_the_circleci_checks_and_the_old_flow_is_gone() -> None:
+    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    assert "`ci/circleci: check`" in text and "`ci/circleci: windows-hooks`" in text
+    assert "через `gh api`" in text and "запрещено" in text
+    assert "gh pr ready --undo" not in text and "gh pr create --draft" not in text
+    assert "любые файлы правил проверок" in text  # файлы правил проверок считаются кодом
+    assert "`.circleci/`" in text.split("Условия, все сразу:", 1)[1].split("3.", 1)[1][:80]
+    assert len(text.splitlines()) <= 150
+
+
+# ---------- parch_ci standard читает .circleci/ ----------
+
+CIRCLE_GOOD = """version: 2.1
+jobs:
+  check:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+    steps:
+      - run:
+          name: Тесты
+          no_output_timeout: 25m
+          command: timeout 1500 pytest -v
+workflows:
+  w:
+    jobs:
+      - check
+"""
+ACCEPTED_ADR = "- Статус: accepted\n\nИсполнитель `win/server-2022`, класс `large`.\n"
+CIRCLE_PARCH = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
+
+
+def standard_on(folder: Path, config: str, adr: str = "") -> subprocess.CompletedProcess[str]:
+    """Пустой проект с одним конфигом CircleCI (и принятым или нет ADR): запуск `standard`."""
+    (folder / ".circleci").mkdir(parents=True)
+    (folder / ".circleci" / "config.yml").write_text(config, encoding="utf-8")
+    (folder / "docs").mkdir()
+    constitution = "# CONSTITUTION\n\n## Целевая ОС\n\nWindows 11\n\n## Бюджеты\n\nБюджет инцидентов на блок: 2\n"
+    (folder / "docs" / "CONSTITUTION.md").write_text(constitution, encoding="utf-8")
+    if adr:
+        (folder / "docs" / "adr").mkdir()
+        (folder / "docs" / "adr" / "0001-x.md").write_text(adr, encoding="utf-8")
+    return subprocess.run(
+        ["python", str(CIRCLE_PARCH), "standard", "--project", str(folder)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
     )
 
 
-def test_the_adr_names_the_windows_class_and_keeps_github_actions() -> None:
-    adr = next((REPO / "docs" / "adr").glob("0020-*.md")).read_text(encoding="utf-8")
-    for fact in ("windows.medium", "400 000", "Auto-cancel"):
-        assert fact in adr, fact
+def test_standard_reads_circleci_and_a_clean_config_passes(tmp_path: Path) -> None:
+    done = standard_on(tmp_path, CIRCLE_GOOD)
+    assert done.returncode == 0, done.stdout
+    assert "конфигов CircleCI 1" in done.stdout and "Auto-cancel Redundant Workflows" in done.stdout
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "full.yml", "state.yml"])
-def test_github_actions_are_not_removed_yet(name: str) -> None:
-    """Временный факт (ADR-0020): снять тест может только решение владельца о выключении GitHub Actions."""
-    assert (REPO / ".github" / "workflows" / name).is_file()
+def test_standard_stops_a_schedule_a_windows_executor_and_a_large_class_without_an_adr(
+    tmp_path: Path,
+) -> None:
+    cases = {
+        "schedule": (
+            CIRCLE_GOOD + "triggers:\n  - schedule:\n      cron: '0 0 * * *'\n",
+            "по расписанию",
+        ),
+        "windows": (
+            CIRCLE_GOOD.replace("docker:", "executor: win/server-2022\n    docker:"),
+            "win/server-2022",
+        ),
+        "large": (CIRCLE_GOOD.replace("resource_class: small", "resource_class: large"), "large"),
+    }
+    for name, (bad, word) in cases.items():
+        done = standard_on(tmp_path / name, bad)
+        assert done.returncode == 1 and word in done.stdout, name
+
+
+def test_standard_accepts_them_when_an_accepted_adr_names_them_and_not_a_proposed_one(
+    tmp_path: Path,
+) -> None:
+    config = CIRCLE_GOOD.replace("docker:", "executor: win/server-2022\n    docker:").replace(
+        "resource_class: small", "resource_class: large"
+    )
+    assert standard_on(tmp_path / "ok", config, ACCEPTED_ADR).returncode == 0
+    proposed = ACCEPTED_ADR.replace("accepted", "proposed")
+    assert standard_on(tmp_path / "proposed", config, proposed).returncode == 1
+
+
+def test_standard_stops_a_circleci_test_step_without_a_time_limit(tmp_path: Path) -> None:
+    bad = CIRCLE_GOOD.replace("          no_output_timeout: 25m\n", "").replace("timeout 1500 ", "")
+    done = standard_on(tmp_path, bad)
+    assert done.returncode == 1 and "долгий шаг без предела времени" in done.stdout
+
+
+def test_github_actions_of_the_repository_are_gone_but_the_scope_script_and_templates_stay() -> (
+    None
+):
+    assert not (REPO / ".github" / "workflows").exists()
+    assert (REPO / ".github" / "scope.py").is_file()  # его вызывает setup-конфиг CircleCI
+    templates = {p.name for p in (REPO / "plugin" / "templates" / "ci").glob("*.yml")}
+    assert {"python.yml", "state.yml"} <= templates  # шаблоны для проектов пользователей не тронуты

@@ -1,11 +1,11 @@
-# CI продукта на CircleCI (ADR-0020). Параллельно с GitHub Actions: те не выключены.
+# CI продукта на CircleCI (ADR-0020): единственный CI репозитория, GitHub Actions убраны (решение владельца 2026-10-06).
 #
 # Это setup-конфиг (динамическая конфигурация): он считает состав PR прежним `.github/scope.py`
 # и передаёт результат в `.circleci/continue_config.yml`, где лежат сами проверки. Так задание Windows
 # вообще не запускается (и не стоит кредитов), если PR не меняет hooks.
 #
-# Запуск: на каждую отправку в ветку, включая черновики. Ветки `main` и `status` пропускаются
-# (в main попадает только проверенное, status это табло, ADR-0012).
+# Запуск: на каждую отправку в ветку, включая черновики, и на push в main (после слияния пересчитывается
+# табло; тесты и Windows на main не идут). Ветка `status` (табло, ADR-0012) пропускается.
 # Отмена устаревших прогонов настраивается в проекте CircleCI, не здесь: Project Settings ->
 # Advanced -> Auto-cancel Redundant Workflows.
 version: 2.1
@@ -47,8 +47,8 @@ jobs:
               python3 .github/scope.py --unknown > "$out/scope.txt"
             fi
             cat "$out/scope.txt"
-            # name=value -> JSON: selector строкой, остальное true/false
-            awk -F= 'BEGIN { printf "{" } NF { v = ($1 == "selector") ? "\"" $2 "\"" : (($2 == "true") ? "true" : "false"); printf "%s\"%s\": %s", (n++ ? ", " : ""), $1, v } END { print "}" }' "$out/scope.txt" > "$out/params.json"
+            # name=value -> JSON: только code и hooks (остальные поля scope.py нужны были урезанному прогону)
+            awk -F= 'BEGIN { printf "{" } $1 == "code" || $1 == "hooks" { printf "%s\"%s\": %s", (n++ ? ", " : ""), $1, ($2 == "true") ? "true" : "false" } END { print "}" }' "$out/scope.txt" > "$out/params.json"
             cat "$out/params.json"
       - continuation/continue:
           configuration_path: .circleci/continue_config.yml
@@ -61,5 +61,4 @@ workflows:
           filters:
             branches:
               ignore:
-                - main
                 - status

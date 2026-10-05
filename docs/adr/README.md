@@ -24,4 +24,4 @@
 | [0016](0016-isklyuchenie-v-ohrane-putei-novye-md-shablony-pod-plugin-tem.md) | Исключение в охране путей: новые .md-шаблоны под plugin/templates/ в репозитории продукта | accepted | обратимое | 2026-10-04 |
 | [0017](0017-dva-parallelnyh-pr.md) | До двух параллельных PR, если они не пересекаются по файлам | accepted | обратимое | 2026-10-04 |
 | [0018](0018-pravilo-biblioteka-v-odnom-module-dlya-c-typescript-i-powers.md) | Правило «библиотека в одном модуле» для C#, TypeScript и PowerShell проверяет parch_ci по тексту | accepted | обратимое | 2026-10-05 |
-| [0020](0020-perehod-ci-s-github-actions-na-circleci.md) | Перевод CI продукта с GitHub Actions на CircleCI (параллельная работа обоих на переходный период) | proposed | обратимое | 2026-10-06 |
+| [0020](0020-perehod-ci-s-github-actions-na-circleci.md) | CI продукта живёт на CircleCI, GitHub Actions для CI самого репозитория убраны | accepted | обратимое | 2026-10-06 |

@@ -509,14 +509,6 @@ def test_the_state_workflow_runs_no_tests_and_publishes_only_to_the_status_branc
     assert "--report-commit" in text and "--report-same-tree" in text
 
 
-def test_the_product_state_workflow_is_the_template_with_the_plugin_script_path() -> None:
-    template = TEMPLATE_STATE.read_text(encoding="utf-8")
-    product = (REPO / ".github" / "workflows" / "state.yml").read_text(encoding="utf-8")
-    assert product == template.replace(
-        "python .github/parch/parch_status.py", "python plugin/templates/ci/parch/parch_status.py"
-    )
-
-
 def test_the_python_template_hands_its_report_to_the_state_job() -> None:
     template = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
     assert "actions/upload-artifact@v4" in template and "name: test-report" in template

@@ -3328,6 +3328,62 @@ def workflow_triggers(on_value: tuple[str, list[str]]) -> set[str]:
     return set(yaml_keys(children))
 
 
+CIRCLE_BASE_CLASSES = {"small", "medium"}  # Docker; остальное только по принятому ADR
+CIRCLE_HEAVY = re.compile(r"\b(pytest|dotnet test|npm (?:run )?test)\b")
+
+
+def circleci_problems(path: Path, adr_text: str) -> list[str]:
+    """Правила стоимости 7.2 для конфига CircleCI.
+
+    Расписание, не-Linux исполнители, большие классы, пределы времени. Автоотмена устаревших
+    прогонов настраивается в проекте CircleCI, из конфига её не видно (есть пометка в выводе).
+    """
+    rel = f".circleci/{path.name}"
+    text = "\n".join(
+        re.sub(r"(^|\s)#.*", "", line) for line in path.read_text(encoding="utf-8").splitlines()
+    )
+    problems: list[str] = []
+    if re.search(r"^\s*(?:-\s*)?schedule:", text, re.M) and "schedule" not in adr_text.lower():
+        problems.append(
+            f"{rel}: запуск по расписанию. CI запускается только на PR (и пересчёт табло на "
+            "main): расписание тратит кредиты без отправки. Только через ADR с оценкой "
+            "кредитов (ADR-0011, ADR-0020)."
+        )
+    named = {
+        *re.findall(r"executor:\s*(win/[\w.-]+)", text),
+        *re.findall(r"image:\s*['\"]?(windows-[\w.:-]+)", text),
+        *re.findall(r"resource_class:\s*['\"]?((?:windows|macos)[\w.-]*)", text),
+    }
+    if re.search(r"^\s*(macos|xcode):", text, re.M) or any(n.startswith("macos") for n in named):
+        named.add("macos")
+    for name in sorted(named):
+        if name not in adr_text:
+            problems.append(
+                f"{rel}: исполнитель {name} не назван ни в одном принятом ADR. Windows дороже "
+                "Linux в 4 раза, macOS в 10 и больше. Оформите ADR с оценкой кредитов и "
+                "назовите в нём этот исполнитель."
+            )
+    for resource_class in sorted(set(re.findall(r"resource_class:\s*['\"]?([\w.-]+)", text))):
+        if resource_class in CIRCLE_BASE_CLASSES or resource_class.startswith(("windows", "macos")):
+            continue
+        if f"`{resource_class}`" not in adr_text:
+            problems.append(
+                f"{rel}: класс ресурсов {resource_class} не назван в принятом ADR (малый и "
+                "средний допустимы без ADR; большой стоит вдвое дороже). Назовите его в ADR "
+                "с оценкой кредитов."
+            )
+    for step in re.split(r"\n\s*- ", text):
+        limited = "no_output_timeout" in step or "timeout " in step
+        if CIRCLE_HEAVY.search(step) and not limited:
+            first = step.strip().splitlines()[0] if step.strip() else ""
+            problems.append(
+                f"{rel}: долгий шаг без предела времени ({first[:60]}): добавьте "
+                "no_output_timeout и команду timeout вокруг тестов. У CircleCI нет "
+                "timeout-minutes на задание, зависший тест идёт до часа."
+            )
+    return problems
+
+
 def standard_workflow_problems(path: Path, adr_text: str) -> list[str]:
     """Нарушения правил 7.2 в одном workflow: таймаут, отмена, триггеры, раннеры, матрицы."""
     rel = f".github/workflows/{path.name}"
@@ -3650,13 +3706,23 @@ def check_standard(
                 f"AGENTS.md: {size} строк, бюджет {AGENTS_MAX_LINES}. Длинные инструкции модель "
                 "выполняет хуже коротких: перенесите детали в docs/ и оставьте ссылки."
             )
+    circle_files = sorted((project / ".circleci").glob("*.y*ml"))
+    for path in circle_files:
+        problems.extend(circleci_problems(path, adr_text))
     if problems:
         result.fail(f"Нарушения стандарта {STANDARD_VERSION} ({len(problems)}):", *shown(problems))
         return result
     result.note(
-        f"Стандарт {STANDARD_VERSION}: проверено workflow {len(workflows)} (таймауты, отмена, "
-        "триггеры, раннеры, матрицы), целевая ОС в CONSTITUTION.md и размер AGENTS.md."
+        f"Стандарт {STANDARD_VERSION}: проверено workflow GitHub {len(workflows)} (таймауты, "
+        f"отмена, триггеры, раннеры, матрицы) и конфигов CircleCI {len(circle_files)} "
+        "(расписание, исполнители, классы ресурсов, пределы времени), целевая ОС в "
+        "CONSTITUTION.md и размер AGENTS.md."
     )
+    if circle_files:
+        result.note(
+            "Автоотмена устаревших прогонов CircleCI (Project Settings, Advanced, "
+            "Auto-cancel Redundant Workflows) из конфига не видна: включите её в проекте."
+        )
     result.note(*composition_notes)
     result.note(f"Пока не проверяется: {STANDARD_NOT_YET}.")
     return result

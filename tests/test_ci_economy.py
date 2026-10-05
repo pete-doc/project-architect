@@ -5,13 +5,15 @@ Workflow разбирается как текст: так тесты не зав
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-PRODUCT = REPO / ".github" / "workflows" / "ci.yml"
-FULL = REPO / ".github" / "workflows" / "full.yml"  # полный прогон перед слиянием (ADR-0013)
+SETUP = REPO / ".circleci" / "config.yml"  # CI продукта живёт на CircleCI (ADR-0020)
+PRODUCT = REPO / ".circleci" / "continue_config.yml"
 SCOPE = REPO / ".github" / "scope.py"  # какие языки и проверки нужны PR
 # state.yml (пересчёт табло после слияния, ADR-0012) устроен иначе: см. tests/test_status.py
 ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml"))
@@ -45,89 +47,98 @@ def triggers(workflow: str) -> str:
 
 
 def test_product_ci_runs_only_on_pull_requests() -> None:
-    trigger = triggers(text(PRODUCT))
-    assert "pull_request" in trigger
-    for forbidden in ("push", "schedule", "workflow_dispatch", "workflow_run"):
-        assert forbidden not in trigger, forbidden
+    # CircleCI: расписаний нет; на main идёт только пересчёт табло (workflow state)
+    both = code_only(text(SETUP)) + code_only(text(PRODUCT))
+    assert "schedule" not in both and "triggers:" not in both
+    assert re.search(r"ignore:\n\s+- status\b", code_only(text(SETUP)))
+    workflows = code_only(text(PRODUCT)).split("\nworkflows:\n", 1)[1]
+    not_main = "- not:\n            equal: [main, << pipeline.git.branch >>]"
+    for name in ("text-only", "full", "windows", "no-windows"):
+        assert not_main in job_block(workflows, name), name
+    state = job_block(workflows, "state")
+    assert "equal: [main, << pipeline.git.branch >>]" in state and "not:" not in state
 
 
 def test_product_ci_cancels_superseded_runs() -> None:
-    workflow = text(PRODUCT)
-    assert re.search(r"^concurrency:\n  group: ci-\$\{\{ github\.ref \}\}\n", workflow, re.M)
-    assert "  cancel-in-progress: true\n" in workflow
+    # отмена устаревших прогонов в CircleCI это настройка проекта, не конфига (ADR-0020):
+    # из репозитория её проверить нельзя, поэтому `standard` каждый раз напоминает о ней
+    adr = text(REPO / "docs" / "adr" / "0020-perehod-ci-s-github-actions-na-circleci.md")
+    assert "Auto-cancel Redundant Workflows" in adr
+    script = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
+    done = subprocess.run(
+        [sys.executable, str(script), "standard", "--project", str(REPO)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert done.returncode == 0 and "Auto-cancel Redundant Workflows" in done.stdout
 
 
 def test_product_ci_has_no_matrix_and_no_macos() -> None:
-    workflow = code_only(text(PRODUCT))
+    workflow = code_only(text(PRODUCT)) + code_only(text(SETUP))
     assert "matrix" not in workflow
     assert "macos" not in workflow.lower()
     assert "strategy:" not in workflow
 
 
 def test_every_product_job_has_a_timeout() -> None:
+    # у CircleCI нет timeout-minutes на задание: no_output_timeout и общий предел на тесты
     workflow = text(PRODUCT)
-    for name, minutes in (("scope", 3), ("check", 25), ("windows-hooks", 15)):
-        assert f"timeout-minutes: {minutes}\n" in job_block(workflow, name), name
-    assert "timeout-minutes: 25\n" in job_block(text(FULL), "full-run")
+    assert "timeout 1500 pytest" in job_block(workflow, "full-tests")  # шаг команды full-tests
+    assert "timeout 1500 pytest" in job_block(workflow, "state")
+    assert "WaitForExit(900000)" in job_block(workflow, "windows-hooks")
+    assert "no_output_timeout: 3m" in text(SETUP)
+    for name in ("install-dev", "full-tests", "check", "check-text", "windows-hooks", "state"):
+        for step in re.split(r"\n      - ", job_block(code_only(workflow), name)):
+            if ("pytest" in step or "pip install" in step) and "no_output_timeout" not in step:
+                raise AssertionError(f"{name}: долгий шаг без no_output_timeout: {step[:60]}")
 
 
 def test_the_main_job_is_one_job_on_ubuntu_with_every_current_step() -> None:
-    # быстрая часть (ci.yml) идёт на каждую отправку и помечает свой отчёт как урезанный
-    block = job_block(text(PRODUCT), "check")
-    assert "runs-on: ubuntu-latest" in block
+    # одна проверка на PR и она же полный прогон (ADR-0020): шаги прежних check и full-run
+    workflow = code_only(text(PRODUCT))
+    block = job_block(workflow, "check")
+    assert "image: cimg/python:3.12-node" in block  # Linux с Node из образа
     for step in (
-        "ruff check .", "ruff format --check .", "pyright",
-        "-o junit_suite_name=parch-partial",
-        "parch_ci.py tests --language python --partial --report test-report-partial.xml",
-        "parch_ci.py skips --language python --partial --report test-report-partial.xml",
-        "Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0",
-        "global-json-file: tests/projects/cs_shop/global.json", "actions/setup-node@v4",
-    ):  # fmt: skip
+        "run: ruff check .",
+        "run: ruff format --check .",
+        "run: pyright",
+        "- install-tools",
+    ):
         assert step in block, step
-    assert 'pytest -v -m ""' not in block  # полный прогон только в full.yml
-    # полный прогон перед слиянием: все шаги прежнего check и статус для слияния
-    full = job_block(text(FULL), "full-run")
-    assert "runs-on: ubuntu-latest" in full
     for step in (
-        "ruff check .", "ruff format --check .", "pyright",
-        'pytest -v -m "" --junitxml=test-report.xml',
-        "parch_ci.py tests --language python --report test-report.xml",
-        "parch_ci.py skips --language python --report test-report.xml",
+        'pytest -v -n 4 -m "" --junitxml=test-report.xml',
         "Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0",
-        "global-json-file: tests/projects/cs_shop/global.json", "actions/setup-node@v4",
-    ):  # fmt: skip
-        assert step in full, step
-    ratchet = "parch_ci.py tests --language python --report"
-    assert full.index("pytest -v -m") < full.index(ratchet)
-    assert "--partial" not in full  # полный прогон не принимает урезанный отчёт
+        "--jsonfile tests/projects/cs_shop/global.json",
+    ):
+        assert step in workflow, step
+    ratchet = "parch_ci.py tests --language python --report test-report.xml"
+    assert "parch_ci.py skips --language python --report test-report.xml" in block
+    assert block.index("- full-tests") < block.index(ratchet)
+    assert "--partial" not in workflow  # полный прогон не принимает урезанный отчёт
 
 
 def test_dotnet_sdk_and_the_powershell_module_are_cached() -> None:
-    block = job_block(text(PRODUCT), "check")
-    assert "path: ~/.dotnet" in block
-    assert "hashFiles('tests/projects/cs_shop/global.json')" in block
-    assert "path: ~/.local/share/powershell/Modules" in block
-    assert "steps.psa-cache.outputs.cache-hit != 'true'" in block
-    assert "cache: true" in block  # пакеты NuGet
+    workflow = text(PRODUCT)
+    assert "~/.dotnet" in workflow and "~/.nuget/packages" in workflow
+    assert 'checksum "/tmp/dotnet-key.txt"' in workflow  # global.json и все packages.lock.json
+    assert "~/.local/share/powershell/Modules" in workflow
+    assert "pwsh-v1-7.4.6-psa-1.25.0" in workflow and "npm-v1-" in workflow
 
 
 def test_a_docs_and_state_only_pr_runs_only_the_structure_checks() -> None:
-    # правки только текста: в check идёт один standard, без тестов (scope.py, ADR-0013)
-    workflow = text(PRODUCT)
+    # правки только текста: идёт один standard на маленьком контейнере, без тестов (scope.py)
     scope_text = text(SCOPE)  # только эти пути не делают PR «кодовым»; baseline.json и прочее код
     assert '"state/incidents/*"' in scope_text and '"state/baseline.json"' not in scope_text
-    block = job_block(workflow, "check")
-    assert block.count("if: needs.scope.outputs.code != 'true'") == 0  # отдельных шагов тестов нет
-    heavy = re.findall(r"if: needs\.scope\.outputs\.code == 'true'", block)
-    assert (
-        len(heavy) >= 10
-    )  # pip, ruff (два), node, dotnet (два), psa (три), pyright, pytest, ratchet
-    assert "parch_ci.py standard" in block and "test_product_adr_index_is_up_to_date" not in block
-    assert "parch_ci.py tests --language python --report" not in block.split("Урезанный")[0]
+    block = job_block(code_only(text(PRODUCT)), "check-text")
+    assert "resource_class: small" in block and "parch_ci.py standard" in block
+    for heavy in ("pytest", "pyright", "ruff", "pip install"):
+        assert heavy not in block, heavy
 
 
 def test_if_the_pr_files_cannot_be_read_everything_runs() -> None:
-    scope = job_block(text(PRODUCT), "scope")
+    scope = text(SETUP)
     assert "Не удалось получить список файлов PR: идут проверки всех языков." in scope
     assert (
         "scope.py --unknown" in scope
@@ -135,20 +146,21 @@ def test_if_the_pr_files_cannot_be_read_everything_runs() -> None:
 
 
 def test_windows_runs_only_the_hooks_tests_and_only_when_hooks_change() -> None:
-    workflow = text(PRODUCT)
+    workflow = code_only(text(PRODUCT))
     block = job_block(workflow, "windows-hooks")
-    assert "runs-on: windows-latest" in block
-    assert "if: needs.scope.outputs.hooks == 'true'" in block
-    assert "pytest -v " + " ".join(HOOK_TESTS) in block
-    for slow in ("dotnet", "pwsh", "pyright", "setup-node"):
+    assert "executor: win/server-2022" in block
+    for test in HOOK_TESTS:
+        assert f'"{test}"' in block, test
+    for slow in ("dotnet", "pwsh", "pyright", "node"):
         assert slow not in block, slow
+    assert "<< pipeline.parameters.hooks >>" in job_block(workflow, "windows")
     hooks = 'HOOKS = ("plugin/hooks/*", "plugin/templates/*", ".github/*")'
     assert hooks in text(SCOPE)
 
 
 def test_windows_is_used_by_the_hooks_job_alone() -> None:
     workflow = code_only(text(PRODUCT))
-    assert workflow.count("windows-latest") == 1
+    assert workflow.count("executor: win/") == 1
 
 
 def test_hook_test_files_exist_and_are_the_files_that_run_the_hooks() -> None:
