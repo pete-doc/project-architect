@@ -251,13 +251,28 @@ def _is_product_repo(project: Path) -> bool:
     return (project / "plugin" / ".claude-plugin" / "plugin.json").is_file()
 
 
+def _is_templates_root(project: Path) -> bool:
+    """Корень проекта это сама `plugin/templates/` репозитория продукта.
+
+    В шаблонах лежит `docs/CONSTITUTION.md`, поэтому для файла внутри `plugin/templates/` охрана
+    путей считает корнем проекта именно эту папку, а не корень репозитория.
+    """
+    return (
+        project.name.lower() == "templates"
+        and project.parent.name.lower() == "plugin"
+        and _is_product_repo(project.parent.parent)
+    )
+
+
 def _md_creation_allowed(rel: str, project: Path) -> bool:
     parts = PurePosixPath(rel).parts
     name = parts[-1]
     if "docs" in parts[:-1]:
         return True
-    if parts[:2] == ("plugin", "templates") and _is_product_repo(project):
+    if _is_templates_root(project):
         return True  # шаблоны для целевых проектов (ADR-0016); путь уже приведён без `..`
+    if parts[:2] == ("plugin", "templates") and _is_product_repo(project):
+        return True  # то же, если корнем проекта считается корень репозитория
     if len(parts) == 1 and name in _ALLOWED_ROOT_MD:
         return True
     if name == "skill.md" and "skills" in parts[:-1]:

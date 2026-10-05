@@ -60,3 +60,36 @@ def test_a_shell_write_to_a_template_markdown_follows_the_same_rule(
     assert run_hook("guard_paths.py", command, product).code == 0
     outside = bash("echo hi > plugin/notes.md")
     assert run_hook("guard_paths.py", outside, product).blocked
+
+
+def real_layout(root: Path, with_plugin: bool) -> Path:
+    """Как в настоящем репозитории продукта: CONSTITUTION.md только в шаблонах, не в корне."""
+    template = root / "plugin" / "templates" / "docs" / "CONSTITUTION.md"
+    template.parent.mkdir(parents=True)
+    template.write_text("# CONSTITUTION\n", encoding="utf-8")
+    if with_plugin:
+        manifest = root / "plugin" / ".claude-plugin" / "plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{"name": "parch"}\n', encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "plugin/templates/github/pull_request_template.md",
+        "plugin/templates/ci/NEW.md",
+    ],
+)
+def test_the_real_product_layout_allows_new_template_markdown(rel: str, tmp_path: Path) -> None:
+    root = real_layout(tmp_path, with_plugin=True)
+    result = run_hook("guard_paths.py", file_call("Write", root / rel), root)
+    assert result.code == 0, result.stderr
+
+
+def test_a_project_that_only_looks_like_the_templates_folder_stays_blocked(tmp_path: Path) -> None:
+    """Папка `plugin/templates/` с `docs/CONSTITUTION.md`, но без плагина в корне: исключения нет"""
+    root = real_layout(tmp_path, with_plugin=False)
+    rel = "plugin/templates/github/pull_request_template.md"
+    result = run_hook("guard_paths.py", file_call("Write", root / rel), root)
+    assert result.blocked and ".md" in result.stderr
