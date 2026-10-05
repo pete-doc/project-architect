@@ -3275,10 +3275,7 @@ STANDARD_BASE_RUNNER = "ubuntu-latest"
 # слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
 STATE_WORKFLOW = "state"
 AGENTS_MAX_LINES = 150
-STANDARD_NOT_YET = (
-    "обязательные файлы проекта, features.json и MODULES.md, конкурирующие инструкции, "
-    ".md вне docs/, раздел «Основания» в PR"
-)
+STANDARD_NOT_YET = "связность features.json и MODULES.md, раздел «Основания» в PR"
 WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
 
 
@@ -3617,11 +3614,17 @@ def block_ids_of(project: Path) -> set[str] | None:
     return {str(as_dict(e).get("id", "")) for e in as_list(as_dict(data).get("features"))}
 
 
-def check_standard(project: Path, language: str) -> Result:
-    """Проверка соответствия стандарту (пока: стоимость CI и бюджет текста; остальное в D2-3)."""
+def check_standard(
+    project: Path, language: str, update: bool = False, accept_new: bool = False
+) -> Result:
+    """Соответствие стандарту: стоимость CI, бюджет текста, отчёты, состав проекта (F14)."""
+    import parch_standard  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
+
     del language
     result = Result()
     problems: list[str] = []
+    composition_problems, composition_notes = parch_standard.check(project, update, accept_new)
+    problems.extend(composition_problems)
     workflows = sorted((project / ".github" / "workflows").glob("*.y*ml"))
     adr_text = accepted_adr_text(project)
     for path in workflows:
@@ -3647,6 +3650,7 @@ def check_standard(project: Path, language: str) -> Result:
         f"Стандарт {STANDARD_VERSION}: проверено workflow {len(workflows)} (таймауты, отмена, "
         "триггеры, раннеры, матрицы), целевая ОС в CONSTITUTION.md и размер AGENTS.md."
     )
+    result.note(*composition_notes)
     result.note(f"Пока не проверяется: {STANDARD_NOT_YET}.")
     return result
 
@@ -3769,6 +3773,8 @@ def main(argv: list[str] | None = None) -> int:
             result = check_catalog(project, args.language, args.update, args.accept_new)
         elif args.check == "modules":
             result = check_modules(project, args.language, args.update, args.accept_new)
+        elif args.check == "standard":
+            result = check_standard(project, args.language, args.update, args.accept_new)
         else:
             result = CHECKS[args.check](project, args.language)
     except ToolError as error:

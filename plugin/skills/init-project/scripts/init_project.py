@@ -560,6 +560,7 @@ def init_project(
         report.copy("ci/parch/parch_status.py", ".github/parch/parch_status.py")
         report.copy("ci/parch/parch_catalog.py", ".github/parch/parch_catalog.py")
         report.copy("ci/parch/parch_libraries.py", ".github/parch/parch_libraries.py")
+        report.copy("ci/parch/parch_standard.py", ".github/parch/parch_standard.py")
         report.copy("ci/state.yml", ".github/workflows/state.yml")
         report.write(
             "state/baseline.json",
