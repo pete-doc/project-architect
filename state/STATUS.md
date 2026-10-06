@@ -1,10 +1,11 @@
 # Прогресс: 16 из 24 блоков готово · G1 — 4 из 9 · G2 — 7 из 9 · критерий G3 выполнен · G4 — 1 из 2 · критерий G5 выполнен · G6 — 3 из 5
-Обновлено: 2026-10-06, коммит `5d2b8c1` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`
+Обновлено: 2026-10-06, коммит `f57ac8e` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`
 
 ## Нужно ваше решение
 - ADR-0022. Шаблоны CI для проектов пользователей: CircleCI вместо GitHub Actions — ждёт утверждения владельца
 
 ## В работе
+- **PR #68** «F24, PR 2: табло на CircleCI вместо state.yml» — CI нет данных
 - F14 «Полная проверка standard (раздел 11)» — идёт работа
 - F16 «Janitor и ИИ-ревью агентом внутри Claude Code (без платного API в CI)» — идёт работа
 
@@ -200,9 +201,10 @@ graph LR
 ```
 
 ## Тесты
-- Всего **1796**.
-- Упавших: **0**. Пропущенных: **9**.
-- Источник: отчёт прогона CI на коммите `5d2b8c1` (то же содержимое, что у табло).
+- Всего **1842** (было 1796).
+- Упавших: **1**. Пропущенных: **9**.
+  - упал: tests.test_circleci_templates::test_the_official_validator_rejects_a_broken_config
+- Источник: отчёт прогона CI на коммите `f57ac8e` (то же содержимое, что у табло).
 
 ## Расход CI
 Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), [бюджеты](https://github.com/settings/billing/budgets).
