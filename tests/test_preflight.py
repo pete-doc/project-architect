@@ -109,6 +109,39 @@ def test_the_baseline_step_names_the_platform_of_the_report(system: str) -> None
     )  # удаления только с решением владельца
 
 
+def test_the_release_note_is_informational_and_never_strict() -> None:
+    argv = preflight.release_note_command("py")
+    assert argv == ["py", "scripts/release_check.py"]
+    assert (
+        "--strict" not in argv
+    )  # иначе каждый PR с правкой plugin/ между выпусками стал бы красным
+
+
+def test_main_runs_the_release_note_once_and_without_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ловит удаление вызова из main() и запуск его с --strict: смотрим на то, что main() реально запускает."""
+    launched: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: Any) -> "subprocess.CompletedProcess[str]":
+        launched.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    def only_text(_root: Path) -> bool:
+        return False
+
+    def no_steps(*_args: Any, **_kwargs: Any) -> int:
+        return 0
+
+    monkeypatch.setattr(preflight.subprocess, "run", fake_run)
+    monkeypatch.setattr(preflight, "code_changed", only_text)
+    monkeypatch.setattr(preflight, "run", no_steps)
+    assert preflight.main([]) == 0
+    notes = [c for c in launched if any(part.endswith("release_check.py") for part in c)]
+    assert len(notes) == 1
+    assert "--strict" not in notes[0]
+
+
 # ---------- что считается правкой только текста ----------
 
 

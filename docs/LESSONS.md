@@ -18,6 +18,10 @@
 
 ## Закрыто автоматикой
 
+- Версия плагина не поднята после правок `plugin/` (у владельца остался 0.1.6, а в `main` ушло 11 файлов, около 760
+  строк) → `scripts/release_check.py` (сверка с тегом `v*`, `--strict` для PR «выпуск»), сообщение в `preflight.py`,
+  тест `tests/test_release_check.py::test_the_same_drift_fails_in_strict_mode_which_the_release_pr_uses`.
+
 - Отправка в CI без локальной проверки (ruff, формат, импорт, полный прогон): красные и холостые прогоны, около 11
   повторов за 3–4 октября → `scripts/preflight.py` (одна команда, остановка на первой ошибке), тест
   `tests/test_preflight.py`.
