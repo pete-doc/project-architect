@@ -5,6 +5,7 @@
 Статус «готово» приходит из тестов приёмки блока, а не из слов агентов.
 """
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -16,7 +17,19 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_status.py"
-TEMPLATE_STATE = REPO / "plugin" / "templates" / "ci" / "state.yml"
+INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
+
+
+def assembled_config(languages: list[str]) -> str:
+    """`.circleci/config.yml`, который соберёт init (в нём задание `state`, ADR-0022)."""
+    spec = importlib.util.spec_from_file_location("init_project_status", INIT)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass в init_project ищет свой модуль здесь
+    spec.loader.exec_module(module)
+    return str(module.render_circleci(languages))
+
+
 GOAL_TEXT = (
     "# GOAL — цель продукта «Магазин»\n\n> **Статус: {status}.**\n\n"
     "## Критерии готовности продукта\n\n"
@@ -488,27 +501,27 @@ def run_standard(root: Path) -> subprocess.CompletedProcess[str]:
 def test_the_state_workflow_is_the_only_one_allowed_to_run_on_push_and_passes_the_standard(
     tmp_path: Path,
 ) -> None:
-    folder = tmp_path / ".github" / "workflows"
-    folder.mkdir(parents=True)
-    text = TEMPLATE_STATE.read_text(encoding="utf-8")
-    (folder / "state.yml").write_text(text, encoding="utf-8")
+    """Имя прежнее (храповик): на CircleCI `state` идёт только на main, `ci` на main не идёт, `standard` проходит."""
+    config = assembled_config(["python"])
+    (tmp_path / ".circleci").mkdir()
+    (tmp_path / ".circleci" / "config.yml").write_text(config, encoding="utf-8", newline="\n")
     done = run_standard(tmp_path)
     assert done.returncode == 0, done.stdout
-    (folder / "other.yml").write_text(
-        text, encoding="utf-8"
-    )  # то же под другим именем: push нельзя
-    assert "CI запускается только на pull_request" in run_standard(tmp_path).stdout
+    workflows = config.split("\nworkflows:\n", 1)[1]
+    state, ci = workflows.split("  state:\n", 1)[1], workflows.split("  state:\n", 1)[0]
+    assert "equal: [main, << pipeline.git.branch >>]" in state and "not:" not in state
+    assert "equal: [main, << pipeline.git.branch >>]" in ci and "not:" in ci  # ci на main не идёт
 
 
 def test_the_state_workflow_runs_no_tests_and_publishes_only_to_the_status_branch() -> None:
-    text = TEMPLATE_STATE.read_text(encoding="utf-8")
-    on_block = text.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
-    assert on_block.strip() == "push:\n    branches: [main]"  # только push в main
-    assert "timeout-minutes: 10" in text and "runs-on: ubuntu-latest" in text
-    assert "git push origin HEAD:status" in text
-    assert "git push origin HEAD:main" not in text and "pytest" not in text
-    assert "gh run download" in text and "-n test-report" in text
-    assert "--report-commit" in text and "--report-same-tree" in text
+    """Имя прежнее (храповик): теперь задание `state` само гоняет тесты (отчёт всегда рядом) и пишет только в `status`."""
+    config = assembled_config(["python"])
+    state = config.split("\n  state:\n    docker:", 1)[1].split("\nworkflows:\n", 1)[0]
+    assert "timeout 600 pytest -v --junitxml=test-report.xml" in state  # тесты в самом задании
+    assert "gh run download" not in config and "api.github.com" not in config  # API и токена нет
+    source = (REPO / "plugin" / "templates" / "ci" / "parch" / "parch_state.py").read_text("utf-8")
+    assert '"HEAD:status"' in source and "HEAD:main" not in source  # публикация только в status
+    assert "--report-commit" in state and "--report-same-tree yes" in state
 
 
 def test_the_python_template_hands_its_report_to_the_state_job() -> None:
@@ -600,13 +613,28 @@ def test_ci_section_without_runs_data_is_only_the_link_and_with_no_prs_says_so(
 
 
 def test_the_state_workflow_reads_the_report_of_the_full_run_and_counts_ci_minutes() -> None:
-    text = TEMPLATE_STATE.read_text(encoding="utf-8")
-    assert "for wf in full.yml ci.yml" in text  # отчёт даёт полный прогон
-    assert "--ci-runs" in text and "actions/runs" in text and "/jobs?per_page=100" in text
-    assert "continue-on-error: true" in text  # сбой подсчёта минут не ломает табло
+    """Имя прежнее (храповик): на CircleCI отчёт даёт тот же job (`full.yml` и поиска отчёта по workflow больше нет:
+    он и падал с 404 на первом живом прогоне F20); расход CI на табло шаблона не считается (нет API и токена)."""
+    config = assembled_config(["python"])
+    assert "full.yml" not in config and "for wf in" not in config
+    assert "--ci-runs" not in config and "actions/runs" not in config
+    assert (
+        "cat /tmp/tests-exit 2>/dev/null || echo 5" in config
+    )  # нет шага тестов: код 5 «тестов нет»
 
 
 def test_the_state_workflow_finds_the_pr_of_a_run_by_branch_when_the_run_data_has_none() -> None:
-    text = TEMPLATE_STATE.read_text(encoding="utf-8")
-    assert "gh pr list --state all" in text and "--argjson map" in text
-    assert ".pull_requests[0].number // $map[.head_branch]" in text  # слитый PR: поле пустое
+    """Имя прежнее (храповик): табло шаблона не ищет PR по API; на ветке PR или с номером PR оно не публикуется."""
+    config = assembled_config(["python"])
+    assert "gh pr list" not in config and "--argjson map" not in config
+    sys.path.insert(0, str(REPO / "plugin" / "templates" / "ci" / "parch"))
+    import parch_state
+
+    message = parch_state.publish(
+        REPO, REPO / "README.md", None, branch="feature", pr_number="", sha="abcdef1234", key=None
+    )
+    assert message == "Не ветка main: табло собрано, но не опубликовано"
+    message = parch_state.publish(
+        REPO, REPO / "README.md", None, branch="main", pr_number="12", sha="abcdef1234", key=None
+    )
+    assert message == "Не ветка main: табло собрано, но не опубликовано"  # слитый PR: номер PR есть

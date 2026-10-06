@@ -1,0 +1,19 @@
+      - install-node
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "package-lock.json" }}
+      - run:
+          name: Зависимости (npm ci)
+          no_output_timeout: 10m
+          command: npm ci
+      # Код выхода тестов запоминается, шаг задание не прерывает: итог и цвет задают шаги ниже.
+      - run:
+          name: Тесты для табло
+          no_output_timeout: 10m
+          command: |
+            timeout 600 npm test
+            echo $? > /tmp/tests-exit
+            exit 0
+      - store_artifacts:
+          when: always
+          path: test-report.json

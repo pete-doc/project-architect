@@ -524,6 +524,7 @@ def test_github_actions_of_the_repository_are_gone_but_the_scope_script_and_temp
     assert not (REPO / ".github" / "workflows").exists()
     assert (REPO / ".github" / "scope.py").is_file()  # его вызывает setup-конфиг CircleCI
     templates = {p.name for p in (REPO / "plugin" / "templates" / "ci").glob("*.yml")}
-    assert "state.yml" in templates  # шаблон табло на Actions уходит в PR 2 блока F24 (ADR-0022)
+    assert "state.yml" not in templates  # шаблон табло на Actions заменён заданием state (ADR-0022)
+    assert (REPO / "plugin" / "templates" / "ci" / "circleci" / "state" / "tail.yml").is_file()
     circle = {p.name for p in (REPO / "plugin" / "templates" / "ci" / "circleci").glob("*.yml")}
     assert {"head.yml", "python.yml", "typescript.yml", "csharp.yml", "powershell.yml"} <= circle

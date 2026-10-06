@@ -1,0 +1,22 @@
+      - restore_cache:
+          keys:
+            - pip-v1-{{ checksum "requirements-dev.txt" }}
+      - run:
+          name: Зависимости разработки
+          no_output_timeout: 10m
+          command: pip install -r requirements-dev.txt
+      - run:
+          name: Рабочие зависимости (если есть requirements.txt)
+          no_output_timeout: 10m
+          command: if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      # Код выхода pytest запоминается, шаг задание не прерывает: итог и цвет задают шаги ниже.
+      - run:
+          name: Тесты для табло
+          no_output_timeout: 10m
+          command: |
+            timeout 600 pytest -v --junitxml=test-report.xml
+            echo $? > /tmp/tests-exit
+            exit 0
+      - store_artifacts:
+          when: always
+          path: test-report.xml
