@@ -343,6 +343,68 @@
       "status": "planned",
       "passes": false,
       "incidents": 0
+    },
+    {
+      "id": "F20",
+      "title": "Сквозной прогон на новом проекте",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F3",
+        "F11",
+        "F16"
+      ],
+      "spec": "docs/specs/F20-end-to-end.md",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F21",
+      "title": "Сквозной прогон: TypeScript",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F20"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F22",
+      "title": "Сквозной прогон: C#",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F20"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F23",
+      "title": "Сквозной прогон: PowerShell",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F20"
+      ],
+      "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
     }
   ]
 }
