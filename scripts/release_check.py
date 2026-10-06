@@ -2,7 +2,7 @@
 """Сверка версии плагина с последним тегом выпуска (docs/LESSONS.md: автоматика вместо напоминания).
 
     python scripts/release_check.py            сообщает, сколько файлов `plugin/` изменилось после тега
-    python scripts/release_check.py --strict   то же, но «изменено, а версия не поднята» это ошибка (выпуск)
+    python scripts/release_check.py --strict   то же, но «изменено, а версия не поднята» и «тегов нет» это ошибки (выпуск)
 
 Почему так: установленный плагин обновляется только при смене `version` в `plugin/.claude-plugin/plugin.json`.
 Между выпусками `plugin/` менять можно (поле версии трогает только PR «выпуск», AGENTS.md, правило 11), поэтому
@@ -78,7 +78,7 @@ def evaluate(root: Path) -> Report:
         return report
     tag = git(root, "describe", "--tags", "--abbrev=0", "--match", TAG_PATTERN, "HEAD")
     if tag is None or not tag.strip():
-        return report  # тегов выпуска ещё нет: сверять не с чем
+        return report  # тегов выпуска нет: сверять не с чем (в --strict это ошибка, см. render)
     report.tag = tag.strip()
     report.tag_version = version_of(git(root, "show", f"{report.tag}:{MANIFEST}"))
     if report.tag_version is None:
@@ -89,6 +89,11 @@ def evaluate(root: Path) -> Report:
             f"тег {report.tag} не равен v{report.tag_version}: версия в манифесте на этом теге другая"
         )
     now, then = parse(report.version), parse(report.tag_version)
+    for name, parsed in ((report.version, now), (report.tag_version, then)):
+        if parsed is None:
+            report.errors.append(
+                f"версию {name!r} нельзя разобрать: нужен вид N.N.N, без суффиксов"
+            )
     if now is not None and then is not None and now < then:
         report.errors.append(f"версия {report.version} ниже версии тега {report.tag}")
     listed = git(root, "diff", "--name-only", report.tag, "--", "plugin")
@@ -106,7 +111,14 @@ def render(report: Report, strict: bool) -> tuple[list[str], int]:
     code = 1 if report.errors else 0
     if report.errors or report.tag is None:
         if report.tag is None and not report.errors:
-            lines.append("Тегов выпуска (v*) нет: сверять версию плагина не с чем.")
+            if strict:
+                lines.append(
+                    "ОШИБКА: тегов выпуска (v*) нет, версию плагина сверять не с чем: "
+                    "выполните `git fetch --tags` или поставьте тег предыдущего выпуска."
+                )
+                code = 1
+            else:
+                lines.append("Тегов выпуска (v*) нет: сверять версию плагина не с чем.")
         return lines, code
     if report.drift:
         count = len(report.changed)
@@ -125,6 +137,8 @@ def render(report: Report, strict: bool) -> tuple[list[str], int]:
     else:
         lines.append(
             f"Плагин: версия {report.version}, после тега {report.tag} файлы plugin/ не менялись."
+            if report.version == report.tag_version
+            else f"Плагин: версия {report.version} поднята без изменений plugin/ (тег {report.tag})."
         )
     return lines, code
 

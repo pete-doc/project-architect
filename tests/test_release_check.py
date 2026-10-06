@@ -9,6 +9,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "release_check.py"
 MANIFEST = Path("plugin") / ".claude-plugin" / "plugin.json"
@@ -121,13 +123,30 @@ def test_a_bare_manifest_change_is_not_counted_as_plugin_drift(tmp_path: Path) -
     assert release.evaluate(root).changed == []
 
 
-def test_no_release_tags_yet_means_nothing_to_compare(tmp_path: Path) -> None:
+def test_no_release_tags_is_a_message_in_the_plain_mode(tmp_path: Path) -> None:
     root = project(tmp_path, tag=None)
     write(root, "plugin/skills/a/SKILL.md", "два")
     commit(root, "правка")
-    lines, code = run(root, strict=True)
+    lines, code = run(root, strict=False)
     assert code == 0
     assert any("тегов выпуска" in line.lower() for line in lines)
+
+
+def test_no_release_tags_is_an_error_in_strict_mode(tmp_path: Path) -> None:
+    root = project(tmp_path, tag=None)
+    lines, code = run(root, strict=True)
+    assert code == 1
+    assert any(line.startswith("ОШИБКА") and "тегов выпуска" in line for line in lines)
+
+
+def test_a_bump_without_plugin_changes_says_so_instead_of_files_unchanged(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    set_version(root, "0.1.1")
+    commit(root, "только версия")
+    lines, code = run(root, strict=True)
+    assert code == 0
+    assert any("поднята без изменений plugin/" in line for line in lines)
+    assert not any("не менялись" in line for line in lines)
 
 
 # ---------- нарушения, которых не бывает никогда (даже без --strict) ----------
@@ -147,6 +166,18 @@ def test_a_tag_that_does_not_match_the_version_inside_it_is_an_error(tmp_path: P
     lines, code = run(root, strict=False)
     assert code == 1
     assert any("не равен v0.1.0" in line for line in lines)
+
+
+@pytest.mark.parametrize("bad", ["0.2.0-beta", "1.x", ""])
+def test_a_version_that_cannot_be_parsed_is_an_error_not_a_silent_skip(
+    tmp_path: Path, bad: str
+) -> None:
+    root = project(tmp_path)
+    set_version(root, bad)
+    commit(root, "версия с суффиксом")
+    lines, code = run(root, strict=False)
+    assert code == 1
+    assert any("нельзя разобрать" in line for line in lines)
 
 
 def test_a_manifest_without_a_version_is_an_error(tmp_path: Path) -> None:
