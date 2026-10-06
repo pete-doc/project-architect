@@ -457,9 +457,8 @@ def run_tests_step(tmp_path: Path, command: str, tool: str, tool_code: int) -> t
         script.write_text("#!/bin/sh\n" + body, encoding="utf-8", newline="\n")
         script.chmod(0o755)
     exit_file = tmp_path / "tests-exit"
-    # BASH_ENV в CircleCI дописывает в PATH настоящие dotnet и node (шаг install-tools) впереди подставных: без него нельзя
-    env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
-    env["PATH"] = fake.as_posix() + os.pathsep + os.environ.get("PATH", "")
+    # BASH_ENV CI здесь не виден: его снимает автофикстура no_ci_bash_env (conftest), единственная защита класса ошибок
+    env = {**os.environ, "PATH": fake.as_posix() + os.pathsep + os.environ.get("PATH", "")}
     done = subprocess.run(
         [bash, "-eo", "pipefail", "-c", command.replace("/tmp/tests-exit", exit_file.as_posix())],
         cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False,
@@ -493,3 +492,47 @@ def test_standard_catches_any_test_step_after_the_key_not_only_the_first(tmp_pat
     late = good.replace("      - add_ssh_keys\n", extra, 1)
     assert any("до тестов проекта" in line for line in standard_problems(tmp_path, late))
     assert standard_problems(tmp_path, good) == []
+
+
+# ---------- автоматика урока «проходит локально, падает в CI» (docs/LESSONS.md) ----------
+
+
+def ci_bash_env(tmp_path: Path) -> tuple[Path, Path]:
+    """BASH_ENV как у CircleCI после шага install-tools: настоящие инструменты в PATH впереди всего (здесь они падают с кодом 99)."""
+    real = tmp_path / "real-tools"
+    real.mkdir()
+    for name in ("dotnet", "npm", "node", "pytest", "timeout"):
+        script = real / name
+        script.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8", newline="\n")
+        script.chmod(0o755)
+    env_file = tmp_path / "bash_env.sh"
+    shown = real.as_posix()
+    if (
+        len(shown) > 2 and shown[1] == ":"
+    ):  # git-bash на Windows: C:/dir это /c/dir (двоеточие ломает PATH)
+        shown = f"/{shown[0].lower()}{shown[2:]}"
+    env_file.write_text(f'export PATH="{shown}:$PATH"\n', encoding="utf-8", newline="\n")
+    return env_file, real
+
+
+def test_a_ci_bash_env_never_reaches_the_shell_tests(tmp_path: Path) -> None:
+    """Фикстура `no_ci_bash_env` (conftest) снимает BASH_ENV у каждого теста; тесты шагов шаблонов под BASH_ENV CI проходят."""
+    assert "BASH_ENV" not in os.environ
+    bash = __import__("shutil").which("bash")
+    assert bash, "нужен bash"
+    env_file, real = ci_bash_env(tmp_path)
+    leaky = subprocess.run(
+        [bash, "-c", "command -v dotnet"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "BASH_ENV": str(env_file)},
+        check=False,
+    )
+    assert (
+        real.name in leaky.stdout
+    )  # плохой пример: так BASH_ENV ставит настоящие инструменты впереди
+    inner = subprocess.run(
+        [sys.executable, "-m", "pytest", str(Path(__file__)), "-k", "failed_tests_still_record", "-n", "0", "-o", "addopts=", "-m", "", "-p", "no:cacheprovider", "-q"],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8", env={**os.environ, "BASH_ENV": str(env_file)}, check=False, timeout=300,
+    )  # fmt: skip
+    assert inner.returncode == 0, inner.stdout[-1500:]

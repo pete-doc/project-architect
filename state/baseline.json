@@ -1458,6 +1458,7 @@
       "tests/test_loop_guard.py::test_the_stop_gate_failures_count_as_signatures_too",
       "tests/test_loop_guard.py::test_three_equal_signatures_in_a_row_stop_the_session",
       "tests/test_loop_guard.py::test_two_equal_signatures_do_not_stop_anything",
+      "tests/test_parch_state.py::test_a_ci_bash_env_never_reaches_the_shell_tests",
       "tests/test_parch_state.py::test_a_project_without_tests_is_green_and_the_board_says_so",
       "tests/test_parch_state.py::test_a_rejected_push_or_unreachable_server_says_to_check_the_write_key",
       "tests/test_parch_state.py::test_exit_code_5_with_tests_in_the_baseline_is_red",
