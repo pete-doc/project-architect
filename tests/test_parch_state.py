@@ -457,7 +457,9 @@ def run_tests_step(tmp_path: Path, command: str, tool: str, tool_code: int) -> t
         script.write_text("#!/bin/sh\n" + body, encoding="utf-8", newline="\n")
         script.chmod(0o755)
     exit_file = tmp_path / "tests-exit"
-    env = {**os.environ, "PATH": fake.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+    # BASH_ENV в CircleCI дописывает в PATH настоящие dotnet и node (шаг install-tools) впереди подставных: без него нельзя
+    env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+    env["PATH"] = fake.as_posix() + os.pathsep + os.environ.get("PATH", "")
     done = subprocess.run(
         [bash, "-eo", "pipefail", "-c", command.replace("/tmp/tests-exit", exit_file.as_posix())],
         cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False,
