@@ -109,6 +109,14 @@ def test_the_baseline_step_names_the_platform_of_the_report(system: str) -> None
     )  # удаления только с решением владельца
 
 
+def test_the_release_note_is_informational_and_never_strict() -> None:
+    argv = preflight.release_note_command("py")
+    assert argv == ["py", "scripts/release_check.py"]
+    assert (
+        "--strict" not in argv
+    )  # иначе каждый PR с правкой plugin/ между выпусками стал бы красным
+
+
 # ---------- что считается правкой только текста ----------
 
 

@@ -58,6 +58,11 @@ def baseline_step(python: str = sys.executable, platform: str | None = None) -> 
     )  # fmt: skip
 
 
+def release_note_command(python: str = sys.executable) -> list[str]:
+    """Сообщение о расхождении версии плагина и тега; без `--strict`, поэтому шаги не останавливает."""
+    return [python, "scripts/release_check.py"]
+
+
 def run(steps: list[Step], execute: Callable[[list[str]], int], say: Callable[[str], None]) -> int:
     """Выполняет шаги по порядку; код первого упавшего шага становится кодом выхода."""
     for index, (title, argv) in enumerate(steps, start=1):
@@ -116,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    # Версия плагина против тега: только сообщение, не шаг (между выпусками plugin/ менять можно).
+    subprocess.run(release_note_command(), cwd=ROOT, check=False)
     changed = code_changed(ROOT)
     steps = plan(changed)
     if "--update-baseline" in args and changed:
