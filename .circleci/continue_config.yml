@@ -1,0 +1,324 @@
+# Проверки продукта на CircleCI (ADR-0020). GitHub Actions для CI продукта убраны (решение владельца 2026-10-06).
+# Параметры приходят из setup-конфига (`.circleci/config.yml`): состав PR по `.github/scope.py`.
+#
+# Одна проверка на PR, она же полный прогон: на каждую отправку в ветку PR идут все тесты (раньше быстрая часть
+# и полный прогон перед слиянием разделялись, ADR-0013). Имена проверок для ruleset ветки main постоянные:
+# `ci/circleci: check` и `ci/circleci: windows-hooks` есть у КАЖДОГО PR (у текстового это маленькое задание,
+# у PR без hooks Windows-задание заменено заглушкой с тем же именем), иначе обязательной проверки не было бы.
+#
+# Кредиты (бесплатный план 30 000 в месяц; для открытого проекта пул Linux до 400 000): Docker small 5,
+# large 20; Windows medium 40 за минуту. Таймаутов на задание у CircleCI нет: вместо них `no_output_timeout`
+# и общий предел времени на сами тесты (`timeout 1500`; общий предел плана Free: 1 час на задание).
+version: 2.1
+
+orbs:
+  win: circleci/windows@5.0
+
+parameters:
+  code:
+    type: boolean
+    default: true
+  hooks:
+    type: boolean
+    default: false
+
+commands:
+  install-dev:
+    description: Зависимости разработки с кэшем pip
+    steps:
+      - restore_cache:
+          keys:
+            - pip-v1-{{ checksum "requirements-dev.txt" }}
+      - run:
+          name: Зависимости разработки
+          no_output_timeout: 10m
+          command: pip install -r requirements-dev.txt
+      - save_cache:
+          key: pip-v1-{{ checksum "requirements-dev.txt" }}
+          paths:
+            - ~/.cache/pip
+
+  install-tools:
+    description: Node (из образа), .NET SDK по global.json, PowerShell 7 и PSScriptAnalyzer 1.25.0 для тестов языков
+    steps:
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "tests/projects/ts_shop/package-lock.json" }}
+      - run:
+          name: Ключ кэша NuGet (все packages.lock.json)
+          command: cat tests/projects/cs_shop/global.json $(find tests/projects/cs_shop -name packages.lock.json | sort) > /tmp/dotnet-key.txt
+      - restore_cache:
+          keys:
+            - dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+            - dotnet-v1-
+      - run:
+          name: .NET SDK по global.json
+          no_output_timeout: 10m
+          command: |
+            sudo apt-get update -qq && sudo apt-get install -y -qq libicu-dev
+            if [ ! -x "$HOME/.dotnet/dotnet" ]; then
+              curl -sSfL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+              bash /tmp/dotnet-install.sh --jsonfile tests/projects/cs_shop/global.json --install-dir "$HOME/.dotnet"
+            fi
+            echo 'export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"' >> "$BASH_ENV"
+      - restore_cache:
+          keys:
+            - pwsh-v1-7.4.6-psa-1.25.0
+      - run:
+          name: PowerShell 7 и PSScriptAnalyzer 1.25.0
+          no_output_timeout: 10m
+          command: |
+            if [ ! -x "$HOME/pwsh/pwsh" ]; then
+              curl -sSfL -o /tmp/pwsh.tar.gz https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz
+              mkdir -p "$HOME/pwsh" && tar -xzf /tmp/pwsh.tar.gz -C "$HOME/pwsh"
+              chmod +x "$HOME/pwsh/pwsh"
+            fi
+            echo 'export PATH="$HOME/pwsh:$PATH"' >> "$BASH_ENV"
+            "$HOME/pwsh/pwsh" -NoProfile -Command "if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -eq '1.25.0')) { Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force }"
+      - save_cache:
+          key: pwsh-v1-7.4.6-psa-1.25.0
+          paths:
+            - ~/pwsh
+            - ~/.local/share/powershell/Modules
+
+  full-tests:
+    description: "Полный прогон (ключ -m с пустым значением снимает фильтр медленных тестов) и отчёт"
+    steps:
+      # -n 4 явно: в контейнере CircleCI `-n auto` видит ядра хоста, а не 4 vCPU класса large.
+      - run:
+          name: Полный прогон тестов
+          no_output_timeout: 25m
+          command: timeout 1500 pytest -v -n 4 -m "" --junitxml=test-report.xml
+      # Отчёт нужен и при падении тестов (как `if: always()`), и для табло.
+      - store_test_results:
+          when: always
+          path: test-report.xml
+      - store_artifacts:
+          when: always
+          path: test-report.xml
+
+  save-tool-caches:
+    description: "Кэши npm и .NET сохраняются после тестов, пакеты скачиваются самими тестами"
+    steps:
+      - save_cache:
+          when: always
+          key: npm-v1-{{ checksum "tests/projects/ts_shop/package-lock.json" }}
+          paths:
+            - ~/.npm
+      - save_cache:
+          when: always
+          key: dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+          paths:
+            - ~/.dotnet
+            - ~/.nuget/packages
+
+jobs:
+  # PR только с текстом: тестов нет, идёт один standard. В workflow называется `check`.
+  check-text:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: standard (стоимость CI и бюджет текста)
+          no_output_timeout: 5m
+          command: python plugin/templates/ci/parch/parch_ci.py standard
+
+  # PR с кодом: проверки и полный прогон тестов, храповик продукта.
+  check:
+    docker:
+      - image: cimg/python:3.12-node
+    resource_class: large # 4 vCPU, 8 ГБ
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - checkout
+      - install-dev
+      - run: ruff check .
+      - run: ruff format --check .
+      # Стоимость CI и бюджет текста (STANDARD.md, 7.2 и 12): запуск, классы ресурсов, пределы времени.
+      - run:
+          name: standard
+          no_output_timeout: 5m
+          command: python plugin/templates/ci/parch/parch_ci.py standard
+      - install-tools
+      - run: pyright
+      - full-tests
+      # «Храповик» продукта по тем же правилам, что у проектов пользователей: удалённые и
+      # пропущенные тесты останавливают CI (baseline в state/baseline.json).
+      - run: python plugin/templates/ci/parch/parch_ci.py tests --language python --report test-report.xml
+      - run: python plugin/templates/ci/parch/parch_ci.py skips --language python --report test-report.xml
+      - save-tool-caches
+
+  # Целевая платформа продукта Windows 11: hooks и запускающий файл проверяются на Windows,
+  # но только если PR их меняет (Windows 40 кредитов в минуту).
+  windows-hooks:
+    executor: win/server-2022 # windows.medium по умолчанию
+    steps:
+      - checkout
+      - run:
+          name: Python 3.12 (ставится, если его нет)
+          no_output_timeout: 15m
+          command: |
+            $py = $null
+            try { $v = (& py -3.12 --version) 2>$null; if ($v) { $py = (& py -3.12 -c "import sys;print(sys.executable)") } } catch {}
+            if (-not $py) {
+              choco install python312 -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $py = "C:\Python312\python.exe"
+              if (-not (Test-Path $py)) { Write-Host "Python не установился"; exit 1 }
+            }
+            Write-Host "python: $py"
+            [System.IO.File]::WriteAllText("$env:TEMP\py.txt", $py)
+      - restore_cache:
+          keys:
+            - pip-win-v1-{{ checksum "requirements-dev.txt" }}
+      - run:
+          name: Зависимости разработки
+          no_output_timeout: 15m
+          command: |
+            $py = Get-Content "$env:TEMP\py.txt"
+            & $py -m pip install --cache-dir C:\pip-cache -r requirements-dev.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - save_cache:
+          key: pip-win-v1-{{ checksum "requirements-dev.txt" }}
+          paths:
+            - C:\pip-cache
+      - run:
+          name: Тесты hooks и запускающего файла
+          no_output_timeout: 15m
+          command: |
+            $py = Get-Content "$env:TEMP\py.txt"
+            # Общий предел 15 минут: зависший тест с выводом иначе шёл бы до часа по 40 кредитов в минуту.
+            $p = Start-Process -FilePath $py -ArgumentList "-m", "pytest", "-v", "tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py" -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(900000)) { Stop-Process -Id $p.Id -Force; Write-Host "Тесты hooks: предел 15 минут"; exit 1 }
+            exit $p.ExitCode
+
+  # PR не меняет hooks: Windows не нужен, но проверка `windows-hooks` обязана существовать (ruleset).
+  skip-windows:
+    docker:
+      - image: cimg/base:stable
+    resource_class: small
+    steps:
+      - run:
+          name: Windows не нужен
+          command: echo "PR не меняет hooks, шаблоны, .github и .circleci, проверка Windows не нужна"
+
+  # Табло на ветке status после слияния в main (ADR-0012). Тесты идут здесь же, на коммите main: отчёт
+  # сам относится к этому коммиту. Токен записи (STATUS_PUSH_TOKEN) только здесь и только для ветки main.
+  state:
+    docker:
+      - image: cimg/python:3.12-node
+    resource_class: large
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - checkout
+      - install-dev
+      - install-tools
+      - run:
+          name: Полный прогон для табло
+          no_output_timeout: 25m
+          command: timeout 1500 pytest -v -n 4 -m "" --junitxml=test-report.xml || true
+      - store_artifacts:
+          when: always
+          path: test-report.xml
+      - run:
+          name: Данные для табло (открытые PR)
+          command: python3 .circleci/state_inputs.py /tmp/prs.json
+      - run:
+          name: Табло и публикация на ветке status
+          no_output_timeout: 10m
+          command: |
+            # refspec задан явно: у checkout CircleCI стандартный refspec не гарантирован.
+            git fetch --no-tags origin '+refs/heads/status:refs/remotes/origin/status' || true
+            if git rev-parse --verify origin/status >/dev/null 2>&1; then
+              git show origin/status:state/STATUS.md > /tmp/previous.md || true
+            fi
+            short="${CIRCLE_SHA1:0:7}"
+            python plugin/templates/ci/parch/parch_status.py --project . \
+              --report test-report.xml --report-commit "$short" --report-same-tree yes \
+              --previous /tmp/previous.md --prs /tmp/prs.json \
+              --commit "$short" --out /tmp/STATUS.md
+            # Публикация только с ветки main и только если токен задан (он приходит из context
+            # status-publisher, подключённого только к этому заданию); сборкам из форков токен не передаётся.
+            if [ "${CIRCLE_BRANCH:-}" != "main" ] || [ -n "${CIRCLE_PR_NUMBER:-}" ]; then
+              echo "Не ветка main: табло собрано, но не опубликовано"; exit 0
+            fi
+            if [ -z "${STATUS_PUSH_TOKEN:-}" ]; then
+              echo "STATUS_PUSH_TOKEN не задан: табло собрано, но не опубликовано (см. ADR-0020)"; exit 0
+            fi
+            url="https://x-access-token:${STATUS_PUSH_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git"
+            # Гонка двух слияний подряд: если на main уже есть более новый коммит, этот прогон не публикует
+            # (табло для нового коммита опубликует его собственный прогон).
+            latest=$(git ls-remote origin refs/heads/main | cut -f1)
+            if [ -n "$latest" ] && [ "$latest" != "${CIRCLE_SHA1}" ]; then
+              echo "На main уже новее коммит: табло для ${short} не публикуется"; exit 0
+            fi
+            cp test-report.xml /tmp/test-report.xml 2>/dev/null || true
+            git config user.name "circleci-state"
+            git config user.email "circleci-state@users.noreply.github.com"
+            if git rev-parse --verify origin/status >/dev/null 2>&1; then
+              git checkout -q -B status origin/status
+            else
+              git checkout -q --orphan status
+              git rm -rq --cached . || true
+              find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+            fi
+            mkdir -p state
+            cp /tmp/STATUS.md state/STATUS.md
+            if [ -f /tmp/test-report.xml ]; then
+              cp /tmp/test-report.xml state/test-report.xml
+              echo "$short" > state/test-report.commit
+            fi
+            git add state
+            git commit -m "state: табло на коммите ${short}" || echo "табло не изменилось"
+            git push "$url" HEAD:status
+
+workflows:
+  # PR только с текстом: один standard на маленьком контейнере; в списке проверок называется `check`.
+  text-only:
+    when:
+      and:
+        - not: << pipeline.parameters.code >>
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - check-text:
+          name: check
+  # PR с кодом: проверки и полный прогон тестов; в списке проверок называется `check`.
+  full:
+    when:
+      and:
+        - << pipeline.parameters.code >>
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - check
+  # Windows только если PR меняет hooks, шаблоны, .github или .circleci.
+  windows:
+    when:
+      and:
+        - << pipeline.parameters.hooks >>
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - windows-hooks
+  # Остальным PR: заглушка с тем же именем `windows-hooks`.
+  no-windows:
+    when:
+      and:
+        - not: << pipeline.parameters.hooks >>
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - skip-windows:
+          name: windows-hooks
+  # После слияния в main: пересчёт табло (единственный прогон на main).
+  state:
+    when:
+      equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - state:
+          context: status-publisher # токен записи в ветку status (STATUS_PUSH_TOKEN), см. ADR-0020, п. 7

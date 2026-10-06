@@ -661,7 +661,7 @@ def test_python_and_powershell_together_get_separate_workflows(tmp_path: Path) -
 
 
 def test_product_ci_installs_the_same_analyzer_version_as_the_template() -> None:
-    product = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    product = (REPO / ".circleci" / "continue_config.yml").read_text(encoding="utf-8")  # ADR-0020
     assert f"-RequiredVersion {PSA_VERSION}" in product
 
 

@@ -13,8 +13,6 @@ from types import ModuleType
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-CI = REPO / ".github" / "workflows" / "ci.yml"
-FULL = REPO / ".github" / "workflows" / "full.yml"
 SCOPE = REPO / ".github" / "scope.py"
 
 
@@ -156,71 +154,12 @@ def test_every_language_test_file_has_a_marker_the_selector_can_use() -> None:
 # ---------- право на слияние: проверка full-run ----------
 
 
-def test_the_quick_run_never_gives_the_right_to_merge() -> None:
-    text = CI.read_text(encoding="utf-8")
-    assert "statuses" not in text and "gh api" not in text  # никаких отметок вручную
-    assert "-o junit_suite_name=parch-partial" in text and "--partial" in text
-    assert 'pytest -v -m ""' not in text
-    assert "full-run" not in text.replace(
-        "(full.yml, проверка full-run:", ""
-    )  # проверку даёт full.yml
-
-
-def test_the_full_run_check_exists_only_after_ready_for_review() -> None:
-    text = FULL.read_text(encoding="utf-8")
-    on_block = text.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
-    assert on_block.strip() == "pull_request:\n    types: [ready_for_review]"  # других событий нет
-    head = text.split("\n  full-run:\n", 1)[1].split("    steps:", 1)[0]
-    assert "if:" not in head  # пропущенное по условию задание GitHub считает успешным
-    assert "cancel-in-progress: true" in text and "group: full-${{ github.ref }}" in text
-
-
 def test_no_workflow_sets_a_check_or_status_by_hand() -> None:
-    for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+    # CI продукта на CircleCI (ADR-0020): ни один конфиг не ставит статусы и проверки вручную
+    for path in sorted((REPO / ".circleci").glob("*.yml")):
         text = path.read_text(encoding="utf-8")
         assert "/statuses/" not in text and "-f context=" not in text, path.name
-        assert "statuses: write" not in text and "checks: write" not in text, path.name
-
-
-def test_the_full_run_covers_every_check_and_its_ratchet_runs_last() -> None:
-    text = FULL.read_text(encoding="utf-8")
-    for step in (
-        "pytest -v -m",
-        "parch_ci.py tests --language python --report test-report.xml",
-        "parch_ci.py skips --language python --report test-report.xml",
-        "pyright",
-        "parch_ci.py standard",
-    ):
-        assert step in text, step
-    assert text.index("pytest -v -m") < text.index("parch_ci.py tests --language python --report")
-    assert "--partial" not in text  # полный прогон не принимает урезанный отчёт
-
-
-def test_a_pr_without_code_still_gets_the_full_run_check_but_runs_no_tests() -> None:
-    for path in (CI, FULL):
-        text = path.read_text(encoding="utf-8")
-        text = text.split("\n  windows-hooks:")[0]  # Windows-задание не относится к тексту
-        assert "parch_ci.py standard" in text
-        for step in ("pip install", "ruff check", "ruff format", "pytest", "pyright"):
-            for line in [row for row in text.splitlines() if step in row and "run:" in row]:
-                before = text[: text.index(line)].rsplit("      - ", 1)[-1]
-                assert "code == 'true'" in before + line, (path.name, line)  # только для кода
-        assert (
-            "      - run: python plugin/templates/ci/parch/parch_ci.py standard" in text
-        )  # без условия
-    full = FULL.read_text(encoding="utf-8")
-    assert "scope.py --unknown" in full  # full-run для текстового PR всё равно появляется
-    assert (
-        full.count("steps.scope.outputs.code == 'true'") >= 8
-    )  # установка и тесты только для кода
-
-
-def test_agents_md_forbids_setting_checks_by_hand_and_explains_ready_for_review() -> None:
-    text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-    assert "через `gh api`" in text and "запрещено" in text
-    assert "источник проверок" in text and "GitHub Actions" in text
-    assert "gh pr ready --undo" in text and "gh pr create --draft" in text
-    assert "любые файлы правил проверок" in text  # файлы правил проверок считаются кодом
+        assert "check-runs" not in text and "gh api" not in text, path.name
 
 
 def test_adr_0013_records_the_split_and_the_saving() -> None:
