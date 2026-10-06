@@ -267,17 +267,17 @@ def test_agents_md_explains_both_modes_and_the_baseline_flow() -> None:
     assert "`pytest`" in text and 'pytest -m ""' in text
     assert "--report-platform windows" in text and "test-report" in text  # baseline локально
     assert "posix" in text and "Перед каждой отправкой" in text
-    assert "запрещён" in text and "full-run" in text
+    assert "запрещён" in text and "ci/circleci: check" in text
     assert "Array buffer allocation failed" in text and "не обходи" in text
     assert len(text.splitlines()) <= 150
 
 
 def test_product_ci_runs_the_full_mode_and_uploads_the_report() -> None:
-    workflow = (REPO / ".github" / "workflows" / "full.yml").read_text(encoding="utf-8")
-    assert 'pytest -v -m "" --junitxml=test-report.xml' in workflow
-    assert "actions/upload-artifact@v4" in workflow
-    assert re.search(r"name: test-report\n\s+path: test-report.xml", workflow)
-    assert "if: always()" in workflow
+    # CI продукта на CircleCI (ADR-0020): отчёт сохраняется шагами store_* и при падении тестов
+    workflow = (REPO / ".circleci" / "continue_config.yml").read_text(encoding="utf-8")
+    assert 'pytest -v -n 4 -m "" --junitxml=test-report.xml' in workflow
+    assert re.search(r"- store_artifacts:\n\s+when: always\n\s+path: test-report.xml", workflow)
+    assert re.search(r"- store_test_results:\n\s+when: always\n\s+path: test-report.xml", workflow)
 
 
 def test_the_python_template_runs_the_tests_once_and_reuses_the_report() -> None:
