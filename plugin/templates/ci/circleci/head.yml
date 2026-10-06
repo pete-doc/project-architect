@@ -20,9 +20,9 @@ commands:
           no_output_timeout: 5m
           command: |
             if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-              git fetch --no-tags --unshallow origin || true
+              git fetch --no-tags --unshallow origin || { echo "ОШИБКА: не удалось докачать историю ветки (git fetch --unshallow): проверка «Основания» читает git log main..HEAD и на обрезанной истории даст неверный результат"; exit 1; }
             fi
-            git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+            git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main' || { echo "ОШИБКА: не удалось подтянуть ветку main (git fetch origin main): без неё нельзя прочитать git log main..HEAD"; exit 1; }
 
   install-node:
     description: "Node точной версии (22.14.0): нужен jscpd (npx), pyright и проверкам TypeScript; образ cimg/python без Node, чтобы версия не плавала"

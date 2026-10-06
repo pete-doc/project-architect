@@ -80,6 +80,19 @@ commands:
           paths:
             - ~/pwsh
             - ~/.local/share/powershell/Modules
+      # Официальный CLI CircleCI: тесты шаблонов гоняют `circleci config validate` на каждом конфиге, который собирает init
+      # (ADR-0022). Версия и контрольная сумма зафиксированы; шаг идёт секунды и нового исполнителя не требует.
+      - run:
+          name: CLI CircleCI 1.2.0 (circleci config validate)
+          no_output_timeout: 5m
+          command: |
+            if [ ! -x "$HOME/bin/circleci" ]; then
+              base=https://github.com/CircleCI-Public/circleci-cli/releases/download/v1.2.0
+              curl -sSfL -o /tmp/circleci.tar.gz "$base/circleci-cli_1.2.0_linux_amd64.tar.gz"
+              echo "9d8dcf9dc5c681127e053f26e32cc751822b786a77cbafa46145e6945919ecd0  /tmp/circleci.tar.gz" | sha256sum -c -
+              mkdir -p "$HOME/bin" && tar -xzf /tmp/circleci.tar.gz -C "$HOME/bin" circleci
+            fi
+            echo 'export PATH="$HOME/bin:$PATH"' >> "$BASH_ENV"
 
   full-tests:
     description: "Полный прогон (ключ -m с пустым значением снимает фильтр медленных тестов) и отчёт"

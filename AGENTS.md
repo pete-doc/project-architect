@@ -34,7 +34,9 @@ python scripts/preflight.py
 Маркер `slow` получает каждый тест, который запускает dotnet, pwsh, node или PSScriptAnalyzer (по фикстурам
 автоматически, остальные помечены вручную). Для полного режима нужны .NET SDK точной версии из
 `tests/projects/cs_shop/global.json`, PowerShell 7 (`pwsh`) с PSScriptAnalyzer 1.25.0
-(`Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser`) и Node; в CI всё это ставится.
+(`Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser`), Node и CLI CircleCI 1.2.0
+(`circleci config validate` в тестах шаблонов: релиз с github.com/CircleCI-Public/circleci-cli, контрольная сумма
+в `.circleci/continue_config.yml`, в PATH); в CI всё это ставится.
 Если полный прогон падает из-за памяти (`Array buffer allocation failed`), не обходи это переключателями:
 напиши владельцу.
 

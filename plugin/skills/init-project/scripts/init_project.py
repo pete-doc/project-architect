@@ -617,7 +617,16 @@ def init_project(
         "docs/CONSTITUTION.md",
         render_constitution(name, description, priorities, languages, target_os),
     )
-    report.notes.append(CIRCLECI_STEPS_NOTE)
+    if CIRCLE_CONFIG in report.skipped:
+        # Файл уже был и не перезаписан: В1–В5 как «всё готово» не выводим, иначе владелец решит, что нужные задания есть.
+        needed = ", ".join(f"check-{lang}" for lang in languages if lang in CI_TEMPLATES)
+        report.notes.append(
+            f"Файл {CIRCLE_CONFIG} уже был: нужные задания {needed} и check не добавлены, добавьте вручную "
+            "или удалите файл и запустите init снова. Пока этого нет, инструкцию В1–В5 (CircleCI) не выполняйте: "
+            "без заданий проверок и итогового check защита main и первый прогон не заработают."
+        )
+    else:
+        report.notes.append(CIRCLECI_STEPS_NOTE)
     return {
         "project": str(project),
         "created": report.created,

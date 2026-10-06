@@ -377,3 +377,199 @@ def test_the_executor_instructions_take_the_basis_from_the_commit() -> None:
         text = (REPO / rel).read_text(encoding="utf-8")
         assert "parch_ci.py basis" in text, rel
         assert "коммит" in text, rel
+    for rel in ("plugin/templates/github/pull_request_template.md", "plugin/agents/implementer.md"):
+        text = (REPO / rel).read_text(encoding="utf-8")
+        assert "Основания:" in text and "без решётки" in text, (
+            rel
+        )  # вариант для коммита из редактора
+
+
+# ---------- «Основания:» без решётки: git в редакторе вырезает строки с # ----------
+
+standard_module: Any = load(
+    REPO / "plugin" / "templates" / "ci" / "parch" / "parch_standard.py",
+    "parch_standard_circleci_templates",
+)
+BASIS_TEXT = 'Прочитал каталог и реестр модулей; поиск по коду "convert" ничего не нашёл; git log -S"feet" пуст.'
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"правка\n\n## Основания\n\n{BASIS_TEXT}\n",
+        f"правка\n\nОснования: {BASIS_TEXT}\n",
+        f"правка\n\nОснования:\n- {BASIS_TEXT}\n- ещё строка\n\nПроверка:\nтесты зелёные\n",
+        f"правка\n\nоснования:\n{BASIS_TEXT}\n",
+    ],
+)
+def test_both_heading_variants_pass(message: str) -> None:
+    assert standard_module.basis_problem(message, "в коммите") is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "правка\n\n## Основания\n\n",
+        "правка\n\nОснования:\n",
+        "правка\n\nОснования:\n---\n",
+        "правка\n\nОснования:\n- - -\n\nПроверка:\nпоиск по коду\n",  # текст после раздела не засчитывается
+        "правка\n\n## Основания\n\n— — —\n",
+        "правка\n\nбез раздела вовсе\n",
+    ],
+)
+def test_empty_basis_dashes_or_no_section_stay_red_in_both_variants(message: str) -> None:
+    assert standard_module.basis_problem(message, "в коммите") is not None
+
+
+def test_the_section_survives_the_lines_git_strips_from_an_editor_message(tmp_path: Path) -> None:
+    """Git при коммите из редактора (`--cleanup=strip`) вырезает строки с #: вариант «Основания:» остаётся, «## Основания» теряется."""
+    editor_text = "правка\n\n# комментарий git\n"
+    with_label = project_with_commits(tmp_path / "a", [])
+    git(
+        with_label,
+        "commit",
+        "-q",
+        "--allow-empty",
+        "--cleanup=strip",
+        "-m",
+        f"{editor_text}\nОснования: {BASIS_TEXT}\n# ещё комментарий",
+    )
+    assert standard(with_label).returncode == 0
+    with_hash = project_with_commits(tmp_path / "b", [])
+    git(
+        with_hash,
+        "commit",
+        "-q",
+        "--allow-empty",
+        "--cleanup=strip",
+        "-m",
+        f"{editor_text}\n## Основания\n\n{BASIS_TEXT}\n",
+    )
+    lost = standard(with_hash)
+    assert (
+        lost.returncode == 1 and "нет раздела «Основания»" in lost.stdout
+    )  # плохой пример: решётка пропала вместе с заголовком
+
+
+# ---------- fetch-main: сбой докачки роняет шаг ----------
+
+
+def test_a_failed_history_fetch_turns_the_step_red_with_a_message(tmp_path: Path) -> None:
+    bash = shutil.which("bash")
+    assert bash, "для проверки шага fetch-main нужен bash"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    stub = fake / "git"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *is-shallow-repository*) echo true ;;\n"
+        '  *fetch*) echo "fatal: сеть недоступна" >&2; exit 128 ;;\n'
+        "esac\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": fake.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+    done = subprocess.run(
+        [bash, "-c", fetch_main_script()],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=60,
+    )
+    assert done.returncode == 1
+    assert (
+        "не удалось докачать историю ветки" in done.stdout
+    )  # понятное сообщение по-русски, а не молчаливый зелёный
+    assert "|| true" not in fetch_main_script()
+
+
+# ---------- init: уже существующий .circleci/config.yml ----------
+
+
+def test_an_existing_circleci_config_is_reported_and_the_owner_steps_are_not_shown(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".circleci").mkdir(parents=True)
+    (tmp_path / ".circleci" / "config.yml").write_text("version: 2.1\n", encoding="utf-8")
+    request = {
+        "project_dir": str(tmp_path),
+        "name": "Мой сервис",
+        "languages": ["python", "typescript"],
+        "description": "Считает заказы.",
+        "priorities": "надёжность",
+        **INIT_ANSWERS,
+    }
+    done = subprocess.run(
+        [sys.executable, str(INIT)],
+        input=json.dumps(request).encode("utf-8"),
+        capture_output=True,
+        env=os.environ,
+        check=False,
+        timeout=600,
+    )
+    assert done.returncode == 0, done.stderr.decode("utf-8", errors="replace")
+    result = json.loads(done.stdout.decode("utf-8"))
+    notes: list[str] = result["notes"]
+    assert ".circleci/config.yml" in result["skipped_existing"]
+    assert (tmp_path / ".circleci" / "config.yml").read_text(
+        encoding="utf-8"
+    ) == "version: 2.1\n"  # не перезаписан
+    existing = next(n for n in notes if n.startswith("Файл .circleci/config.yml уже был"))
+    assert "check-python, check-typescript и check не добавлены" in existing
+    assert "добавьте вручную или удалите файл и запустите init снова" in existing
+    assert not any(
+        n.startswith("CI работает на CircleCI") for n in notes
+    )  # В1–В5 как «всё готово» не выводятся
+
+
+# ---------- официальный валидатор CircleCI ----------
+
+
+def circleci_cli() -> str:
+    cli = shutil.which("circleci")
+    assert cli, (
+        "нужен CLI CircleCI (circleci config validate): CI продукта ставит его шагом install-tools, локально см. ADR-0022"
+    )
+    return cli
+
+
+@pytest.mark.parametrize(
+    "languages", [[lang] for lang in LANGUAGES] + [list(LANGUAGES)], ids=lambda x: "+".join(x)
+)
+def test_the_official_validator_accepts_every_config_that_init_builds(
+    tmp_path: Path, languages: list[str]
+) -> None:
+    path = tmp_path / "config.yml"
+    path.write_text(render(languages), encoding="utf-8", newline="\n")
+    done = subprocess.run(
+        [circleci_cli(), "config", "validate", "--skip-update-check", str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_official_validator_rejects_a_broken_config(tmp_path: Path) -> None:
+    """Плохой пример: итоговый check требует несуществующее задание."""
+    path = tmp_path / "config.yml"
+    path.write_text(
+        render(["python"]).replace("            - check-python\n", "            - check-nothing\n"),
+        encoding="utf-8",
+        newline="\n",
+    )
+    done = subprocess.run(
+        [circleci_cli(), "config", "validate", "--skip-update-check", str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=120,
+    )
+    assert done.returncode != 0

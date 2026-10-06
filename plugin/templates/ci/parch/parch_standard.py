@@ -245,6 +245,10 @@ def cyclic_groups(graph: dict[str, list[str]]) -> list[list[str]]:
     return sorted(groups)
 
 
+BASIS_LABEL = re.compile(rf"^{BASIS_HEADING}:[ \t]*(.*)$", re.IGNORECASE)
+OTHER_LABEL = re.compile(
+    r"^[^\W\d_][^\W_ ]*(?: [^\W_]+){0,3}:[ \t]*$"
+)  # «Проверка:», «Как проверить:»
 BASIS_FILLER = re.compile(
     r"^[\s\-–—_*•.]*$"
 )  # строки из одних прочерков и пунктуации текстом не считаются
@@ -255,11 +259,17 @@ def basis_section_lines(body: str) -> list[str] | None:
     lines = BASIS_COMMENT.sub("", body).splitlines()
     section: list[str] | None = None
     level = 0
+    plain = False  # раздел начат строкой «Основания:» без решётки (git вырезает строки с # в сообщении из редактора)
     fenced = False
     for line in lines:
         if line.lstrip().startswith("```"):
             fenced = not fenced  # `#` внутри блока кода не заголовок
         heading = None if fenced else re.match(r"^(#{1,6})\s+(.*)$", line)
+        if section is None and not fenced and (label := BASIS_LABEL.match(line)):
+            section, plain = [label[1]] if label[1].strip() else [], True
+            continue
+        if plain and section is not None and (heading or OTHER_LABEL.match(line)):
+            break  # без решётки раздел кончается следующим заголовком или строкой вида «Проверка:»
         if heading:
             if section is not None and len(heading[1]) <= level:
                 break  # раздел кончается заголовком того же или более высокого уровня
