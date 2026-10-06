@@ -418,7 +418,9 @@
         "F11"
       ],
       "spec": "docs/specs/F24-circleci-templates.md",
-      "acceptance_tests": [],
+      "acceptance_tests": [
+        "tests/test_circleci_templates.py"
+      ],
       "status": "planned",
       "passes": false,
       "incidents": 0

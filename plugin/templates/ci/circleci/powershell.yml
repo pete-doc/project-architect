@@ -1,0 +1,61 @@
+  # Облегчённый набор (ADR-0010): скрипты PowerShell только запускают программы, поэтому тестов,
+  # покрытия, архитектуры и дублей здесь нет.
+  check-powershell:
+    docker:
+      - image: cimg/python:3.12 # Python для parch_ci.py; PowerShell 7 ставится ниже (на Linux работает так же, как на Windows)
+    resource_class: medium # 2 vCPU, 4 ГБ, 10 кредитов в минуту
+    steps:
+      - checkout
+      - fetch-main
+      - restore_cache:
+          keys:
+            - pwsh-v1-7.4.6-psa-1.25.0
+      # Версия PSScriptAnalyzer зафиксирована точно; другая версия делает проверку красной.
+      - run:
+          name: PowerShell 7 и PSScriptAnalyzer 1.25.0
+          no_output_timeout: 10m
+          command: |
+            if [ ! -x "$HOME/pwsh/pwsh" ]; then
+              curl -sSfL -o /tmp/pwsh.tar.gz https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz
+              mkdir -p "$HOME/pwsh" && tar -xzf /tmp/pwsh.tar.gz -C "$HOME/pwsh"
+              chmod +x "$HOME/pwsh/pwsh"
+            fi
+            echo 'export PATH="$HOME/pwsh:$PATH"' >> "$BASH_ENV"
+            "$HOME/pwsh/pwsh" -NoProfile -Command "if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -eq '1.25.0')) { Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force }"
+      - save_cache:
+          key: pwsh-v1-7.4.6-psa-1.25.0
+          paths:
+            - ~/pwsh
+            - ~/.local/share/powershell/Modules
+      - run:
+          name: parch psscriptanalyzer
+          no_output_timeout: 10m
+          command: python .github/parch/parch_ci.py psscriptanalyzer --language powershell
+      - run:
+          name: parch thin
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py thin --language powershell
+      - run:
+          name: parch catalog
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py catalog --language powershell
+      # Раздел «Основания» берётся из сообщений коммитов ветки (git log origin/main..HEAD), описания PR в CircleCI нет.
+      - run:
+          name: standard
+          no_output_timeout: 5m
+          environment:
+            PARCH_BASE_REF: origin/main
+          command: python .github/parch/parch_ci.py standard --language powershell
+      - run:
+          name: parch libraries
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py libraries --language powershell
+      - run:
+          name: parch suppressions
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py suppressions --language powershell
+      - run:
+          name: parch settings
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py settings --language powershell
+

@@ -22,19 +22,22 @@ OWN = {
     "python": (
         "tests/test_ci_python.py",
         "tests/projects/python_shop/*",
-        "plugin/templates/ci/python.yml",
+        "plugin/templates/ci/circleci/python.yml",
     ),
     "typescript": (
         "tests/test_ci_typescript.py",
         "tests/projects/ts_shop/*",
-        "plugin/templates/ci/typescript.yml",
+        "plugin/templates/ci/circleci/typescript.yml",
     ),
     "csharp": (
         "tests/test_ci_csharp.py",
         "tests/projects/cs_shop/*",
-        "plugin/templates/ci/csharp.yml",
+        "plugin/templates/ci/circleci/csharp.yml",
     ),
-    "powershell": ("tests/test_ci_powershell.py", "plugin/templates/ci/powershell.yml"),
+    "powershell": (
+        "tests/test_ci_powershell.py",
+        "plugin/templates/ci/circleci/powershell.yml",
+    ),
 }
 # Правки только текста идут без тестов: в CI проверяется только standard. Тесты не проверяют
 # смысл текста; для защищённых текстовых файлов проверка это «сливай» владельца (ADR-0003).

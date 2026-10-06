@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """CI для TypeScript: тестовый проект с намеренными нарушениями и «храповик».
 
 Каждое нарушение (дубль, мёртвый код, запрещённая зависимость, удалённый тест, пакет не из
@@ -19,7 +20,7 @@ from conftest import INIT_ANSWERS, TS_SHOP, link_directory, unlink_directory
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
-WORKFLOW = REPO / "plugin" / "templates" / "ci" / "typescript.yml"
+WORKFLOW = REPO / "plugin" / "templates" / "ci" / "circleci" / "typescript.yml"
 REPORT = "test-report.json"
 NODE = shutil.which("node")
 NEEDS_REPORT = {"tests", "skips", "baseline", "coverage"}
@@ -630,7 +631,10 @@ def test_workflow_forms_the_report_itself_and_pins_versions() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "npm test" in text  # скрипт test формирует test-report.json (reporter=json)
     assert "--report test-report.json" in text
-    assert 'node-version: "22.14.0"' in text  # Node зафиксирован точной версией
+    head = (WORKFLOW.parent / "head.yml").read_text(encoding="utf-8")
+    assert (
+        "- install-node" in text and 'NODE_VERSION: "22.14.0"' in head
+    )  # Node зафиксирован точной версией
     assert "npm ci" in text and "npm install" not in text  # установка строго по lock-файлу
     assert "@latest" not in text and ": latest" not in text
     for check in ALL_CHECKS:
@@ -687,14 +691,19 @@ def test_init_creates_a_typescript_project_with_pinned_tools(generated: TsShop) 
     for rel in (
         "package.json", "package-lock.json", "tsconfig.json", "biome.json", "vitest.config.ts",
         "knip.json", ".dependency-cruiser.json", "tests/smoke.test.ts", "state/baseline.json",
-        ".github/parch/parch_ci.py", ".github/workflows/ci.yml", "docs/CONSTITUTION.md",
+        ".github/parch/parch_ci.py", ".circleci/config.yml", "docs/CONSTITUTION.md",
     ):  # fmt: skip
         assert (generated.root / rel).is_file(), rel
+    assert not (
+        generated.root / ".github" / "workflows"
+    ).exists()  # GitHub Actions в шаблонах нет (ADR-0022)
     manifest = json.loads(generated.read("package.json"))
     sample = json.loads((TS_SHOP / "package.json").read_text(encoding="utf-8"))
     assert manifest["devDependencies"] == sample["devDependencies"]  # те же точные версии
     assert manifest["scripts"] == sample["scripts"]
-    assert generated.read(".github/workflows/ci.yml") == WORKFLOW.read_text(encoding="utf-8")
+    assert WORKFLOW.read_text(encoding="utf-8").rstrip("\n") in generated.read(
+        ".circleci/config.yml"
+    )
     constitution = generated.read("docs/CONSTITUTION.md")
     assert "- npm: @biomejs/biome, @types/node, @vitest/coverage-v8" in constitution
     assert "TypeScript 5.9" in constitution
@@ -737,8 +746,14 @@ def test_generated_typescript_ci_catches_violations(generated: TsShop) -> None:
 
 def test_python_and_typescript_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "typescript"])
-    workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-typescript.yml", "ci.yml", "state.yml"]
+    """Имя прежнее (храповик): теперь один `.circleci/config.yml` с заданием на каждый язык и итоговым `check`."""
+    assert not (tmp_path / "both" / ".github" / "workflows").exists()
+    config = (tmp_path / "both" / ".circleci" / "config.yml").read_text(encoding="utf-8")
+    assert "  check-python:\n" in config and "  check-typescript:\n" in config
+    assert (
+        "      - check:\n          requires:\n            - check-python\n            - check-typescript\n"
+        in config
+    )
     baseline = json.loads((tmp_path / "both" / "state" / "baseline.json").read_text("utf-8"))
     assert set(baseline["tests"]) == {"python", "typescript"}
     assert set(baseline["config"]) == {"python", "typescript"}

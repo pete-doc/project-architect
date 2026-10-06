@@ -20,6 +20,7 @@
   skips         пропущенные тесты (skip, xfail, Ignore, -Skip) считаются удалёнными
   suppressions  подавляющие комментарии (type: ignore, noqa, ts-ignore): рост запрещён
   settings      настройки проверок (ruff, pyright, tsconfig, eslint...) не менялись
+  basis         «Основания» из коммитов ветки (git log main..HEAD): печатается для описания PR
   baseline      обновить baseline (--update); каждое ухудшение требует флага владельца:
                 --accept-new, --accept-removed, --accept-skips,
                 --accept-suppressions, --accept-config
@@ -3381,6 +3382,26 @@ def circleci_problems(path: Path, adr_text: str) -> list[str]:
                 "no_output_timeout и команду timeout вокруг тестов. У CircleCI нет "
                 "timeout-minutes на задание, зависший тест идёт до часа."
             )
+    # Итоговый `check` (ADR-0022): единственная обязательная проверка main,
+    # он обязан требовать все языковые задания.
+    languages = "python|typescript|csharp|powershell"  # `check-text` продукта не языковое
+    defined = sorted(set(re.findall(rf"^  (check-(?:{languages})):[ \t]*$", text, re.M)))
+    if defined:
+        found = re.search(
+            r"^[ \t]+- check:\n[ \t]+requires:\n((?:[ \t]+- [\w-]+\n)+)", text + "\n", re.M
+        )
+        required = re.findall(r"- ([\w-]+)", found[1]) if found else []
+        missing = [name for name in defined if name not in required]
+        if found is None:
+            problems.append(
+                f"{rel}: нет итогового задания check с requires на {', '.join(defined)}: "
+                "обязательная проверка main (ci/circleci: check) не зависела бы от них (ADR-0022)."
+            )
+        elif missing:
+            problems.append(
+                f"{rel}: итоговый check не требует {', '.join(missing)}: красный язык не остановит "
+                "слияние (в защите main обязателен только check). Добавьте задание в requires."
+            )
     return problems
 
 
@@ -3702,11 +3723,23 @@ def check_standard(
         managed = parch_standard.is_managed(project)
         extra = incident_problems_by_file(project, block_ids_of(project)) if managed else None
         pr_body = os.environ.get("PARCH_PR_BODY")
+        # CircleCI (ADR-0022): описания PR там нет, «Основания» берутся из сообщений коммитов ветки
+        # (`git log <PARCH_BASE_REF>..HEAD`); у проектов на Actions по-прежнему PARCH_PR_BODY.
+        base_ref = os.environ.get("PARCH_BASE_REF")
+        commits = (
+            parch_standard.commit_messages(project, base_ref)
+            if base_ref and pr_body is None
+            else None
+        )
         composition_problems, composition_notes = parch_standard.check(
-            project, update, accept_new, extra, pr_body
+            project, update, accept_new, extra, pr_body, commits
         )
         problems.extend(composition_problems)
-        if pr_body is None and os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+        if (
+            pr_body is None
+            and commits is None
+            and os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
+        ):
             composition_notes.append(
                 "Предупреждение: PARCH_PR_BODY не передан, раздел «Основания» не проверен: "
                 "обновите шаблон CI проекта (шаг standard с env PARCH_PR_BODY)."
@@ -3779,7 +3812,24 @@ def check_libraries(project: Path, language: str) -> Result:
     return result
 
 
+def check_basis(project: Path, language: str) -> Result:
+    """«Основания» из коммитов ветки: печатается для описания PR (пишется один раз, в коммите)."""
+    import parch_standard  # лежит рядом (.github/parch/), в проект копируется вместе с этим файлом
+
+    base_ref = os.environ.get("PARCH_BASE_REF", "origin/main")
+    messages, error = parch_standard.commit_messages(project, base_ref)
+    problem = parch_standard.commits_basis_problem(messages, error)
+    text = parch_standard.commits_basis_text(messages) if problem is None else None
+    result = Result()
+    if text is None:
+        result.fail(problem or "в коммитах ветки нет раздела «Основания»")
+    else:
+        result.note(text.rstrip("\n"))
+    return result
+
+
 CHECKS: dict[str, Callable[[Path, str], Result]] = {
+    "basis": check_basis,
     "tests": check_tests,
     "catalog": check_catalog,
     "libraries": check_libraries,

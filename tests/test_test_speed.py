@@ -281,8 +281,10 @@ def test_product_ci_runs_the_full_mode_and_uploads_the_report() -> None:
 
 
 def test_the_python_template_runs_the_tests_once_and_reuses_the_report() -> None:
-    template = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
-    assert "pytest -v --junitxml=test-report.xml" in template
+    template = (REPO / "plugin" / "templates" / "ci" / "circleci" / "python.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "timeout 600 pytest -v --junitxml=test-report.xml" in template
     assert "parch_ci.py tests --report test-report.xml" in template
     assert "parch_ci.py skips --report test-report.xml" in template
 

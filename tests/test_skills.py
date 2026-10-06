@@ -76,7 +76,7 @@ def test_adr_template_and_state_templates_exist() -> None:
     assert "- Статус: proposed" in adr_template
     assert json.loads((TEMPLATES / "state" / "features.json").read_text("utf-8"))["features"] == []
     assert "Как пользоваться" in (TEMPLATES / "state" / "STATUS.md").read_text(encoding="utf-8")
-    assert (TEMPLATES / "ci" / "python.yml").is_file()
+    assert (TEMPLATES / "ci" / "circleci" / "python.yml").is_file()  # шаблон CircleCI (ADR-0022)
 
 
 SKILL_NAMES = ["init-project", "adr", "doctor"]
@@ -106,7 +106,7 @@ EXPECTED_FILES = [
     "docs/adr/README.md",
     "state/features.json",
     "state/STATUS.md",
-    ".github/workflows/ci.yml",
+    ".circleci/config.yml",
     ".claude/settings.json",
     ".gitignore",
     "pyproject.toml",
@@ -144,20 +144,23 @@ def test_init_is_idempotent_and_never_overwrites(tmp_path: Path) -> None:
 
 
 def test_init_keeps_existing_ci_and_merges_permissions(tmp_path: Path) -> None:
-    (tmp_path / ".github" / "workflows").mkdir(parents=True)
-    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: mine\n", encoding="utf-8")
+    (tmp_path / ".circleci").mkdir(parents=True)
+    (tmp_path / ".circleci" / "config.yml").write_text("version: 2.1 # mine\n", encoding="utf-8")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text(
         json.dumps({"model": "opus", "permissions": {"deny": ["Bash(curl *)"]}}), encoding="utf-8"
     )
     result = init(tmp_path)
-    assert (tmp_path / ".github" / "workflows" / "ci.yml").read_text() == "name: mine\n"
-    assert ".github/workflows/ci.yml" in result["skipped_existing"]
+    assert (tmp_path / ".circleci" / "config.yml").read_text() == "version: 2.1 # mine\n"
+    assert ".circleci/config.yml" in result["skipped_existing"]
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert settings["model"] == "opus"
     assert "Bash(curl *)" in settings["permissions"]["deny"]
     assert "Read(.env)" in settings["permissions"]["deny"]
     assert "Edit(/.github/**)" in settings["permissions"]["ask"]
+    assert (
+        "Edit(/.circleci/**)" in settings["permissions"]["ask"]
+    )  # CI проекта на CircleCI (ADR-0022)
 
 
 def test_every_supported_language_has_a_ci_template() -> None:
@@ -192,11 +195,12 @@ def test_init_rejects_bad_answers(tmp_path: Path, bad: dict[str, Any]) -> None:
 
 
 def test_generated_python_project_passes_its_own_ci(tmp_path: Path) -> None:
-    """«CI в пустом проекте сразу зелёный»: те же команды, что в шаблоне .github/workflows."""
+    """«CI в пустом проекте сразу зелёный»: те же команды, что в шаблоне .circleci/config.yml."""
     init(tmp_path)
-    ci = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    for command in ("ruff check .", "ruff format --check .", "pyright", "pytest -v"):
-        assert f"run: {command}" in ci
+    ci = (tmp_path / ".circleci" / "config.yml").read_text(encoding="utf-8")
+    for command in ("ruff check .", "ruff format --check .", "pyright"):
+        assert f"command: {command}" in ci
+    assert "timeout 600 pytest -v --junitxml=test-report.xml" in ci  # тесты под пределом времени
     for argv in (
         ["ruff", "check", "."],
         ["ruff", "format", "--check", "."],
@@ -228,7 +232,7 @@ def test_initialized_project_is_protected_by_the_hooks(tmp_path: Path) -> None:
     assert run_hook("guard_paths.py", file_call("Write", tmp_path / "notes.md"), tmp_path).blocked
     tests_edit = file_call("Write", tmp_path / "tests" / "test_x.py")
     assert run_hook("guard_paths.py", tests_edit, tmp_path).blocked
-    ci = file_call("Edit", tmp_path / ".github" / "workflows" / "ci.yml")
+    ci = file_call("Edit", tmp_path / ".circleci" / "config.yml")
     ask = run_hook("guard_paths.py", ci, tmp_path)
     assert json.loads(ask.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert run_hook("guard_packages.py", bash("pip install flask"), tmp_path).blocked
@@ -454,7 +458,7 @@ def test_skills_work_from_an_installed_copy_of_the_plugin_only(tmp_path: Path) -
     code, result, error = run_script(script, request)
     assert code == 0, error
     assert (project / "docs" / "CONSTITUTION.md").is_file()
-    assert (project / ".github" / "workflows" / "ci.yml").is_file()
+    assert (project / ".circleci" / "config.yml").is_file()
     assert not (tmp_path / "installed" / "templates").exists()
     assert result["created"]
 
@@ -485,7 +489,7 @@ def test_generated_project_passes_the_parch_checks_and_ships_the_script(tmp_path
     for check in (*checks, "dead-code", "architecture", "coverage"):
         done = parch_check(tmp_path, check)
         assert done.returncode == 0, f"{check}: {done.stdout}{done.stderr}"
-    workflow = (tmp_path / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    workflow = (tmp_path / ".circleci" / "config.yml").read_text(encoding="utf-8")
     for check in (*checks, "architecture", "dead-code", "duplicates", "coverage"):
         assert f"parch_ci.py {check}" in workflow
 

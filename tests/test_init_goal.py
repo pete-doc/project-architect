@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """/parch:init-project: цель продукта (GOAL.md), целевая ОС, фраза про бюджет Actions.
 
 Разговор с владельцем доходит до проекта через ответы в JSON; без цели и без целевой ОС подключение
@@ -166,20 +167,33 @@ def test_normalize_target_os_unit() -> None:
         module.normalize_target_os("beos")
 
 
-# ---------- фраза про бюджет на GitHub Actions ----------
+# ---------- инструкция владельцу про CircleCI (пункты В1–В5, ADR-0022) ----------
+
+OWNER_STEPS = (
+    "В1. Доступ GitHub App CircleCI",
+    "В2. Создать проект в CircleCI",
+    "В3. Включить автоотмену",
+    "В4. После первого зелёного `check` включить защиту main",
+    "В5. Ключ записи табло, только после В4",
+)
 
 
 def test_the_budget_phrase_is_always_in_the_report(tmp_path: Path) -> None:
+    """Имя прежнее (храповик): раньше здесь проверялась фраза про бюджет Actions, теперь инструкция В1–В5."""
     notes = init_ok(tmp_path)["notes"]
-    phrase = next(n for n in notes if n.startswith("Бюджет на GitHub Actions"))
-    assert "https://github.com/settings/billing/budgets" in phrase
-    assert "не нулевой" in phrase and "Нулевой бюджет останавливает CI" in phrase
-    assert phrase.count(". ") <= 2  # одна фраза владельцу, а не лекция
+    phrase = next(n for n in notes if n.startswith("CI работает на CircleCI"))
+    positions = [phrase.index(step) for step in OWNER_STEPS]
+    assert positions == sorted(positions)  # строгий порядок: ключ записи после защиты main
+    assert "30 000 кредитов в месяц" in phrase and "ci/circleci: check" in phrase
+    assert "Actions" not in phrase and "PARCH_GITHUB_READ_TOKEN" not in phrase  # токена чтения нет
+    assert "Никакие токены для проверки не нужны" in phrase
 
 
 def test_the_budget_phrase_is_given_to_the_owner_by_the_skill() -> None:
+    """Имя прежнее (храповик): навык передаёт владельцу инструкцию В1–В5 дословно и в том же порядке."""
     skill = SKILL.read_text(encoding="utf-8")
-    assert "бюджет на GitHub Actions" in skill and "дословно" in skill
+    assert "инструкцию про CircleCI" in skill and "дословно" in skill and "В1–В5" in skill
+    assert "бюджет на GitHub Actions" not in skill
 
 
 # ---------- разговор в навыке ----------

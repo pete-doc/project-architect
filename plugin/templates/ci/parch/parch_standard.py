@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -244,16 +245,35 @@ def cyclic_groups(graph: dict[str, list[str]]) -> list[list[str]]:
     return sorted(groups)
 
 
-def basis_problem(body: str) -> str | None:
-    """Раздел «Основания» в описании PR: есть, не пуст после комментариев шаблона, назван источник."""
+BASIS_LABEL = re.compile(rf"^{BASIS_HEADING}:[ \t]*(.*)$", re.IGNORECASE)
+BASIS_FILLER = re.compile(
+    r"^[\s\-–—_*•.]*$"
+)  # строки из одних прочерков и пунктуации текстом не считаются
+
+
+def basis_section_lines(body: str) -> list[str] | None:
+    """Строки раздела «Основания» в тексте (None: раздела нет)."""
     lines = BASIS_COMMENT.sub("", body).splitlines()
     section: list[str] | None = None
     level = 0
+    plain = False  # раздел начат строкой «Основания:» без решётки (git вырезает строки с # в сообщении из редактора)
     fenced = False
     for line in lines:
         if line.lstrip().startswith("```"):
             fenced = not fenced  # `#` внутри блока кода не заголовок
         heading = None if fenced else re.match(r"^(#{1,6})\s+(.*)$", line)
+        if section is None and not fenced and (label := BASIS_LABEL.match(line)):
+            section, plain = [label[1]] if label[1].strip() else [], True
+            continue
+        if plain and section is not None:
+            blank = not line.strip()
+            if heading or (blank and section and not section[-1].strip()):
+                break  # без решётки раздел кончается заголовком с # или двумя пустыми строками подряд
+            if blank and not section:
+                section.append(
+                    line
+                )  # пустая строка сразу после «Основания:» (первая из возможных двух)
+                continue
         if heading:
             if section is not None and len(heading[1]) <= level:
                 break  # раздел кончается заголовком того же или более высокого уровня
@@ -262,17 +282,69 @@ def basis_problem(body: str) -> str | None:
                 continue
         if section is not None and not heading:  # сами подзаголовки текстом не считаются
             section.append(line)
+    return section
+
+
+def basis_problem(body: str, where: str = "в описании PR") -> str | None:
+    """Раздел «Основания» в тексте (описание PR или сообщение коммита): есть, не пуст, назван источник."""
+    section = basis_section_lines(body)
     if section is None:
-        return f"в описании PR нет раздела «{BASIS_HEADING}» (образец: шаблон .github/pull_request_template.md)"
-    text = "\n".join(section).strip()
+        return f"{where} нет раздела «{BASIS_HEADING}» (образец: шаблон .github/pull_request_template.md)"
+    text = "\n".join(line for line in section if not BASIS_FILLER.match(line)).strip()
     if not text:
-        return f"раздел «{BASIS_HEADING}» в описании PR пуст: протокол исполнителя не пройден"
+        return f"раздел «{BASIS_HEADING}» {where} пуст или из одних прочерков: протокол исполнителя не пройден"
     if not BASIS_SOURCE.search(text):
         return (
-            f"раздел «{BASIS_HEADING}» не называет источник (каталог, реестр модулей, ADR, git log, "
+            f"раздел «{BASIS_HEADING}» {where} не называет источник (каталог, реестр модулей, ADR, git log, "
             "поиск по коду): напишите, что искали и что нашли"
         )
     return None
+
+
+COMMITS_WHERE = "в сообщениях коммитов ветки"
+
+
+def commit_messages(project: Path, base_ref: str) -> tuple[list[str], str | None]:
+    """Сообщения коммитов ветки относительно основной (`git log base..HEAD`) и пояснение, если история недоступна."""
+    try:
+        done = subprocess.run(
+            ["git", "log", "--format=%B%x00", f"{base_ref}..HEAD"],
+            cwd=project, capture_output=True, text=True, encoding="utf-8", check=False, timeout=120,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as error:
+        return [], f"не удалось запустить git для истории ветки: {error}"
+    if done.returncode != 0:
+        reason = (done.stderr or done.stdout).strip().splitlines()[:1]
+        return [], (
+            f"история ветки от {base_ref} недоступна ({reason[0] if reason else 'git log завершился ошибкой'}): "
+            f"шаг fetch-main должен подтянуть {base_ref} и всю историю ветки"
+        )
+    return [m.strip() for m in done.stdout.split("\x00") if m.strip()], None
+
+
+def commits_basis_text(messages: list[str]) -> str | None:
+    """Раздел «Основания» из последнего коммита ветки, где он корректен (для описания PR: пишется один раз, в коммите)."""
+    for message in reversed(messages):
+        if basis_problem(message, COMMITS_WHERE) is None:
+            section = basis_section_lines(message) or []
+            return f"## {BASIS_HEADING}\n\n" + "\n".join(section).strip() + "\n"
+    return None
+
+
+def commits_basis_problem(messages: list[str], error: str | None = None) -> str | None:
+    """«Основания» хотя бы в одном коммите ветки (не в каждом); без новых коммитов или без истории проверка красная."""
+    if error is not None:
+        return error
+    if not messages:
+        return (
+            "в ветке нет новых коммитов относительно основной: раздел «Основания» писать негде "
+            "(он берётся из сообщений коммитов, `git log main..HEAD`)"
+        )
+    problems = [basis_problem(message, COMMITS_WHERE) for message in messages]
+    if any(problem is None for problem in problems):
+        return None
+    last = next(p for p in reversed(problems) if p is not None)
+    return f"ни в одном из {len(messages)} коммитов ветки нет корректного раздела «{BASIS_HEADING}»; последний коммит: {last}"
 
 
 def read_debt(project: Path) -> set[str] | None:
@@ -311,11 +383,13 @@ def check(
     accept_new: bool = False,
     extra: dict[str, str] | None = None,
     pr_body: str | None = None,
+    commits: tuple[list[str], str | None] | None = None,
 ) -> tuple[list[str], list[str]]:
     """(провалы, пометки): правила состава проекта в трёх режимах: новый проект, существующий без долга, с храповиком.
 
     `extra` — нарушения, которые находит вызывающий (отчёты об инцидентах, ключ `incident:<имя>`): они идут
-    через тот же долг. `pr_body` — описание PR (None: проверка «Оснований» не идёт, например при локальном запуске).
+    через тот же долг. `pr_body` — описание PR (старые проекты на Actions); `commits` — (сообщения коммитов ветки, пояснение
+    об ошибке истории) для проектов на CircleCI (ADR-0022). Оба None: проверка «Оснований» не идёт (локальный запуск).
     """
     if not is_managed(project):
         return [], [
@@ -332,6 +406,8 @@ def check(
     problems: list[str] = []
     notes: list[str] = []
     basis = basis_problem(pr_body) if pr_body is not None else None
+    if commits is not None:
+        basis = commits_basis_problem(*commits)
     if basis is not None:
         if debt is None and existing_project(project):
             notes.append(f"Предупреждение (существующий проект, долг не записан): {basis}.")

@@ -68,8 +68,8 @@ def test_typescript_versions_match_the_sample_project_and_the_workflow() -> None
     manifest = json.loads((TS_SHOP / "package.json").read_text(encoding="utf-8"))
     for name, version in manifest["devDependencies"].items():
         assert f"{name} {version}" in text, name
-    workflow = (TEMPLATES / "ci" / "typescript.yml").read_text(encoding="utf-8")
-    node = re.search(r'node-version: "([\d.]+)"', workflow)
+    workflow = (TEMPLATES / "ci" / "circleci" / "head.yml").read_text(encoding="utf-8")
+    node = re.search(r'NODE_VERSION: "([\d.]+)"', workflow)  # Node ставит общий шаг install-node
     assert node is not None and f"Node {node.group(1)};" in text
 
 
@@ -88,7 +88,7 @@ def test_csharp_versions_match_the_sample_project() -> None:
 
 def test_powershell_and_jscpd_versions_match_the_workflows_and_the_script() -> None:
     text = section(["powershell"])
-    workflow = (TEMPLATES / "ci" / "powershell.yml").read_text(encoding="utf-8")
+    workflow = (TEMPLATES / "ci" / "circleci" / "powershell.yml").read_text(encoding="utf-8")
     pinned = re.search(r"-RequiredVersion ([\d.]+)", workflow)
     assert pinned is not None
     assert f"PowerShell 7 (pwsh); PSScriptAnalyzer {pinned.group(1)}" in text

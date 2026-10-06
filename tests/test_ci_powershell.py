@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Облегчённый CI для PowerShell (ADR-0010): PSScriptAnalyzer, «тонкость», подавления, настройки.
 
 PowerShell в проектах только запускает программы. Здесь на каждое правило есть заведомо плохой
@@ -16,7 +17,7 @@ from conftest import INIT_ANSWERS
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
-WORKFLOW = REPO / "plugin" / "templates" / "ci" / "powershell.yml"
+WORKFLOW = REPO / "plugin" / "templates" / "ci" / "circleci" / "powershell.yml"
 TEMPLATE_SETTINGS = REPO / "plugin" / "templates" / "powershell" / "PSScriptAnalyzerSettings.psd1"
 INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "reports"
@@ -584,7 +585,7 @@ def test_ps_lexer_can_keep_strings_for_counting_lines() -> None:
 
 def test_workflow_pins_the_analyzer_and_runs_on_ubuntu() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "ubuntu-latest" in text and "windows-latest" not in text
+    assert "cimg/python" in text and "windows-latest" not in text  # Linux в Docker (ADR-0022)
     assert f"-RequiredVersion {PSA_VERSION}" in text
     for check in ("psscriptanalyzer", "thin", "suppressions", "settings"):
         assert f"parch_ci.py {check} --language powershell" in text
@@ -621,12 +622,13 @@ def test_init_creates_a_powershell_project_with_thresholds(tmp_path: Path) -> No
     root = tmp_path / "ps"
     for rel in (
         "PSScriptAnalyzerSettings.psd1", "state/baseline.json", ".github/parch/parch_ci.py",
-        ".github/workflows/ci.yml", "docs/CONSTITUTION.md",
+        ".circleci/config.yml", "docs/CONSTITUTION.md",
     ):  # fmt: skip
         assert (root / rel).is_file(), rel
-    assert (root / ".github" / "workflows" / "ci.yml").read_text("utf-8") == WORKFLOW.read_text(
-        "utf-8"
-    )
+    assert not (root / ".github" / "workflows").exists()  # GitHub Actions в шаблонах нет (ADR-0022)
+    assert WORKFLOW.read_text("utf-8").rstrip("\n") in (
+        root / ".circleci" / "config.yml"
+    ).read_text("utf-8")
     constitution = (root / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert "## Пороги тонкости PowerShell" in constitution
     for line in (
@@ -654,8 +656,14 @@ def test_generated_powershell_project_is_green_and_catches_a_fat_script(tmp_path
 
 def test_python_and_powershell_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "powershell"])
-    workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-powershell.yml", "ci.yml", "state.yml"]
+    """Имя прежнее (храповик): теперь один `.circleci/config.yml` с заданием на каждый язык и итоговым `check`."""
+    assert not (tmp_path / "both" / ".github" / "workflows").exists()
+    config = (tmp_path / "both" / ".circleci" / "config.yml").read_text(encoding="utf-8")
+    assert "  check-python:\n" in config and "  check-powershell:\n" in config
+    assert (
+        "      - check:\n          requires:\n            - check-python\n            - check-powershell\n"
+        in config
+    )
     constitution = (tmp_path / "both" / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
     assert constitution.count("## Пороги тонкости PowerShell") == 1
 

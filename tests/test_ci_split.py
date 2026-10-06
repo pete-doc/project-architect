@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Разделение CI (ADR-0013): быстрая часть на отправку, полный прогон перед слиянием.
 
 Тяжёлые тесты языка идут в урезанном прогоне только при изменении файлов этого языка. Право на
@@ -69,12 +70,14 @@ def test_files_that_set_the_rules_of_checks_in_docs_and_state_count_as_code(rule
     [
         ("tests/test_ci_csharp.py", "not slow or lang_csharp", "false", "true", "false"),
         ("tests/projects/cs_shop/global.json", "not slow or lang_csharp", "false", "true", "false"),
-        (
-            "plugin/templates/ci/typescript.yml",
+        pytest.param(
+            "plugin/templates/ci/circleci/typescript.yml",
             "not slow or lang_typescript",
             "true",
             "false",
             "false",
+            # id прежний (храповик не даёт переименовать тест): шаблон TypeScript теперь лежит в circleci/ (ADR-0022)
+            id="plugin/templates/ci/typescript.yml-not slow or lang_typescript-true-false-false",
         ),
         ("tests/test_ci_powershell.py", "not slow or lang_powershell", "false", "false", "true"),
         ("tests/test_ci_python.py", "not slow or lang_python", "true", "false", "false"),

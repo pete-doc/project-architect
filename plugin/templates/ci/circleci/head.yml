@@ -1,0 +1,60 @@
+# CI проекта на CircleCI (ADR-0022; GitHub Actions в шаблонах продукта больше нет).
+# Файл собран /parch:init-project из шаблонов plugin/templates/ci/circleci/: общая часть, по заданию на каждый язык
+# проекта (check-<язык>) и итоговое задание check. В защите ветки main обязательна одна проверка `ci/circleci: check`:
+# она появляется, только когда зелёные все языковые задания (requires в workflow).
+#
+# Только Linux (Docker), класс не выше medium: Windows и macOS добавляются отдельным ADR с оценкой кредитов
+# (Windows 40 кредитов в минуту против 10 у medium). Расписаний нет, запуск на каждую отправку в ветку, кроме main и status.
+# Предел времени: у CircleCI нет timeout-minutes на задание, поэтому у КАЖДОГО шага run стоит no_output_timeout, а у тестов
+# ещё и timeout. Единственный жёсткий предел плана Free 1 час на задание (600 кредитов за зависшее задание medium).
+# Отмена устаревших прогонов настраивается в проекте CircleCI (Project Settings -> Advanced -> Auto-cancel
+# Redundant Workflows), из конфига её не видно.
+version: 2.1
+
+commands:
+  fetch-main:
+    description: "Ветка main и вся история ветки (нужны проверке «Основания», она читает сообщения коммитов: git log main..HEAD)"
+    steps:
+      - run:
+          name: Подтянуть main и историю ветки
+          no_output_timeout: 5m
+          command: |
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              git fetch --no-tags --unshallow origin || { echo "ОШИБКА: не удалось докачать историю ветки (git fetch --unshallow): проверка «Основания» читает git log main..HEAD и на обрезанной истории даст неверный результат"; exit 1; }
+            fi
+            git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main' || { echo "ОШИБКА: не удалось подтянуть ветку main (git fetch origin main): без неё нельзя прочитать git log main..HEAD"; exit 1; }
+
+  install-node:
+    description: "Node точной версии (22.14.0): нужен jscpd (npx), pyright и проверкам TypeScript; образ cimg/python без Node, чтобы версия не плавала"
+    steps:
+      - restore_cache:
+          keys:
+            - node-v1-22.14.0
+      - run:
+          name: Node 22.14.0
+          no_output_timeout: 10m
+          environment:
+            NODE_VERSION: "22.14.0"
+          command: |
+            if [ ! -x "$HOME/node/bin/node" ]; then
+              curl -sSfL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+              mkdir -p "$HOME/node" && tar -xJf /tmp/node.tar.xz -C "$HOME/node" --strip-components=1
+            fi
+            echo 'export PATH="$HOME/node/bin:$PATH"' >> "$BASH_ENV"
+      - save_cache:
+          key: node-v1-22.14.0
+          paths:
+            - ~/node
+
+jobs:
+  # Итоговая проверка: требует выполнения всех языковых заданий (requires в workflow), сама занимает секунды.
+  check:
+    docker:
+      - image: cimg/base:stable
+    resource_class: small # 5 кредитов в минуту
+    steps:
+      - run:
+          name: Все языковые проверки прошли
+          no_output_timeout: 1m
+          command: echo "Все языковые задания зелёные"
+
