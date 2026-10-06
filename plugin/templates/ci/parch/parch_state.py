@@ -77,7 +77,10 @@ def verdict(project: Path, report: Path | None, exit_code: int) -> Verdict:
         return Verdict(NO_TESTS, False)
     if report is None or not report.exists():
         if not exist:
-            return Verdict(NO_TESTS, False)
+            if exit_code in (0, PYTEST_NO_TESTS):
+                return Verdict(NO_TESTS, False)
+            # тесты сломались до отчёта (ошибка импорта, ранний сбой), baseline пуст: сбой не прячем
+            return Verdict(f"тесты завершились с кодом {exit_code}, отчёта нет", True)
         note = "отчёта тестов нет при существующих тестах: тесты не запустились"
         return Verdict(note, True)
     try:

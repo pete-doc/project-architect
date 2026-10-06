@@ -68,6 +68,10 @@ def test_a_project_without_tests_is_green_and_the_board_says_so(tmp_path: Path) 
         result = state.verdict(root, given, 5)
         assert (result.note, result.red) == ("в проекте нет тестов", False)
     assert state.verdict(root, None, 0).red is False  # нет отчёта и нет тестов: тоже не красное
+    # плохой пример: тесты сломались до отчёта (ошибка импорта, ранний сбой), а baseline ещё пуст: это не «нет тестов»
+    for code in (1, 2, 4, 124):
+        broken = state.verdict(root, None, code)
+        assert broken.red and f"кодом {code}" in broken.note, code
 
 
 def test_no_report_while_tests_exist_is_red(tmp_path: Path) -> None:
