@@ -343,6 +343,23 @@
       "status": "planned",
       "passes": false,
       "incidents": 0
+    },
+    {
+      "id": "F20",
+      "title": "Сквозной прогон на новом проекте",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F3",
+        "F11",
+        "F16"
+      ],
+      "spec": "docs/specs/F20-end-to-end.md",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
     }
   ]
 }
