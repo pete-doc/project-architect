@@ -12,8 +12,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SETUP_RAW = (REPO / ".circleci" / "config.yml").read_text(encoding="utf-8")
@@ -233,9 +236,10 @@ def test_a_text_only_pr_runs_only_the_small_standard_job() -> None:
 # ---------- скрипт состава PR выполняется по-настоящему ----------
 
 
-def scope_script() -> str:
-    lines = SETUP_RAW.splitlines()
-    start = next(i for i, line in enumerate(lines) if "name: Состав PR" in line)
+def scope_script(raw: str = SETUP_RAW, step: str = "Состав PR") -> str:
+    """Текст команды шага конфига (по имени шага), готовый к запуску в bash."""
+    lines = raw.splitlines()
+    start = next(i for i, line in enumerate(lines) if f"name: {step}" in line)
     begin = next(i for i in range(start, len(lines)) if lines[i].strip() == "command: |") + 1
     body: list[str] = []
     for line in lines[begin:]:
@@ -286,6 +290,91 @@ def run_scope(tmp_path: Path, changed: list[str], with_origin: bool = True) -> d
     )  # fmt: skip
     assert done.returncode == 0, done.stderr + done.stdout
     return json.loads((out / "params.json").read_text(encoding="utf-8"))
+
+
+def run_repo_step(tmp_path: Path, origin: str) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Шаг state «Адрес репозитория на GitHub» в временном репозитории с заданным origin."""
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "remote", "add", "origin", origin)
+    env_file = tmp_path / "bash_env"
+    script = tmp_path / "repo.sh"
+    state_steps = block(block(CONTINUE_RAW, "jobs:"), "  state:")
+    script.write_text(
+        scope_script(state_steps, "Адрес репозитория на GitHub (по origin)"),
+        encoding="utf-8",
+        newline="\n",
+    )
+    bash = shutil.which("bash")
+    assert bash, "нужен bash"
+    done = subprocess.run(
+        [bash, "repo.sh"], cwd=tmp_path, capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "BASH_ENV": env_file.as_posix(), "CIRCLE_PROJECT_USERNAME": "Peteru"}, timeout=60,
+    )  # fmt: skip
+    return done, env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://github.com/pete-doc/project-architect.git",
+        "https://github.com/pete-doc/project-architect",
+        "https://github.com/pete-doc/project-architect.git/",
+        "https://github.com/pete-doc/project-architect/",
+        "git@github.com:pete-doc/project-architect.git",
+        "https://x-access-token:secret@github.com/pete-doc/project-architect.git",
+        "ssh://git@github.com/pete-doc/project-architect.git",
+        "ssh://git@github.com:22/pete-doc/project-architect.git",
+        "http://github.com/pete-doc/project-architect.git",
+    ],
+)
+def test_the_state_job_finds_the_github_repository_by_origin_not_by_circleci_names(
+    tmp_path: Path, origin: str
+) -> None:
+    # CIRCLE_PROJECT_USERNAME/REPONAME в CircleCI это имена проекта в CircleCI (Peteru/ProjectArchitect),
+    # а не адрес репозитория: первый прогон state упал на «repository not found»
+    done, env_text = run_repo_step(tmp_path, origin)
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert 'export GITHUB_REPO="pete-doc/project-architect"' in env_text
+    assert "secret" not in done.stdout + done.stderr  # токен из origin никогда не печатается
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://user:secret@example.com/owner/repo.git",  # другой хост
+        "https://user:secret@example.com/repo.git",  # другой хост, два сегмента
+        "https://user:secret@github.com/onlyowner",  # нет имени репозитория
+        "https://user:secret@github.com/a/b/c.git",  # лишний сегмент
+        "git@gitlab.com:owner/repo.git",
+        "https://user:secret@notgithub.com/owner/repo",
+    ],
+)
+def test_the_state_job_stops_on_an_origin_it_does_not_recognise_and_never_shows_its_secret(
+    tmp_path: Path, origin: str
+) -> None:
+    done, env_text = run_repo_step(tmp_path, origin)
+    assert done.returncode != 0 and "GITHUB_REPO" not in env_text
+    assert "secret" not in done.stdout + done.stderr and "example.com" not in done.stdout
+
+
+def test_state_inputs_reports_a_missing_or_malformed_github_repo(tmp_path: Path) -> None:
+    for value in ("", "onlyowner", "a/b/c"):
+        out = tmp_path / f"prs-{len(value)}.json"
+        done = subprocess.run(
+            [sys.executable, str(REPO / ".circleci" / "state_inputs.py"), str(out)],
+            env={**os.environ, "GITHUB_REPO": value, "PYTHONIOENCODING": "utf-8"},
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )  # fmt: skip
+        assert done.returncode == 0 and "GITHUB_REPO не задан" in done.stderr, value
+        assert json.loads(out.read_text(encoding="utf-8")) == []
+
+
+def test_the_state_job_takes_the_repository_only_from_github_repo() -> None:
+    state = block(block(CONTINUE, "jobs:"), "  state:")
+    assert "CIRCLE_PROJECT_USERNAME" not in state and "CIRCLE_PROJECT_REPONAME" not in state
+    assert "github.com/${GITHUB_REPO}.git" in state
+    inputs = (REPO / ".circleci" / "state_inputs.py").read_text(encoding="utf-8")
+    assert 'environ.get("CIRCLE_PROJECT' not in inputs and 'environ.get("GITHUB_REPO"' in inputs
 
 
 def test_a_text_only_pr_has_no_code_and_no_windows(tmp_path: Path) -> None:
