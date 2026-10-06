@@ -3382,6 +3382,26 @@ def circleci_problems(path: Path, adr_text: str) -> list[str]:
                 "no_output_timeout и команду timeout вокруг тестов. У CircleCI нет "
                 "timeout-minutes на задание, зависший тест идёт до часа."
             )
+    # Итоговый `check` (ADR-0022): единственная обязательная проверка main,
+    # он обязан требовать все языковые задания.
+    languages = "python|typescript|csharp|powershell"  # `check-text` продукта не языковое
+    defined = sorted(set(re.findall(rf"^  (check-(?:{languages})):[ \t]*$", text, re.M)))
+    if defined:
+        found = re.search(
+            r"^[ \t]+- check:\n[ \t]+requires:\n((?:[ \t]+- [\w-]+\n)+)", text + "\n", re.M
+        )
+        required = re.findall(r"- ([\w-]+)", found[1]) if found else []
+        missing = [name for name in defined if name not in required]
+        if found is None:
+            problems.append(
+                f"{rel}: нет итогового задания check с requires на {', '.join(defined)}: "
+                "обязательная проверка main (ci/circleci: check) не зависела бы от них (ADR-0022)."
+            )
+        elif missing:
+            problems.append(
+                f"{rel}: итоговый check не требует {', '.join(missing)}: красный язык не остановит "
+                "слияние (в защите main обязателен только check). Добавьте задание в requires."
+            )
     return problems
 
 

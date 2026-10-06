@@ -23,9 +23,18 @@
           name: Рабочие зависимости (если есть requirements.txt)
           no_output_timeout: 10m
           command: if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: pyright
+      - run:
+          name: ruff check
+          no_output_timeout: 5m
+          command: ruff check .
+      - run:
+          name: ruff format
+          no_output_timeout: 5m
+          command: ruff format --check .
+      - run:
+          name: pyright
+          no_output_timeout: 5m
+          command: pyright
       # Отчёт о запуске формирует сам CI: проверки tests и skips берут пропуски из него и не запускают
       # тесты второй раз.
       - run:
@@ -39,12 +48,30 @@
       - store_artifacts:
           when: always
           path: test-report.xml
-      - run: python .github/parch/parch_ci.py settings
-      - run: python .github/parch/parch_ci.py tests --report test-report.xml
-      - run: python .github/parch/parch_ci.py skips --report test-report.xml
-      - run: python .github/parch/parch_ci.py suppressions
-      - run: python .github/parch/parch_ci.py modules
-      - run: python .github/parch/parch_ci.py catalog
+      - run:
+          name: parch settings
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py settings
+      - run:
+          name: parch tests
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py tests --report test-report.xml
+      - run:
+          name: parch skips
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py skips --report test-report.xml
+      - run:
+          name: parch suppressions
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py suppressions
+      - run:
+          name: parch modules
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py modules
+      - run:
+          name: parch catalog
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py catalog
       # Раздел «Основания» берётся из сообщений коммитов ветки (git log origin/main..HEAD), описания PR в CircleCI нет.
       - run:
           name: standard
@@ -52,9 +79,24 @@
           environment:
             PARCH_BASE_REF: origin/main
           command: python .github/parch/parch_ci.py standard
-      - run: python .github/parch/parch_ci.py deps
-      - run: python .github/parch/parch_ci.py architecture
-      - run: python .github/parch/parch_ci.py dead-code
-      - run: python .github/parch/parch_ci.py duplicates
-      - run: python .github/parch/parch_ci.py coverage
+      - run:
+          name: parch deps
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py deps
+      - run:
+          name: parch architecture
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py architecture
+      - run:
+          name: parch dead-code
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py dead-code
+      - run:
+          name: parch duplicates
+          no_output_timeout: 10m
+          command: python .github/parch/parch_ci.py duplicates
+      - run:
+          name: parch coverage
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py coverage
 

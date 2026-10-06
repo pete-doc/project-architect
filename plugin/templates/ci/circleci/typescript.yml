@@ -17,8 +17,14 @@
           key: npm-v1-{{ checksum "package-lock.json" }}
           paths:
             - ~/.npm
-      - run: npm run typecheck
-      - run: npm run lint
+      - run:
+          name: typecheck
+          no_output_timeout: 5m
+          command: npm run typecheck
+      - run:
+          name: lint
+          no_output_timeout: 5m
+          command: npm run lint
       # Отчёт о запуске тестов формирует сам CI: без него проверки ниже красные.
       - run:
           name: Тесты
@@ -27,12 +33,30 @@
       - store_artifacts:
           when: always
           path: test-report.json
-      - run: python .github/parch/parch_ci.py settings --language typescript
-      - run: python .github/parch/parch_ci.py tests --language typescript --report test-report.json
-      - run: python .github/parch/parch_ci.py skips --language typescript --report test-report.json
-      - run: python .github/parch/parch_ci.py suppressions --language typescript
-      - run: python .github/parch/parch_ci.py modules --language typescript
-      - run: python .github/parch/parch_ci.py catalog --language typescript
+      - run:
+          name: parch settings
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py settings --language typescript
+      - run:
+          name: parch tests
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py tests --language typescript --report test-report.json
+      - run:
+          name: parch skips
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py skips --language typescript --report test-report.json
+      - run:
+          name: parch suppressions
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py suppressions --language typescript
+      - run:
+          name: parch modules
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py modules --language typescript
+      - run:
+          name: parch catalog
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py catalog --language typescript
       # Раздел «Основания» берётся из сообщений коммитов ветки (git log origin/main..HEAD), описания PR в CircleCI нет.
       - run:
           name: standard
@@ -40,10 +64,28 @@
           environment:
             PARCH_BASE_REF: origin/main
           command: python .github/parch/parch_ci.py standard --language typescript
-      - run: python .github/parch/parch_ci.py deps --language typescript
-      - run: python .github/parch/parch_ci.py architecture --language typescript
-      - run: python .github/parch/parch_ci.py libraries --language typescript
-      - run: python .github/parch/parch_ci.py dead-code --language typescript
-      - run: python .github/parch/parch_ci.py duplicates --language typescript
-      - run: python .github/parch/parch_ci.py coverage --language typescript
+      - run:
+          name: parch deps
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py deps --language typescript
+      - run:
+          name: parch architecture
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py architecture --language typescript
+      - run:
+          name: parch libraries
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py libraries --language typescript
+      - run:
+          name: parch dead-code
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py dead-code --language typescript
+      - run:
+          name: parch duplicates
+          no_output_timeout: 10m
+          command: python .github/parch/parch_ci.py duplicates --language typescript
+      - run:
+          name: parch coverage
+          no_output_timeout: 5m
+          command: python .github/parch/parch_ci.py coverage --language typescript
 

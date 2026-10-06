@@ -5,8 +5,8 @@
 #
 # Только Linux (Docker), класс не выше medium: Windows и macOS добавляются отдельным ADR с оценкой кредитов
 # (Windows 40 кредитов в минуту против 10 у medium). Расписаний нет, запуск на каждую отправку в ветку, кроме main и status.
-# Предел времени: у CircleCI нет timeout-minutes на задание, поэтому на каждом шаге, который может зависнуть, стоят
-# no_output_timeout и timeout; единственный жёсткий предел плана Free 1 час на задание.
+# Предел времени: у CircleCI нет timeout-minutes на задание, поэтому у КАЖДОГО шага run стоит no_output_timeout, а у тестов
+# ещё и timeout. Единственный жёсткий предел плана Free 1 час на задание (600 кредитов за зависшее задание medium).
 # Отмена устаревших прогонов настраивается в проекте CircleCI (Project Settings -> Advanced -> Auto-cancel
 # Redundant Workflows), из конфига её не видно.
 version: 2.1

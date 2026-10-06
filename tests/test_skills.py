@@ -199,7 +199,7 @@ def test_generated_python_project_passes_its_own_ci(tmp_path: Path) -> None:
     init(tmp_path)
     ci = (tmp_path / ".circleci" / "config.yml").read_text(encoding="utf-8")
     for command in ("ruff check .", "ruff format --check .", "pyright"):
-        assert f"run: {command}" in ci
+        assert f"command: {command}" in ci
     assert "timeout 600 pytest -v --junitxml=test-report.xml" in ci  # тесты под пределом времени
     for argv in (
         ["ruff", "check", "."],

@@ -246,9 +246,6 @@ def cyclic_groups(graph: dict[str, list[str]]) -> list[list[str]]:
 
 
 BASIS_LABEL = re.compile(rf"^{BASIS_HEADING}:[ \t]*(.*)$", re.IGNORECASE)
-OTHER_LABEL = re.compile(
-    r"^[^\W\d_][^\W_ ]*(?: [^\W_]+){0,3}:[ \t]*$"
-)  # «Проверка:», «Как проверить:»
 BASIS_FILLER = re.compile(
     r"^[\s\-–—_*•.]*$"
 )  # строки из одних прочерков и пунктуации текстом не считаются
@@ -268,8 +265,15 @@ def basis_section_lines(body: str) -> list[str] | None:
         if section is None and not fenced and (label := BASIS_LABEL.match(line)):
             section, plain = [label[1]] if label[1].strip() else [], True
             continue
-        if plain and section is not None and (heading or OTHER_LABEL.match(line)):
-            break  # без решётки раздел кончается следующим заголовком или строкой вида «Проверка:»
+        if plain and section is not None:
+            blank = not line.strip()
+            if heading or (blank and section and not section[-1].strip()):
+                break  # без решётки раздел кончается заголовком с # или двумя пустыми строками подряд
+            if blank and not section:
+                section.append(
+                    line
+                )  # пустая строка сразу после «Основания:» (первая из возможных двух)
+                continue
         if heading:
             if section is not None and len(heading[1]) <= level:
                 break  # раздел кончается заголовком того же или более высокого уровня

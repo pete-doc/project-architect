@@ -26,14 +26,18 @@ INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.p
 HOOK_TESTS = ("tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py")
 
 
-def render_config(languages: list[str]) -> str:
-    """`.circleci/config.yml`, который соберёт init для этих языков."""
+def init_module() -> Any:
     spec = importlib.util.spec_from_file_location("init_project_economy", INIT)
     assert spec is not None and spec.loader is not None
     module: Any = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # dataclass в init_project ищет свой модуль здесь
     spec.loader.exec_module(module)
-    return str(module.render_circleci(languages))
+    return module
+
+
+def render_config(languages: list[str]) -> str:
+    """`.circleci/config.yml`, который соберёт init для этих языков."""
+    return str(init_module().render_circleci(languages))
 
 
 def text(path: Path) -> str:
@@ -49,12 +53,6 @@ def job_block(workflow: str, name: str) -> str:
     """Текст задания `name` (от его заголовка до следующего задания верхнего уровня)."""
     match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow, re.M | re.S)
     assert match is not None, f"в workflow нет задания {name}"
-    return match.group(1)
-
-
-def triggers(workflow: str) -> str:
-    match = re.search(r"^on:\n(.*?)(?=^\S|\Z)", workflow, re.M | re.S)
-    assert match is not None, "в workflow нет раздела on"
     return match.group(1)
 
 
@@ -210,14 +208,18 @@ def test_every_template_runs_on_ubuntu_only_without_a_matrix(template: Path) -> 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_has_a_timeout_and_cancels_superseded_runs(template: Path) -> None:
-    """У CircleCI нет timeout-minutes: долгие шаги (тесты) под `timeout` и `no_output_timeout`;
-    автоотмена настраивается в проекте (пункт В3), об этом сказано в шапке head.yml."""
-    workflow = text(template)
-    for step in re.split(r"\n      - ", code_only(workflow)):
+    """У CircleCI нет timeout-minutes: у каждого шага `run` в шаблоне есть поле `no_output_timeout`, у тестов ещё и `timeout`.
+    Автоотмена это настройка проекта (пункт В3): её читаем из инструкции, которую выводит init, а не из комментария."""
+    for step in re.split(r"\n      - ", code_only(text(template))):
+        if step.startswith("run:"):
+            assert re.search(r"^\s+no_output_timeout: \d+m$", step, re.M), step[:80]
         if re.search(r"\b(pytest|dotnet test|npm test)\b", step):
             assert "no_output_timeout" in step and "timeout " in step, step[:80]
-    head = text(template.parent / "head.yml")
-    assert "Auto-cancel" in head and "no_output_timeout" in head and "1 час" in head
+    note = str(init_module().CIRCLECI_STEPS_NOTE)
+    assert (
+        "В3. Включить автоотмену устаревших прогонов: Project Settings → Advanced → Auto-cancel Redundant Workflows"
+        in note
+    )
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
@@ -225,13 +227,11 @@ def test_every_template_runs_only_on_pull_requests(template: Path) -> None:
     """Запуск только на ветках PR: workflow `ci` не идёт на main и status, расписаний нет."""
     config = code_only(render_config([template.stem]))
     workflows = config.split("\nworkflows:\n", 1)[1]
-    assert "main, << pipeline.git.branch >>" in workflows
-    assert "status, << pipeline.git.branch >>" in workflows
+    when = workflows.split("    jobs:\n", 1)[0]  # выражение when workflow `ci`
+    excluded = set(re.findall(r"equal: \[([\w./-]+), << pipeline\.git\.branch >>\]", when))
+    assert excluded == {"main", "status"}  # и больше никаких веток не исключено
     for forbidden in ("schedule", "triggers:", "cron"):
         assert forbidden not in config, forbidden
-    assert (
-        triggers("on:\n  pull_request:\n") == "  pull_request:\n"
-    )  # функция разбора триггеров цела
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)

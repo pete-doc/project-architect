@@ -103,28 +103,93 @@ def test_the_final_check_requires_every_language_job() -> None:
     assert jobs == [f"check-{lang}" for lang in LANGUAGES]
 
 
-def test_a_final_check_that_skips_a_language_is_caught() -> None:
-    """Плохой пример: итоговый `check` без одного языка пропустил бы красный язык, а слияние шло бы по зелёному `check`."""
-    config = render(["python", "typescript"]).replace("            - check-typescript\n", "")
-    assert requires_of_check(config) == ["check-python"]
-    assert "check-typescript" in re.findall(r"^  (check-[\w-]+):\n    docker:", config, re.M)
-    assert set(re.findall(r"^  (check-[\w-]+):\n    docker:", config, re.M)) != set(
-        requires_of_check(config)
+def standard_config_problems(tmp_path: Path, config: str) -> list[str]:
+    """Что скажет `standard` про собранный конфиг: правила CircleCI из parch_ci."""
+    path = tmp_path / "config.yml"
+    path.write_text(config, encoding="utf-8", newline="\n")
+    problems: list[str] = parch_ci.circleci_problems(path, "")
+    return problems
+
+
+def test_a_final_check_that_skips_a_language_is_caught(tmp_path: Path) -> None:
+    """`standard` требует `requires` на все `check-<язык>` из конфига: настоящий конфиг init проходит, без языка красный."""
+    config = render(list(LANGUAGES))
+    assert standard_config_problems(tmp_path, config) == []
+    for lang in LANGUAGES:  # плохой пример для каждого языка: итоговый check не требует его
+        broken = config.replace(f"            - check-{lang}\n", "")
+        problems = standard_config_problems(tmp_path, broken)
+        assert any(f"не требует check-{lang}" in line for line in problems), lang
+    headless = config.split("      - check:\n          requires:\n")[
+        0
+    ]  # итогового check в workflow нет вовсе
+    assert any(
+        "нет итогового задания check" in line
+        for line in standard_config_problems(tmp_path, headless)
     )
+
+
+def test_standard_stops_the_whole_project_when_the_final_check_misses_a_language(
+    tmp_path: Path,
+) -> None:
+    """То же через настоящую команду `parch_ci.py standard` на настоящем проекте init: код выхода 1."""
+    project = project_with_commits(tmp_path, [GOOD_BASIS])
+    assert standard(project).returncode == 0  # собранный init конфиг и «Основания» в порядке
+    path = project / ".circleci" / "config.yml"
+    config = path.read_text(encoding="utf-8")
+    path.write_text(
+        config.replace("            - check-python\n", ""), encoding="utf-8", newline="\n"
+    )
+    done = standard(project)
+    assert (
+        done.returncode == 1
+        and "нет итогового задания check с requires на check-python" in done.stdout
+    )
+
+
+def runs_on(config: str, branch: str) -> bool:
+    """Запустится ли workflow `ci` на ветке: считает выражение `when` настоящего конфига (`not: equal: [ветка, << pipeline.git.branch >>]`)."""
+    workflows = config.split("\nworkflows:\n", 1)[1]
+    when = workflows.split("    jobs:\n", 1)[0]
+    excluded = re.findall(r"equal: \[([\w./-]+), << pipeline\.git\.branch >>\]", when)
+    return branch not in excluded
 
 
 def test_the_ci_workflow_does_not_run_on_main_and_the_status_branch() -> None:
     """Ветка `status` получает табло от задания state; без исключения `ci` шёл бы на ней после каждого слияния."""
-    config = render(["python"])
-    workflows = config.split("\nworkflows:\n", 1)[1]
-    assert "equal: [main, << pipeline.git.branch >>]" in workflows
-    assert "equal: [status, << pipeline.git.branch >>]" in workflows
-    bad = workflows.replace(
-        "equal: [status, << pipeline.git.branch >>]", "equal: [dev, << pipeline.git.branch >>]"
+    for languages in ([lang] for lang in LANGUAGES):
+        config = render(languages)
+        assert not runs_on(config, "main") and not runs_on(config, "status")
+        assert runs_on(config, "feature") and runs_on(config, "F24-x")  # обычные ветки идут
+    # плохой пример: конфиг, где исключена только main (так выглядел бы шаблон без правки по ревью)
+    without_status = render(["python"]).replace(
+        "        - not:\n            equal: [status, << pipeline.git.branch >>]\n", ""
     )
-    assert (
-        "equal: [status, << pipeline.git.branch >>]" not in bad
-    )  # плохой пример: исключения status нет
+    assert runs_on(without_status, "status") and not runs_on(without_status, "main")
+
+
+def run_steps_without_limit(raw: str) -> list[str]:
+    """Шаги `run` без `no_output_timeout` и шаги тестов без `timeout` (короткая запись `- run: команда` предела не даёт)."""
+    found: list[str] = []
+    for step in re.split(r"\n(?= +- )", raw):
+        head = step.lstrip().split("\n", 1)[0]
+        if not head.startswith("- run:"):
+            continue
+        if "no_output_timeout:" not in step:
+            found.append(step.strip().splitlines()[0])
+        elif re.search(r"\b(pytest|dotnet test|npm test)\b", step) and "timeout " not in step:
+            found.append(step.strip().splitlines()[0] + " (тесты без timeout)")
+    return found
+
+
+def test_every_run_step_of_the_templates_has_a_time_limit() -> None:
+    """Пределы времени: у каждого шага run в шаблонах есть `no_output_timeout`, у тестов ещё и `timeout`."""
+    for path in sorted(CIRCLE.glob("*.yml")):
+        assert run_steps_without_limit(path.read_text(encoding="utf-8")) == [], path.name
+    short = "    steps:\n      - run: ruff check .\n      - run:\n          name: тесты\n          no_output_timeout: 5m\n          command: pytest\n"
+    assert run_steps_without_limit(short) == [
+        "- run: ruff check .",
+        "- run: (тесты без timeout)",
+    ]  # плохие примеры: короткая запись без предела и тесты только с no_output_timeout
 
 
 PLAIN_COLON = re.compile(r"^\s*(?:- )?[\w-]+: (?![\"'|>\[{&*!%@`])[^#\n]*: ")
@@ -400,6 +465,9 @@ BASIS_TEXT = 'Прочитал каталог и реестр модулей; п
         f"правка\n\nОснования: {BASIS_TEXT}\n",
         f"правка\n\nОснования:\n- {BASIS_TEXT}\n- ещё строка\n\nПроверка:\nтесты зелёные\n",
         f"правка\n\nоснования:\n{BASIS_TEXT}\n",
+        # строки вида «Поиск по коду:» внутри раздела его не обрывают (замечание 1 четвёртого ревью)
+        f"правка\n\nОснования:\nПоиск по коду:\n- convert: не нашёл\nИстория git:\n- git log -S feet: пусто\nКаталог:\n- {BASIS_TEXT}\n",
+        f"правка\n\nОснования:\n\n{BASIS_TEXT}\n",  # одна пустая строка после «Основания:» не конец раздела
     ],
 )
 def test_both_heading_variants_pass(message: str) -> None:
@@ -412,7 +480,9 @@ def test_both_heading_variants_pass(message: str) -> None:
         "правка\n\n## Основания\n\n",
         "правка\n\nОснования:\n",
         "правка\n\nОснования:\n---\n",
-        "правка\n\nОснования:\n- - -\n\nПроверка:\nпоиск по коду\n",  # текст после раздела не засчитывается
+        "правка\n\nОснования:\n- - -\n\n\nПроверка:\nпоиск по коду\n",  # две пустые строки кончают раздел: текст после него не засчитывается
+        "правка\n\nОснования:\n---\n## Проверка\nпоиск по коду\n",  # заголовок с # кончает раздел
+        "правка\n\nОснования:\n\n\nпоиск по коду\n",  # пустая строка, ещё пустая: раздел пуст
         "правка\n\n## Основания\n\n— — —\n",
         "правка\n\nбез раздела вовсе\n",
     ],
@@ -532,7 +602,10 @@ def test_an_existing_circleci_config_is_reported_and_the_owner_steps_are_not_sho
 def circleci_cli() -> str:
     cli = shutil.which("circleci")
     assert cli, (
-        "нужен CLI CircleCI (circleci config validate): CI продукта ставит его шагом install-tools, локально см. ADR-0022"
+        "CLI CircleCI не найден в PATH (тест красный, не пропускается: храповик): поставьте circleci 1.2.0 с "
+        "github.com/CircleCI-Public/circleci-cli/releases/tag/v1.2.0, SHA-256 linux_amd64.tar.gz "
+        "9d8dcf9dc5c681127e053f26e32cc751822b786a77cbafa46145e6945919ecd0, windows_amd64.zip "
+        "609c35e9f342be1e680f95aca3454abc8f0a2e6ad695361ce77fc24694cdeba7 (как шаг install-tools в .circleci/continue_config.yml)"
     )
     return cli
 
