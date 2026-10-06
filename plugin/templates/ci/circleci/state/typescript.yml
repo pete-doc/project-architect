@@ -11,9 +11,9 @@
           name: Тесты для табло
           no_output_timeout: 10m
           command: |
-            timeout 600 npm test
-            echo $? > /tmp/tests-exit
-            exit 0
+            code=0
+            timeout 600 npm test || code=$?
+            echo $code > /tmp/tests-exit
       - store_artifacts:
           when: always
           path: test-report.json

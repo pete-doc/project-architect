@@ -14,9 +14,9 @@
           name: Тесты для табло
           no_output_timeout: 10m
           command: |
-            timeout 600 pytest -v --junitxml=test-report.xml
-            echo $? > /tmp/tests-exit
-            exit 0
+            code=0
+            timeout 600 pytest -v --junitxml=test-report.xml || code=$?
+            echo $code > /tmp/tests-exit
       - store_artifacts:
           when: always
           path: test-report.xml

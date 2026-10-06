@@ -424,3 +424,66 @@ def test_init_copies_the_state_script_and_a_state_workflow_that_runs_only_on_mai
         "  state:\n    when:\n      equal: [main, << pipeline.git.branch >>]\n    jobs:\n      - state\n"
         in workflows
     )
+
+
+# ---------- шаг тестов реально выполняется под bash -eo pipefail, как в CircleCI ----------
+
+
+def command_of_the_tests_step(language: str) -> str:
+    """Команда шага «Тесты для табло» из собранного конфига (как её запускает CircleCI)."""
+    job = state_job(config([language]))
+    start = job.index("name: Тесты для табло")
+    begin = job.index("command: |\n", start) + len("command: |\n")
+    body: list[str] = []
+    for line in job[begin:].splitlines():
+        if line.strip() and not line.startswith(" " * 12):
+            break
+        body.append(line)
+    return "\n".join(line[12:] for line in body)
+
+
+def run_tests_step(tmp_path: Path, command: str, tool: str, tool_code: int) -> tuple[int, str]:
+    """Запуск шага в bash -eo pipefail с подставными `timeout` и инструментом тестов, возвращающим tool_code."""
+    bash = __import__("shutil").which("bash")
+    assert bash, "для проверки шага тестов нужен bash"
+    fake = tmp_path / "bin"
+    fake.mkdir(parents=True)
+    for name, body in (("timeout", 'shift\nexec "$@"\n'), (tool, f"exit {tool_code}\n")):
+        script = fake / name
+        script.write_text("#!/bin/sh\n" + body, encoding="utf-8", newline="\n")
+        script.chmod(0o755)
+    exit_file = tmp_path / "tests-exit"
+    env = {**os.environ, "PATH": fake.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+    done = subprocess.run(
+        [bash, "-eo", "pipefail", "-c", command.replace("/tmp/tests-exit", exit_file.as_posix())],
+        cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False,
+    )  # fmt: skip
+    recorded = exit_file.read_text(encoding="utf-8").strip() if exit_file.exists() else ""
+    return done.returncode, recorded
+
+
+@pytest.mark.parametrize(
+    ("language", "tool"), [("python", "pytest"), ("typescript", "npm"), ("csharp", "dotnet")]
+)
+def test_failed_tests_still_record_their_exit_code_and_the_step_goes_on(
+    tmp_path: Path, language: str, tool: str
+) -> None:
+    """Под `bash -eo pipefail` упавшие тесты не должны обрывать шаг: иначе нет итога, табло и публикации."""
+    command = command_of_the_tests_step(language)
+    assert run_tests_step(tmp_path / "ok", command, tool, 0) == (0, "0")
+    assert run_tests_step(tmp_path / "red", command, tool, 1) == (
+        0,
+        "1",
+    )  # шаг зелёный, код тестов записан
+    assert run_tests_step(tmp_path / "five", command, tool, 5) == (0, "5")
+    # плохой пример: прежняя запись шага (без `|| code=$?`) под -e обрывается на упавших тестах и кода не записывает
+    old = f"timeout 600 {tool}\necho $? > /tmp/tests-exit\nexit 0\n"
+    assert run_tests_step(tmp_path / "old", old, tool, 1) == (1, "")
+
+
+def test_standard_catches_any_test_step_after_the_key_not_only_the_first(tmp_path: Path) -> None:
+    good = config(["python"])
+    extra = "      - add_ssh_keys\n      - run:\n          name: ещё тесты\n          no_output_timeout: 5m\n          command: timeout 60 pytest -q\n"
+    late = good.replace("      - add_ssh_keys\n", extra, 1)
+    assert any("до тестов проекта" in line for line in standard_problems(tmp_path, late))
+    assert standard_problems(tmp_path, good) == []

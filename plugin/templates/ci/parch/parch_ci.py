@@ -3390,13 +3390,14 @@ def circleci_problems(path: Path, adr_text: str) -> list[str]:
         if "add_ssh_keys" not in chunk:
             continue
         job = chunk.split(":", 1)[0].strip()
-        heavy = CIRCLE_HEAVY.search(chunk)
+        key_at = chunk.index("add_ssh_keys")
+        tests_after_key = any(m.start() > key_at for m in CIRCLE_HEAVY.finditer(chunk))
         if job != "state":
             problems.append(
                 f"{rel}: add_ssh_keys в задании {job}: ключ записи подключается только в задании "
                 "state, иначе проверки веток PR получили бы право писать в репозиторий."
             )
-        elif heavy and heavy.start() > chunk.index("add_ssh_keys"):
+        elif tests_after_key:  # любой шаг тестов после ключа, а не только первый
             problems.append(
                 f"{rel}: в задании state ключ записи (add_ssh_keys) подключён до тестов проекта: "
                 "код проекта выполнился бы с ключом. Поставьте add_ssh_keys после шага тестов."
