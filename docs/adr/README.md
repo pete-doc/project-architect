@@ -26,3 +26,4 @@
 | [0018](0018-pravilo-biblioteka-v-odnom-module-dlya-c-typescript-i-powers.md) | Правило «библиотека в одном модуле» для C#, TypeScript и PowerShell проверяет parch_ci по тексту | accepted | обратимое | 2026-10-05 |
 | [0019](0019-fail-dolga-state-standard-baseline-json-zaschischen-kak-stat.md) | Файл долга state/standard-baseline.json защищён как state/baseline.json | accepted | обратимое | 2026-10-05 |
 | [0020](0020-perehod-ci-s-github-actions-na-circleci.md) | CI продукта живёт на CircleCI, GitHub Actions для CI самого репозитория убраны | accepted | обратимое | 2026-10-06 |
+| [0021](0021-faily-dolga-catalog-baseline-json-i-modules-baseline-json-za.md) | Файлы долга catalog-baseline.json и modules-baseline.json защищены как standard-baseline.json | proposed | обратимое | 2026-10-06 |

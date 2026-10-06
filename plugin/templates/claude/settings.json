@@ -14,6 +14,8 @@
       "Edit(/state/baseline.json)",
       "Edit(/state/jscpd-baseline.json)",
       "Edit(/state/standard-baseline.json)",
+      "Edit(/state/catalog-baseline.json)",
+      "Edit(/state/modules-baseline.json)",
       "Edit(/state/vulture-whitelist.py)",
       "Edit(ruff.toml)",
       "Edit(.ruff.toml)",
