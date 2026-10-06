@@ -353,7 +353,8 @@
       "depends_on": [
         "F3",
         "F11",
-        "F16"
+        "F16",
+        "F24"
       ],
       "spec": "docs/specs/F20-end-to-end.md",
       "acceptance_tests": [],
@@ -401,6 +402,22 @@
         "F20"
       ],
       "spec": "",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
+    },
+    {
+      "id": "F24",
+      "title": "Шаблоны CI на CircleCI",
+      "goal": [
+        "G1"
+      ],
+      "depends_on": [
+        "F3",
+        "F11"
+      ],
+      "spec": "docs/specs/F24-circleci-templates.md",
       "acceptance_tests": [],
       "status": "planned",
       "passes": false,
