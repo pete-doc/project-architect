@@ -225,6 +225,21 @@ jobs:
           when: always
           path: test-report.xml
       - run:
+          name: Адрес репозитория на GitHub (по origin)
+          command: |
+            # Адрес origin не печатается: в нём может быть токен. Печатается только проверенный owner/repo.
+            rest=$(git remote get-url origin | sed -E 's#^[A-Za-z+]+://([^/@]*@)?##; s#^git@##')
+            case "$rest" in
+              github.com/*|github.com:*) ;;
+              *) echo "origin не указывает на github.com: репозиторий не определён"; exit 1 ;;
+            esac
+            repo=$(printf '%s' "$rest" | sed -E 's#^github\.com(:[0-9]+)?[:/]##; s#/+$##; s#\.git$##')
+            if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+              echo "Не удалось определить владельца и имя репозитория по origin"; exit 1
+            fi
+            echo "Репозиторий: ${repo}"
+            echo "export GITHUB_REPO=\"${repo}\"" >> "$BASH_ENV"
+      - run:
           name: Данные для табло (открытые PR)
           command: python3 .circleci/state_inputs.py /tmp/prs.json
       - run:
@@ -249,7 +264,7 @@ jobs:
             if [ -z "${STATUS_PUSH_TOKEN:-}" ]; then
               echo "STATUS_PUSH_TOKEN не задан: табло собрано, но не опубликовано (см. ADR-0020)"; exit 0
             fi
-            url="https://x-access-token:${STATUS_PUSH_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git"
+            url="https://x-access-token:${STATUS_PUSH_TOKEN}@github.com/${GITHUB_REPO}.git"
             # Гонка двух слияний подряд: если на main уже есть более новый коммит, этот прогон не публикует
             # (табло для нового коммита опубликует его собственный прогон).
             latest=$(git ls-remote origin refs/heads/main | cut -f1)

@@ -32,13 +32,17 @@ def open_pull_requests(owner: str, repo: str) -> list[dict[str, object]]:
 
 def main() -> int:
     out = sys.argv[1]
-    owner = os.environ.get("CIRCLE_PROJECT_USERNAME", "")
-    repo = os.environ.get("CIRCLE_PROJECT_REPONAME", "")
-    try:
-        prs = open_pull_requests(owner, repo)
-    except (OSError, ValueError, KeyError) as error:
-        sys.stderr.write(f"Открытые PR получить не удалось: {error}\n")
-        prs = []
+    # GITHUB_REPO вида «владелец/репозиторий» задаёт задание state по адресу origin: переменные
+    # CIRCLE_PROJECT_* в CircleCI хранят имена проекта в CircleCI, а не репозитория на GitHub.
+    owner, _, repo = os.environ.get("GITHUB_REPO", "").partition("/")
+    prs: list[dict[str, object]] = []
+    if not owner or not repo or "/" in repo:
+        sys.stderr.write("GITHUB_REPO не задан или не вида владелец/репозиторий: PR не запрошены\n")
+    else:
+        try:
+            prs = open_pull_requests(owner, repo)
+        except (OSError, ValueError, KeyError) as error:
+            sys.stderr.write(f"Открытые PR получить не удалось: {error}\n")
     with open(out, "w", encoding="utf-8") as file:
         json.dump(prs, file, ensure_ascii=False)
     return 0
