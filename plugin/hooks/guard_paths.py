@@ -69,6 +69,8 @@ _STATE_FILES = {
     "baseline.json",
     "jscpd-baseline.json",
     "standard-baseline.json",
+    "catalog-baseline.json",
+    "modules-baseline.json",
     "vulture-whitelist.py",
 }
 _ALLOWED_ROOT_MD = {"agents.md", "claude.md", "readme.md"}

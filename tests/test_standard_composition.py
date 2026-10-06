@@ -6,8 +6,10 @@
 об инциденте без разделов, запись агента в долг. Исторические отчёты существующего проекта идут под долг владельца.
 """
 
+import ast
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -279,3 +281,83 @@ def test_the_debt_file_is_listed_as_owner_only_everywhere() -> None:
     assert "`state/standard-baseline.json`" in agents and "добавленные в долг ключи" in agents
     adr = next((REPO / "docs" / "adr").glob("0019-*.md")).read_text(encoding="utf-8")
     assert "state/standard-baseline.json" in adr and "ADR-0003" in adr
+
+
+# --- те же файлы долга каталога и модулей (ADR-0021) ---
+
+OTHER_DEBTS = ("state/catalog-baseline.json", "state/modules-baseline.json")
+ROLES = [None, "parch:implementer", "parch:architect", "parch:tester", "parch:reviewer"]
+
+
+@pytest.mark.parametrize("rel", OTHER_DEBTS)
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_an_agent_cannot_add_a_key_to_the_catalog_or_modules_debt(
+    rel: str, role: str | None, tool: str, project: Path
+) -> None:
+    from conftest import file_call, run_hook
+
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, role)
+    assert result.code == 0, result.stderr
+    answer = json.loads(result.stdout)["hookSpecificOutput"]
+    assert answer["permissionDecision"] == "ask"
+    assert "Нужно подтверждение владельца" in answer["permissionDecisionReason"]
+    assert rel in answer["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("rel", OTHER_DEBTS)
+def test_an_agent_cannot_append_to_the_catalog_or_modules_debt_through_the_shell(
+    rel: str, project: Path
+) -> None:
+    from conftest import bash, run_hook
+
+    command = f"echo '\"src/new.py::new_function\"' >> {rel}"
+    result = run_hook("guard_shell_writes.py", bash(command), project)
+    assert result.blocked and "[guard_shell_writes]" in result.stderr
+
+
+def test_every_debt_file_the_checks_can_write_is_protected_and_listed() -> None:
+    # страховка на будущее: любой новый `state/<имя>-baseline.json` в проверках обязан попасть под охрану
+    hook = ast.parse((REPO / "plugin" / "hooks" / "guard_paths.py").read_text(encoding="utf-8"))
+    values = [
+        node.value
+        for node in hook.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "_STATE_FILES" for t in node.targets)
+    ]
+    assert len(values) == 1
+    protected = {str(name) for name in ast.literal_eval(values[0])}
+    names = {
+        found
+        for path in (REPO / "plugin" / "templates" / "ci" / "parch").glob("*.py")
+        for found in re.findall(r"state/([\w-]+-baseline\.json)", path.read_text(encoding="utf-8"))
+    }
+    assert {"standard-baseline.json", "catalog-baseline.json", "modules-baseline.json"} <= names
+    assert names - protected == set()
+    settings = (REPO / "plugin" / "templates" / "claude" / "settings.json").read_text(
+        encoding="utf-8"
+    )
+    agents = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    for name in sorted(names):
+        assert f"Edit(/state/{name})" in settings, name
+        assert f"`state/{name}`" in agents, name
+    adr = next((REPO / "docs" / "adr").glob("0021-*.md")).read_text(encoding="utf-8")
+    assert "catalog-baseline.json" in adr and "modules-baseline.json" in adr
+    # весь список охраны назван и в условии 3 слияния PR: охраняемый, но не названный файл агент
+    # мог бы слить сам (features.json меняется в каждом PR блока, его подтверждает охрана путей)
+    condition = agents.split("Условия, все сразу:", 1)[1].split("4. Описание PR", 1)[0]
+    for name in sorted(protected - {"features.json"}):
+        assert f"state/{name}" in condition, name
+
+
+def test_the_shell_is_also_stopped_by_the_path_guard_for_every_debt_file(project: Path) -> None:
+    from conftest import bash, run_hook
+
+    for rel in ("state/standard-baseline.json", *OTHER_DEBTS):
+        for command in (f"rm {rel}", f"mv {rel} /tmp/x.json"):
+            result = run_hook("guard_paths.py", bash(command), project)
+            assert result.code == 0, result.stderr
+            answer = json.loads(result.stdout)["hookSpecificOutput"]
+            assert (
+                answer["permissionDecision"] == "ask" and rel in answer["permissionDecisionReason"]
+            )
