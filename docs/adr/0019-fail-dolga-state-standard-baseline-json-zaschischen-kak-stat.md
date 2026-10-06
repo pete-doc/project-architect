@@ -1,6 +1,6 @@
 # ADR-0019. Файл долга state/standard-baseline.json защищён как state/baseline.json
 
-- Статус: proposed
+- Статус: accepted (утверждено владельцем, 2026-10-06)
 - Тип решения: обратимое
 - Дата: 2026-10-05
 
