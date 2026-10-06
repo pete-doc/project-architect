@@ -1,13 +1,16 @@
+# ruff: noqa: E501
 """Экономия квоты CI (ADR-0011): Ubuntu по умолчанию, таймауты, отмена, запуск только по PR.
 
 Workflow разбирается как текст: так тесты не зависят от лишних пакетов, а плохой пример
 (матрица, macOS, push в main, нет таймаута) ловится прямо по строкам файла.
 """
 
+import importlib.util
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,10 +18,22 @@ REPO = Path(__file__).resolve().parent.parent
 SETUP = REPO / ".circleci" / "config.yml"  # CI продукта живёт на CircleCI (ADR-0020)
 PRODUCT = REPO / ".circleci" / "continue_config.yml"
 SCOPE = REPO / ".github" / "scope.py"  # какие языки и проверки нужны PR
-# state.yml (пересчёт табло после слияния, ADR-0012) устроен иначе: см. tests/test_status.py
-ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml"))
-TEMPLATES = [p for p in ALL_TEMPLATES if p.name != "state.yml"]
+# Шаблоны проектов пользователей на CircleCI (ADR-0022): общая часть head.yml и по заданию на язык.
+# state.yml (GitHub Actions, пересчёт табло, ADR-0012) устроен иначе, см. tests/test_status.py (до PR 2 блока F24).
+ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci" / "circleci").glob("*.yml"))
+TEMPLATES = [p for p in ALL_TEMPLATES if p.name != "head.yml"]
+INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
 HOOK_TESTS = ("tests/test_guards.py", "tests/test_launcher.py", "tests/test_flow.py")
+
+
+def render_config(languages: list[str]) -> str:
+    """`.circleci/config.yml`, который соберёт init для этих языков."""
+    spec = importlib.util.spec_from_file_location("init_project_economy", INIT)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass в init_project ищет свой модуль здесь
+    spec.loader.exec_module(module)
+    return str(module.render_circleci(languages))
 
 
 def text(path: Path) -> str:
@@ -173,48 +188,72 @@ def test_hook_test_files_exist_and_are_the_files_that_run_the_hooks() -> None:
 
 
 def test_templates_are_found() -> None:
+    """Шаблоны CircleCI: общая часть и четыре языка; шаблоны GitHub Actions для языков удалены (ADR-0022)."""
     assert {p.name for p in ALL_TEMPLATES} == {
-        "csharp.yml", "powershell.yml", "python.yml", "state.yml", "typescript.yml",
+        "csharp.yml", "head.yml", "powershell.yml", "python.yml", "typescript.yml",
     }  # fmt: skip
+    old = {p.name for p in (REPO / "plugin" / "templates" / "ci").glob("*.yml")}
+    assert old <= {"state.yml"}  # state.yml уходит в PR 2 блока F24 вместе со своими тестами
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_runs_on_ubuntu_only_without_a_matrix(template: Path) -> None:
-    workflow = code_only(text(template))
-    assert re.findall(r"runs-on: (\S+)", workflow) == ["ubuntu-latest"]
-    for forbidden in ("matrix", "strategy:", "windows", "macos"):
+    """CircleCI: только Linux в Docker, класс не выше medium, без матриц, Windows и macOS (ADR-0022)."""
+    workflow = re.sub(
+        r"[ \t]+#.*", "", code_only(text(template))
+    )  # без комментариев в конце строки
+    assert re.findall(r"^\s+- image: (cimg/\S+)", workflow, re.M)  # образ Linux в Docker
+    assert set(re.findall(r"resource_class: (\S+)", workflow)) == {"medium"}
+    for forbidden in ("matrix", "executor:", "machine:", "windows", "macos", "xcode"):
         assert forbidden not in workflow.lower(), forbidden
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_has_a_timeout_and_cancels_superseded_runs(template: Path) -> None:
+    """У CircleCI нет timeout-minutes: долгие шаги (тесты) под `timeout` и `no_output_timeout`;
+    автоотмена настраивается в проекте (пункт В3), об этом сказано в шапке head.yml."""
     workflow = text(template)
-    assert re.search(r"^    timeout-minutes: \d+$", workflow, re.M)
-    assert re.search(r"^concurrency:\n  group: \$\{\{ github\.workflow \}\}-", workflow, re.M)
-    assert "  cancel-in-progress: true\n" in workflow
+    for step in re.split(r"\n      - ", code_only(workflow)):
+        if re.search(r"\b(pytest|dotnet test|npm test)\b", step):
+            assert "no_output_timeout" in step and "timeout " in step, step[:80]
+    head = text(template.parent / "head.yml")
+    assert "Auto-cancel" in head and "no_output_timeout" in head and "1 час" in head
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_runs_only_on_pull_requests(template: Path) -> None:
-    trigger = triggers(text(template))
-    assert "pull_request" in trigger
-    for forbidden in ("push", "schedule", "workflow_dispatch"):
-        assert forbidden not in trigger, forbidden
+    """Запуск только на ветках PR: workflow `ci` не идёт на main и status, расписаний нет."""
+    config = code_only(render_config([template.stem]))
+    workflows = config.split("\nworkflows:\n", 1)[1]
+    assert "main, << pipeline.git.branch >>" in workflows
+    assert "status, << pipeline.git.branch >>" in workflows
+    for forbidden in ("schedule", "triggers:", "cron"):
+        assert forbidden not in config, forbidden
+    assert (
+        triggers("on:\n  pull_request:\n") == "  pull_request:\n"
+    )  # функция разбора триггеров цела
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_says_other_runners_need_an_adr_with_a_cost_estimate(
     template: Path,
 ) -> None:
-    head = "\n".join(text(template).splitlines()[:10])
-    assert "только через ADR" in head
-    assert "Windows" in head and "x2" in head and "macOS" in head and "x10" in head
+    head = text(template.parent / "head.yml")
+    assert "отдельным ADR с оценкой кредитов" in head
+    assert "Windows 40 кредитов в минуту против 10" in head and "macOS" in head
+    assert template.is_file()
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
 def test_every_template_has_one_job_named_check(template: Path) -> None:
+    """Каждый язык даёт одно задание `check-<язык>`; итоговый `check` лежит в head.yml."""
     workflow = text(template)
-    assert re.findall(r"^  ([\w-]+):\n    runs-on", workflow, re.M) == ["check"]
+    assert re.findall(r"^  (check-[\w-]+):\n    docker:", workflow, re.M) == [
+        f"check-{template.stem}"
+    ]
+    assert re.findall(r"^  ([\w-]+):\n    docker:", text(template.parent / "head.yml"), re.M) == [
+        "check"
+    ]
 
 
 # ---------- ADR-0011 ----------

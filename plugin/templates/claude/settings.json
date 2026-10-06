@@ -5,6 +5,7 @@
       "Edit(/.claude/settings.local.json)",
       "Edit(/.claude/hooks/**)",
       "Edit(/.github/**)",
+      "Edit(/.circleci/**)",
       "Edit(/docs/CONSTITUTION.md)",
       "Edit(/CONSTITUTION.md)",
       "Edit(/docs/GOAL.md)",

@@ -20,7 +20,7 @@ from conftest import CS_SHOP, INIT_ANSWERS
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
-WORKFLOW = REPO / "plugin" / "templates" / "ci" / "csharp.yml"
+WORKFLOW = REPO / "plugin" / "templates" / "ci" / "circleci" / "csharp.yml"
 TEMPLATES = REPO / "plugin" / "templates" / "csharp"
 INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
 REPORT = "test-results"
@@ -624,9 +624,12 @@ def test_coverage_demands_a_test_run_with_coverage(shop: CsShop) -> None:
 
 def test_workflow_pins_every_version_and_runs_on_ubuntu() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "ubuntu-latest" in text and "windows-latest" not in text
-    assert "global-json-file: global.json" in text
-    assert 'node-version: "22.14.0"' in text
+    assert (
+        "cimg/python" in text and "windows" not in text.replace("Windows", "").lower()
+    )  # Linux в Docker
+    assert "--jsonfile global.json" in text  # версия .NET SDK по global.json (rollForward: disable)
+    head = (WORKFLOW.parent / "head.yml").read_text(encoding="utf-8")
+    assert "- install-node" in text and 'NODE_VERSION: "22.14.0"' in head
     assert "dotnet restore --locked-mode" in text
     assert "dotnet format --verify-no-changes" in text
     assert "-warnaserror" in text
@@ -758,16 +761,19 @@ def test_init_creates_a_csharp_project_with_pinned_tools(generated: CsShop) -> N
         "global.json", "Directory.Build.props", ".editorconfig", "App.sln",
         "tests/App.Tests/App.Tests.csproj", "tests/App.Tests/SmokeTests.cs",
         "tests/App.Tests/packages.lock.json", "state/baseline.json",
-        ".github/parch/parch_ci.py", ".github/workflows/ci.yml", "docs/CONSTITUTION.md",
+        ".github/parch/parch_ci.py", ".circleci/config.yml", "docs/CONSTITUTION.md",
     ):  # fmt: skip
         assert (generated.root / rel).is_file(), rel
+    assert not (
+        generated.root / ".github" / "workflows"
+    ).exists()  # GitHub Actions в шаблонах нет (ADR-0022)
     for name, target in (
         ("global.json", "global.json"),
         ("Directory.Build.props", "Directory.Build.props"),
         ("editorconfig", ".editorconfig"),
     ):
         assert generated.read(target) == (TEMPLATES / name).read_text("utf-8")
-    assert generated.read(".github/workflows/ci.yml") == WORKFLOW.read_text("utf-8")
+    assert WORKFLOW.read_text("utf-8").rstrip("\n") in generated.read(".circleci/config.yml")
     constitution = generated.read("docs/CONSTITUTION.md")
     assert "TngTech.ArchUnitNET.xUnit" in constitution
     assert "bin/" in generated.read(".gitignore")
@@ -811,7 +817,13 @@ def test_generated_csharp_ci_catches_violations(generated: CsShop) -> None:
 
 def test_python_and_csharp_together_get_separate_workflows(tmp_path: Path) -> None:
     run_init(tmp_path / "both", ["python", "csharp"])
-    workflows = sorted(p.name for p in (tmp_path / "both" / ".github" / "workflows").iterdir())
-    assert workflows == ["ci-csharp.yml", "ci.yml", "state.yml"]
+    """Имя прежнее (храповик): теперь один `.circleci/config.yml` с заданием на каждый язык и итоговым `check`."""
+    assert not (tmp_path / "both" / ".github" / "workflows").exists()
+    config = (tmp_path / "both" / ".circleci" / "config.yml").read_text(encoding="utf-8")
+    assert "  check-python:\n" in config and "  check-csharp:\n" in config
+    assert (
+        "      - check:\n          requires:\n            - check-python\n            - check-csharp\n"
+        in config
+    )
     baseline = json.loads((tmp_path / "both" / "state" / "baseline.json").read_text("utf-8"))
     assert set(baseline["tests"]) == {"python", "csharp"}

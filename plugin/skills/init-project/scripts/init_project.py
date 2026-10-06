@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Подключает проект к ProjectArchitect для `/parch:init-project`.
 
 Вход: JSON-объект на stdin. Выход: JSON-отчёт на stdout.
@@ -139,11 +140,13 @@ LANGUAGES = {
     ),
 }
 CI_TEMPLATES = {
-    "python": "python.yml",
-    "typescript": "typescript.yml",
-    "csharp": "csharp.yml",
-    "powershell": "powershell.yml",
-}
+    "python": "circleci/python.yml",
+    "typescript": "circleci/typescript.yml",
+    "csharp": "circleci/csharp.yml",
+    "powershell": "circleci/powershell.yml",
+}  # шаблоны заданий CircleCI (ADR-0022); GitHub Actions в шаблонах больше нет
+CIRCLE_CONFIG = ".circleci/config.yml"
+CIRCLE_NOT_BRANCHES = ("main", "status")  # ветки, на которых workflow `ci` не идёт
 GITIGNORE_LINES = [".claude/audit/", ".claude/settings.local.json"]
 GITIGNORE_BY_LANGUAGE = {
     "typescript": ["node_modules/", "coverage/", "test-report.json"],
@@ -248,10 +251,22 @@ def bullets(text: str, fallback: str) -> str:
 
 
 TARGET_OS = {"windows": "Windows 11", "macos": "macOS", "linux": "Linux"}
-BUDGET_NOTE = (
-    "Бюджет на GitHub Actions: задайте небольшой, но не нулевой (например, 5 долларов) на странице "
-    "https://github.com/settings/billing/budgets. Нулевой бюджет останавливает CI посреди работы "
-    "без предупреждения, а без бюджета об ошибке настройки вы узнаете только из счёта."
+CIRCLECI_STEPS_NOTE = (
+    "CI работает на CircleCI. Сделайте руками, строго по порядку (пункты В1–В5):\n"
+    "В1. Доступ GitHub App CircleCI к репозиторию: GitHub → Settings → Applications → CircleCI → Configure → "
+    "выберите этот репозиторий (если приложение стоит на все репозитории, шаг не нужен).\n"
+    "В2. Создать проект в CircleCI: Home → Create Project → имя → Next: Set up a pipeline → имя ci → Next: Choose a "
+    "repo → GitHub Cloud → репозиторий → использовать существующий конфиг (.circleci/config.yml) → триггер «PR opened "
+    "or pushed to, default branch and tag pushes». Никакие токены для проверки не нужны.\n"
+    "В3. Включить автоотмену устаревших прогонов: Project Settings → Advanced → Auto-cancel Redundant Workflows.\n"
+    "В4. После первого зелёного `check` включить защиту main: GitHub → Settings → Rules → New branch ruleset → main → "
+    "Require status checks → добавить одну проверку `ci/circleci: check` (её имя появляется в списке только после "
+    "первого запуска), оставить включёнными Restrict deletions и Block force pushes.\n"
+    'В5. Ключ записи табло, только после В4 (пока защиты main нет, ключ не подключается): ssh-keygen -t ed25519 -N "" '
+    "-f status_key вне репозитория; GitHub → Settings → Deploy keys → Add deploy key (status_key.pub, галка Allow "
+    "write access); CircleCI → Project Settings → SSH Keys → Additional SSH Keys → Add SSH Key (хост github.com, "
+    "закрытая часть status_key); затем удалить оба файла с компьютера.\n"
+    "Бесплатный план CircleCI: 30 000 кредитов в месяц (circleci.com/pricing); остаток виден в Plan Usage."
 )
 NO_GOAL_YET = "(владелец пока не назвал)"
 
@@ -512,6 +527,34 @@ def create_csharp_files(project: Path, report: Report) -> None:
     report.created.extend(["App.sln", "tests/App.Tests/packages.lock.json"])
 
 
+def render_circleci(languages: list[str]) -> str:
+    """`.circleci/config.yml`: общая часть, по заданию на язык, итоговый `check` с `requires` на все языковые задания."""
+    ci_languages = [lang for lang in languages if lang in CI_TEMPLATES]
+    parts = [(TEMPLATES / "ci" / "circleci" / "head.yml").read_text(encoding="utf-8")]
+    parts += [
+        (TEMPLATES / "ci" / CI_TEMPLATES[lang]).read_text(encoding="utf-8") for lang in ci_languages
+    ]
+    jobs = "".join(f"      - check-{lang}\n" for lang in ci_languages)
+    requires = "".join(f"            - check-{lang}\n" for lang in ci_languages)
+    skip = "".join(
+        f"        - not:\n            equal: [{branch}, << pipeline.git.branch >>]\n"
+        for branch in CIRCLE_NOT_BRANCHES
+    )
+    parts.append(
+        "workflows:\n"
+        "  ci:\n"
+        "    when:\n"
+        "      and:\n"
+        f"{skip}"
+        "    jobs:\n"
+        f"{jobs}"
+        "      - check:\n"
+        "          requires:\n"
+        f"{requires}"
+    )
+    return "\n".join(part.replace("\r\n", "\n").rstrip("\n") + "\n" for part in parts)
+
+
 def init_project(
     project: Path,
     name: str,
@@ -561,15 +604,11 @@ def init_project(
         report.copy("ci/parch/parch_catalog.py", ".github/parch/parch_catalog.py")
         report.copy("ci/parch/parch_libraries.py", ".github/parch/parch_libraries.py")
         report.copy("ci/parch/parch_standard.py", ".github/parch/parch_standard.py")
-        report.copy("ci/state.yml", ".github/workflows/state.yml")
         report.write(
             "state/baseline.json",
             json.dumps(initial_baseline(project, languages, existing_code), indent=2) + "\n",
         )
-    for lang in languages:
-        if lang in CI_TEMPLATES:
-            workflow = "ci.yml" if lang == languages[0] or lang == "python" else f"ci-{lang}.yml"
-            report.copy(f"ci/{CI_TEMPLATES[lang]}", f".github/workflows/{workflow}")
+        report.write(CIRCLE_CONFIG, render_circleci(languages))
     merge_permissions(report)
     update_gitignore(report, languages)
     adr.build_index(project)
@@ -578,7 +617,7 @@ def init_project(
         "docs/CONSTITUTION.md",
         render_constitution(name, description, priorities, languages, target_os),
     )
-    report.notes.append(BUDGET_NOTE)
+    report.notes.append(CIRCLECI_STEPS_NOTE)
     return {
         "project": str(project),
         "created": report.created,

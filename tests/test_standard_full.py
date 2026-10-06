@@ -259,7 +259,9 @@ def test_a_project_just_created_by_init_project_passes_the_composition_rules(
 
 def test_the_target_ci_templates_run_the_standard_check() -> None:
     for name in ("python.yml", "typescript.yml", "csharp.yml", "powershell.yml"):
-        text = (REPO / "plugin" / "templates" / "ci" / name).read_text(encoding="utf-8")
+        text = (REPO / "plugin" / "templates" / "ci" / "circleci" / name).read_text(
+            encoding="utf-8"
+        )
         assert "parch_ci.py standard" in text, name
 
 

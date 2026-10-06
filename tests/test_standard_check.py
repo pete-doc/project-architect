@@ -1,12 +1,15 @@
+# ruff: noqa: E501
 """Проверка `standard` (STANDARD.md, разделы 7.2 и 11): стоимость CI и бюджет текста.
 
 На каждое правило есть заведомо плохой пример, который проверка обязана остановить.
 """
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -79,11 +82,38 @@ def test_the_product_itself_follows_the_standard() -> None:
     assert "ПРОВАЛ" not in passes(REPO)
 
 
+CIRCLE_TEMPLATES = REPO / "plugin" / "templates" / "ci" / "circleci"
+INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
+
+
+def circleci_config(language: str) -> str:
+    """`.circleci/config.yml`, который соберёт init для языка шаблона."""
+    spec = importlib.util.spec_from_file_location("init_project_standard_check", INIT)
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclass в init_project ищет свой модуль здесь
+    spec.loader.exec_module(module)
+    return str(module.render_circleci([language]))
+
+
 @pytest.mark.parametrize(
-    "template", sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml")), ids=lambda p: p.name
+    "template",
+    [
+        *sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml")),
+        *sorted(p for p in CIRCLE_TEMPLATES.glob("*.yml") if p.name != "head.yml"),
+    ],
+    ids=lambda p: p.name,
 )
 def test_each_ci_template_passes_the_standard_check(tmp_path: Path, template: Path) -> None:
-    passes(project(tmp_path, template.read_text(encoding="utf-8"), template.name))
+    """Шаблон Actions (state.yml, до PR 2 блока F24) идёт как workflow, шаблоны CircleCI как собранный init `.circleci/config.yml`."""
+    if template.parent == CIRCLE_TEMPLATES:
+        (tmp_path / ".circleci").mkdir()
+        (tmp_path / ".circleci" / "config.yml").write_text(
+            circleci_config(template.stem), encoding="utf-8", newline="\n"
+        )
+        passes(tmp_path)
+    else:
+        passes(project(tmp_path, template.read_text(encoding="utf-8"), template.name))
 
 
 # ---------- таймаут ----------

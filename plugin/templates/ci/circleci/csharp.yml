@@ -1,0 +1,66 @@
+  check-csharp:
+    docker:
+      - image: cimg/python:3.12 # Python для parch_ci.py; Node (jscpd) и .NET SDK ставятся ниже точных версий
+    resource_class: medium # 2 vCPU, 4 ГБ, 10 кредитов в минуту
+    steps:
+      - checkout
+      - fetch-main
+      - install-node
+      - run:
+          name: Ключ кэша NuGet (global.json и все packages.lock.json)
+          command: cat global.json $(find . -name packages.lock.json -not -path './node_modules/*' | sort) > /tmp/dotnet-key.txt
+      - restore_cache:
+          keys:
+            - dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+            - dotnet-v1-
+      # Точная версия .NET SDK берётся из global.json (rollForward: disable).
+      - run:
+          name: .NET SDK по global.json
+          no_output_timeout: 10m
+          command: |
+            sudo apt-get update -qq && sudo apt-get install -y -qq libicu-dev
+            if [ ! -x "$HOME/.dotnet/dotnet" ]; then
+              curl -sSfL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+              bash /tmp/dotnet-install.sh --jsonfile global.json --install-dir "$HOME/.dotnet"
+            fi
+            echo 'export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"' >> "$BASH_ENV"
+      # Версии пакетов зафиксированы lock-файлами; расхождение с ними ломает восстановление.
+      - run:
+          name: dotnet restore
+          no_output_timeout: 10m
+          command: dotnet restore --locked-mode
+      - save_cache:
+          key: dotnet-v1-{{ checksum "/tmp/dotnet-key.txt" }}
+          paths:
+            - ~/.dotnet
+            - ~/.nuget/packages
+      - run: dotnet build --no-restore -warnaserror
+      - run: dotnet format --verify-no-changes --no-restore
+      # Отчёт о запуске тестов (trx) и покрытие формирует сам CI: без них проверки ниже красные.
+      - run:
+          name: Тесты
+          no_output_timeout: 15m
+          command: timeout 900 dotnet test --no-build --logger trx --results-directory test-results --collect "XPlat Code Coverage"
+      - store_artifacts:
+          when: always
+          path: test-results
+      - run: python .github/parch/parch_ci.py settings --language csharp
+      - run: python .github/parch/parch_ci.py tests --language csharp --report test-results
+      - run: python .github/parch/parch_ci.py skips --language csharp --report test-results
+      - run: python .github/parch/parch_ci.py suppressions --language csharp
+      - run: python .github/parch/parch_ci.py modules --language csharp
+      - run: python .github/parch/parch_ci.py catalog --language csharp
+      # Раздел «Основания» берётся из сообщений коммитов ветки (git log origin/main..HEAD), описания PR в CircleCI нет.
+      - run:
+          name: standard
+          no_output_timeout: 5m
+          environment:
+            PARCH_BASE_REF: origin/main
+          command: python .github/parch/parch_ci.py standard --language csharp
+      - run: python .github/parch/parch_ci.py deps --language csharp
+      - run: python .github/parch/parch_ci.py architecture --language csharp
+      - run: python .github/parch/parch_ci.py libraries --language csharp
+      - run: python .github/parch/parch_ci.py dead-code --language csharp
+      - run: python .github/parch/parch_ci.py duplicates --language csharp
+      - run: python .github/parch/parch_ci.py coverage --language csharp
+

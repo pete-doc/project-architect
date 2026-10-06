@@ -73,4 +73,5 @@ ProjectArchitect {{STANDARD_VERSION}} (docs/STANDARD.md в репозитори�
   1) каталог возможностей `docs/CAPABILITIES.md` и реестр модулей `docs/MODULES.md`; 2) поиск по коду;
   3) `git log -S"имя"` по затрагиваемым файлам; 4) `docs/LESSONS.md`, `state/incidents/`, ADR;
   5) только потом решение: переиспользовать, расширить или создать новое. Чего не хватает, записать в
-  `docs/QUESTIONS.md` и остановиться. В описании PR раздел «Основания»: что искал и почему создал новое.
+  `docs/QUESTIONS.md` и остановиться. Раздел «Основания»: что искал и почему создал новое; он пишется один раз, в сообщении коммита ветки (CI читает
+  `git log main..HEAD`), а в описание PR вставляется командой `python .github/parch/parch_ci.py basis`.

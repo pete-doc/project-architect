@@ -240,8 +240,11 @@ def test_an_unmanaged_project_is_still_checked_for_incident_reports_as_before(
 
 def test_the_ci_templates_pass_the_pr_text_through_the_environment() -> None:
     for name in ("python.yml", "typescript.yml", "csharp.yml", "powershell.yml"):
-        text = (REPO / "plugin" / "templates" / "ci" / name).read_text(encoding="utf-8")
-        assert "PARCH_PR_BODY: ${{ github.event.pull_request.body }}" in text, name
+        """Имя прежнее (храповик): в CircleCI описания PR нет, `standard` читает коммиты ветки (`PARCH_BASE_REF`)."""
+        text = (REPO / "plugin" / "templates" / "ci" / "circleci" / name).read_text(
+            encoding="utf-8"
+        )
+        assert "PARCH_BASE_REF: origin/main" in text and "PARCH_PR_BODY" not in text, name
 
 
 # --- защита файла долга: его записывает только владелец (ADR-0019) ---

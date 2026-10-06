@@ -340,7 +340,8 @@ def test_baseline_file_is_stable_and_machine_independent(shop: Shop) -> None:
 
 
 def test_workflow_template_runs_every_check_and_pins_versions() -> None:
-    workflow = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
+    circleci = REPO / "plugin" / "templates" / "ci" / "circleci"
+    workflow = (circleci / "python.yml").read_text(encoding="utf-8")
     for command in (
         "ruff check .",
         "ruff format --check .",
@@ -355,8 +356,13 @@ def test_workflow_template_runs_every_check_and_pins_versions() -> None:
         "parch_ci.py coverage",
     ):
         assert command in workflow, command
-    assert "ubuntu-latest" in workflow and "windows-latest" not in workflow  # ADR-0011
-    assert 'node-version: "22"' in workflow  # jscpd запускается через npx из скрипта
+    assert (
+        "cimg/python" in workflow and "windows-latest" not in workflow
+    )  # Linux в Docker (ADR-0022)
+    head = (circleci / "head.yml").read_text(encoding="utf-8")
+    assert (
+        "- install-node" in workflow and 'NODE_VERSION: "22.14.0"' in head
+    )  # jscpd через npx из скрипта
     script = SCRIPT.read_text(encoding="utf-8")
     assert f'JSCPD_VERSION = "{JSCPD_VERSION}"' in script  # версия jscpd зафиксирована
 
@@ -548,7 +554,9 @@ def test_baseline_refuses_changed_settings_without_the_owner_flag(shop: Shop) ->
 
 
 def test_workflow_template_runs_the_new_checks() -> None:
-    workflow = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
+    workflow = (REPO / "plugin" / "templates" / "ci" / "circleci" / "python.yml").read_text(
+        encoding="utf-8"
+    )
     for check in ("skips", "suppressions", "settings"):
         assert f"parch_ci.py {check}" in workflow
 

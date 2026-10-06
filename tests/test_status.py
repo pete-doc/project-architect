@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Табло STATUS.md (STANDARD.md, 7.1): генератор, пересчёт после слияния, табло самого продукта.
 
 Табло строится только из GOAL.md, features.json, отчёта тестов, incidents/, ADR и QUESTIONS.md.
@@ -5,6 +6,7 @@
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -510,8 +512,12 @@ def test_the_state_workflow_runs_no_tests_and_publishes_only_to_the_status_branc
 
 
 def test_the_python_template_hands_its_report_to_the_state_job() -> None:
-    template = (REPO / "plugin" / "templates" / "ci" / "python.yml").read_text(encoding="utf-8")
-    assert "actions/upload-artifact@v4" in template and "name: test-report" in template
+    """Имя прежнее (храповик): отчёт тестов сохраняется и при падении (CircleCI: store_test_results и store_artifacts)."""
+    template = (REPO / "plugin" / "templates" / "ci" / "circleci" / "python.yml").read_text(
+        encoding="utf-8"
+    )
+    for step in ("store_test_results", "store_artifacts"):
+        assert re.search(rf"- {step}:\n\s+when: always\n\s+path: test-report.xml", template), step
 
 
 def test_adr_0012_records_the_choice_of_the_status_branch() -> None:
