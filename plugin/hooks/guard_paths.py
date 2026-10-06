@@ -64,7 +64,13 @@ _CI_ROOT_FILES = {
     ".pre-commit-config.yaml",
 }
 _CI_DIRS = {".github", ".circleci"}
-_STATE_FILES = {"features.json", "baseline.json", "jscpd-baseline.json", "vulture-whitelist.py"}
+_STATE_FILES = {
+    "features.json",
+    "baseline.json",
+    "jscpd-baseline.json",
+    "standard-baseline.json",
+    "vulture-whitelist.py",
+}
 _ALLOWED_ROOT_MD = {"agents.md", "claude.md", "readme.md"}
 _ADR_STATUS = re.compile(r"(?im)^\s*[-*]?\s*(?:статус|status)\s*:\s*(accepted|принят|утвержд)")
 

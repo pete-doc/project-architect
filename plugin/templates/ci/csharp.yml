@@ -38,7 +38,10 @@ jobs:
       - run: python .github/parch/parch_ci.py suppressions --language csharp
       - run: python .github/parch/parch_ci.py modules --language csharp
       - run: python .github/parch/parch_ci.py catalog --language csharp
+      # Описание PR передаётся через env (не в командной строке): проверка раздела «Основания».
       - run: python .github/parch/parch_ci.py standard --language csharp
+        env:
+          PARCH_PR_BODY: ${{ github.event.pull_request.body }}
       - run: python .github/parch/parch_ci.py deps --language csharp
       - run: python .github/parch/parch_ci.py architecture --language csharp
       - run: python .github/parch/parch_ci.py libraries --language csharp

@@ -131,7 +131,7 @@ CI самого репозитория живёт на CircleCI (`.circleci/`), 
 
 1. Все обязательные проверки CI зелёные (`ci/circleci: check` и `ci/circleci: windows-hooks`).
 2. В PR нет ADR со статусом `proposed`.
-3. PR не меняет `.github/`, `.circleci/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `plugin/templates/ci/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `state/baseline.json`, `state/acceptance/` (приёмка владельцем, ADR-0014), `pyproject.toml` в части правил проверок.
+3. PR не меняет `.github/`, `.circleci/`, `.claude/`, `plugin/hooks/`, `plugin/agents/`, `plugin/templates/ci/`, `tests/` (кроме добавления новых тестов), `AGENTS.md`, `CLAUDE.md`, `requirements-dev.txt`, `state/baseline.json`, `state/standard-baseline.json` (долг проверки `standard`, ADR-0019; в описании такого PR перечислены добавленные в долг ключи), `state/acceptance/` (приёмка владельцем, ADR-0014), `pyproject.toml` в части правил проверок.
 4. Описание PR заполнено по правилу 7.
 
 Не выполнено хотя бы одно из 2–4: не сливай, напиши владельцу в чат одной строкой, что требует его решения, и жди ответа «сливай». Если автослияние отключено или нет прав, скажи об этом, не обходи.

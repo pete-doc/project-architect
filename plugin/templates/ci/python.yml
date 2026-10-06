@@ -45,7 +45,10 @@ jobs:
       - run: python .github/parch/parch_ci.py suppressions
       - run: python .github/parch/parch_ci.py modules
       - run: python .github/parch/parch_ci.py catalog
+      # Описание PR передаётся через env (не в командной строке): проверка раздела «Основания».
       - run: python .github/parch/parch_ci.py standard
+        env:
+          PARCH_PR_BODY: ${{ github.event.pull_request.body }}
       - run: python .github/parch/parch_ci.py deps
       - run: python .github/parch/parch_ci.py architecture
       - run: python .github/parch/parch_ci.py dead-code

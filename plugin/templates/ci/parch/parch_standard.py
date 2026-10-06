@@ -116,6 +116,165 @@ def markdown_violations(project: Path) -> dict[str, str]:
     return found
 
 
+GOAL_ID = re.compile(r"\bG\d+\b")
+ACCEPTED_VERDICT = re.compile(r"Итог:\s*принято владельцем,\s*\d{4}-\d{2}-\d{2}")
+BASIS_HEADING = "Основания"
+BASIS_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+BASIS_SOURCE = re.compile(
+    r"каталог|capabilities|реестр модулей|modules|\badr\b|adr/|git log|поиск|search|lessons|урок|incidents|"
+    r"истори|ссылк|https?://",
+    re.IGNORECASE,
+)  # fmt: skip
+
+
+def strings(value: object) -> list[str]:
+    """Непустые элементы списка как строки (не список: пусто)."""
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in cast("list[object]", value) if v]
+
+
+def accepted_by_owner(project: Path, block_id: str) -> bool:
+    """Блок без тестов принят владельцем: все критерии отмечены и стоит строка итога."""
+    path = project / "state" / "acceptance" / f"{block_id}.md"
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return bool(ACCEPTED_VERDICT.search(text)) and "- [ ]" not in text
+
+
+def features_violations(project: Path) -> dict[str, str]:
+    """Связность реестра блоков (раздел 3): цель, зависимости, цикл, «готово» без тестов приёмки."""
+    path = project / "state" / "features.json"
+    if not path.is_file():
+        return {}  # отсутствие файла ловит правило обязательных файлов
+    try:
+        data = cast("object", json.loads(path.read_text(encoding="utf-8")))
+    except ValueError:
+        return {"features:unreadable": "state/features.json не читается как JSON"}
+    items = cast("dict[str, object]", data).get("features") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return {"features:unreadable": "в state/features.json нет списка features"}
+    blocks = [
+        cast("dict[str, object]", i) for i in cast("list[object]", items) if isinstance(i, dict)
+    ]
+    ids = [str(b.get("id", "")) for b in blocks]
+    found: dict[str, str] = {}
+    goal_ids: set[str] = set()
+    for name in ("docs/GOAL.md", "GOAL.md"):
+        goal_file = project / name
+        if goal_file.is_file():
+            goal_ids |= set(
+                GOAL_ID.findall(goal_file.read_text(encoding="utf-8", errors="replace"))
+            )
+    graph: dict[str, list[str]] = {}
+    for number, block in enumerate(blocks, start=1):
+        bid = str(block.get("id", ""))
+        if not bid:
+            found[f"features:no-id:{number}"] = f"в state/features.json блок №{number} без id"
+            continue
+        if ids.count(bid) > 1:
+            found[f"features:{bid}:duplicate"] = f"блок {bid}: id повторяется в state/features.json"
+        goals = strings(block.get("goal"))
+        if not goals:
+            found[f"features:{bid}:no-goal"] = (
+                f"блок {bid}: нет цели (поле goal пусто): код без цели"
+            )
+        elif goal_ids:
+            for goal in goals:
+                if goal not in goal_ids:
+                    found[f"features:{bid}:goal:{goal}"] = (
+                        f"блок {bid}: цели {goal} нет в документе цели"
+                    )
+        deps = strings(block.get("depends_on"))
+        graph[bid] = deps
+        for dep in deps:
+            if dep not in ids:
+                found[f"features:{bid}:dep:{dep}"] = (
+                    f"блок {bid}: зависит от несуществующего блока {dep}"
+                )
+        tests = block.get("acceptance_tests")
+        if block.get("status") == "done" and not (isinstance(tests, list) and tests):
+            if not accepted_by_owner(project, bid):
+                found[f"features:{bid}:done-no-tests"] = (
+                    f"блок {bid}: статус «готово» без тестов приёмки и без принятия владельцем "
+                    "(state/acceptance/)"
+                )
+    for group in cyclic_groups(graph):
+        found["features:cycle:" + "+".join(group)] = (
+            "цикл зависимостей между блоками: " + ", ".join(group)
+        )
+    return found
+
+
+def cyclic_groups(graph: dict[str, list[str]]) -> list[list[str]]:
+    """Все циклы: группы блоков, зависящих друг от друга по кругу (компоненты связности Тарьяна)."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    groups: list[list[str]] = []
+
+    def visit(node: str) -> None:
+        index[node] = low[node] = len(index)
+        stack.append(node)
+        on_stack.add(node)
+        for dep in graph.get(node, []):
+            if dep not in graph:
+                continue
+            if dep not in index:
+                visit(dep)
+                low[node] = min(low[node], low[dep])
+            elif dep in on_stack:
+                low[node] = min(low[node], index[dep])
+        if low[node] == index[node]:
+            members: list[str] = []
+            while True:
+                member = stack.pop()
+                on_stack.discard(member)
+                members.append(member)
+                if member == node:
+                    break
+            if len(members) > 1 or node in graph.get(node, []):
+                groups.append(sorted(members))
+
+    for node in graph:
+        if node not in index:
+            visit(node)
+    return sorted(groups)
+
+
+def basis_problem(body: str) -> str | None:
+    """Раздел «Основания» в описании PR: есть, не пуст после комментариев шаблона, назван источник."""
+    lines = BASIS_COMMENT.sub("", body).splitlines()
+    section: list[str] | None = None
+    level = 0
+    fenced = False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced  # `#` внутри блока кода не заголовок
+        heading = None if fenced else re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            if section is not None and len(heading[1]) <= level:
+                break  # раздел кончается заголовком того же или более высокого уровня
+            if section is None and heading[2].strip().lower() == BASIS_HEADING.lower():
+                section, level = [], len(heading[1])
+                continue
+        if section is not None and not heading:  # сами подзаголовки текстом не считаются
+            section.append(line)
+    if section is None:
+        return f"в описании PR нет раздела «{BASIS_HEADING}» (образец: шаблон .github/pull_request_template.md)"
+    text = "\n".join(section).strip()
+    if not text:
+        return f"раздел «{BASIS_HEADING}» в описании PR пуст: протокол исполнителя не пройден"
+    if not BASIS_SOURCE.search(text):
+        return (
+            f"раздел «{BASIS_HEADING}» не называет источник (каталог, реестр модулей, ADR, git log, "
+            "поиск по коду): напишите, что искали и что нашли"
+        )
+    return None
+
+
 def read_debt(project: Path) -> set[str] | None:
     path = project / DEBT_FILE
     if not path.is_file():
@@ -147,9 +306,17 @@ def existing_project(project: Path) -> bool:
 
 
 def check(
-    project: Path, update: bool = False, accept_new: bool = False
+    project: Path,
+    update: bool = False,
+    accept_new: bool = False,
+    extra: dict[str, str] | None = None,
+    pr_body: str | None = None,
 ) -> tuple[list[str], list[str]]:
-    """(провалы, пометки): правила состава проекта в трёх режимах: новый проект, существующий без долга, с храповиком."""
+    """(провалы, пометки): правила состава проекта в трёх режимах: новый проект, существующий без долга, с храповиком.
+
+    `extra` — нарушения, которые находит вызывающий (отчёты об инцидентах, ключ `incident:<имя>`): они идут
+    через тот же долг. `pr_body` — описание PR (None: проверка «Оснований» не идёт, например при локальном запуске).
+    """
     if not is_managed(project):
         return [], [
             "Правила состава проекта (файлы, инструкции, .md) не применяются: проект не подключён (нет .github/parch/)."
@@ -158,10 +325,18 @@ def check(
         **file_violations(project),
         **instruction_violations(project),
         **markdown_violations(project),
+        **features_violations(project),
+        **(extra or {}),
     }
     debt = read_debt(project)
     problems: list[str] = []
     notes: list[str] = []
+    basis = basis_problem(pr_body) if pr_body is not None else None
+    if basis is not None:
+        if debt is None and existing_project(project):
+            notes.append(f"Предупреждение (существующий проект, долг не записан): {basis}.")
+        else:
+            problems.append(f"Основания в PR: {basis}.")
     recording = (
         update and accept_new
     )  # владелец записывает долг: предупреждение не нужно, долг пишется ниже

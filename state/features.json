@@ -236,7 +236,8 @@
       ],
       "spec": "docs/specs/F14-standard-full.md",
       "acceptance_tests": [
-        "tests/test_standard_full.py"
+        "tests/test_standard_full.py",
+        "tests/test_standard_composition.py"
       ],
       "status": "in_progress",
       "passes": false,
