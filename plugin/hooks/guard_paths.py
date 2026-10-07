@@ -1,6 +1,7 @@
 """PreToolUse: охрана путей. Правила одинаковы для всех, включая основную сессию без роли.
 
-1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок.
+1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок. Роль
+   tester, наоборот, правит только тесты и docs/QUESTIONS.md (TESTER_EXTRA_PATHS): остальное блок.
 2. Защищённые пути (настройки Claude и hooks, CI-файлы, файлы state/ проверок, CONSTITUTION.md,
    docs/GOAL.md, принятые ADR): блокировка для всех. Снять её может только владелец,
    подтвердив запрос, который Claude Code показывает ему (решение «ask»). Агент подтвердить
@@ -25,6 +26,7 @@ from types import ModuleType
 from typing import cast
 
 from _common import (
+    CD_COMMANDS,
     FILE_TOOLS,
     SHELL_TOOLS,
     Ask,
@@ -42,9 +44,29 @@ from _common import (
     target_paths,
     tool_input,
 )
+from guard_shell_writes import TEMP_PREFIXES, target_allowed
 
 HOOK = "guard_paths"
 TEST_ROLES = frozenset({"architect", "tester"})
+TESTER_EXTRA_PATHS = frozenset(
+    {"docs/questions.md"}
+)  # сюда tester пишет вопросы по описанию блока (в нижнем регистре)
+
+TESTER_TEST_DIRS = frozenset({"tests", "test", "__tests__"})
+TESTER_CS_SUFFIXES = (".cs", ".csproj", ".json", ".resx")
+TESTER_CACHE_DIRS = frozenset(
+    {".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", "testresults"}
+)
+# файлы вне тестовой папки, которые tester вправе писать (имена в нижнем регистре)
+TESTER_NAME_PATTERNS = (
+    "test_*.py",
+    "*_test.py",
+    "conftest.py",
+    "*.test.*",
+    "*.spec.*",
+    "*.tests.cs",
+    "*.tests.ps1",
+)
 
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs"}
 _TEST_NAME_PATTERNS = (
@@ -110,6 +132,31 @@ def _is_test_path(rel: str) -> bool:
     if any(d in _TEST_DIRS or d.endswith((".tests", ".test")) or d.endswith("tests") for d in dirs):
         return True
     return any(fnmatch.fnmatch(name, pattern) for pattern in _TEST_NAME_PATTERNS)
+
+
+def _tester_may_write(rel: str) -> bool:
+    """Тесты и вопросы по описанию блока, по более строгому правилу, чем общее `_is_test_path`:
+    тестовая папка только с именем ровно из TESTER_TEST_DIRS или проект тестов C# `Имя.Tests`
+    (файлы C#; не specs и не «оканчивается на tests», как `contests`),
+    файл вне такой папки только по строгим маскам; всё под docs/ и путь с docs/specs закрыты."""
+    low = rel.lower()
+    if low in TESTER_EXTRA_PATHS:
+        return True
+    parts = PurePosixPath(low).parts
+    if not parts:
+        return False  # корень проекта (`git checkout -- .`, `rm -rf .`)
+    pairs = list(zip(parts, parts[1:], strict=False))
+    if parts[0] == "docs" or ("docs", "specs") in pairs:
+        return False
+    if parts[-1] in TESTER_CACHE_DIRS:
+        return True  # сама папка кэша запуска тестов (`rm -rf .pytest_cache`); файлы в ней не нужны
+    if any(d in TESTER_TEST_DIRS for d in parts):
+        return True  # сама папка тестов (`cp x tests/`, `git checkout -- tests/`) и всё внутри
+    if any(d.endswith(".tests") for d in parts[:-1]) and (
+        parts[-1].endswith(TESTER_CS_SUFFIXES) or parts[-1] in {"bin", "obj"}
+    ):
+        return True  # проект тестов C# `Имя.Tests`: файлы C# и его сборка, не любой код в папке
+    return any(fnmatch.fnmatch(parts[-1], pattern) for pattern in TESTER_NAME_PATTERNS)
 
 
 def _is_accepted_adr(rel: str, project: Path) -> bool:
@@ -232,6 +279,14 @@ def _settings_reason(rel: str, real: Path, data: JsonDict, command: str) -> str 
 def _decide(
     rel: str, real: Path, role: str, project: Path, data: JsonDict, command: str
 ) -> Block | Ask | None:
+    if role == "tester" and not _tester_may_write(rel):
+        return Block(
+            HOOK,
+            f"Роль tester правит только тесты и docs/QUESTIONS.md, а {rel} к ним не относится: "
+            "код блока, CI, настройки проверок и baseline правят другие роли. Если для теста нужна "
+            "правка кода, остановись и опиши её в ответе: её сделает исполнитель (implementer) "
+            "или основная сессия.",
+        )
     if _is_test_path(rel) and role not in TEST_ROLES:
         shown = f"«{role}»" if role else "основная сессия без роли"
         return Block(
@@ -311,7 +366,90 @@ def _md_block(rel: str, project: Path) -> Block | None:
     )
 
 
-def _written_paths(tokens: list[str]) -> list[str]:
+def _git_paths(tokens: list[str], strict: bool) -> list[str]:
+    """Пути git-команды, которая меняет файлы. Грубо: всё без дефиса (для защищённых путей лишнее
+    слово безвредно). strict: для правила «только своё» (tester) лишнее слово это ложный блок,
+    поэтому берутся только надёжные пути: после rm, mv, restore и после `--` у checkout."""
+    if not strict:
+        return [t for t in tokens[1:] if not t.startswith(("-", ">"))]
+    args = [t for t in tokens[1:] if not t.startswith(">")]
+    subs = [i for i, t in enumerate(args) if t in {"checkout", "restore", "rm", "mv"}]
+    if not subs:
+        return []
+    start = subs[0]
+    if args[start] == "checkout":
+        return args[args.index("--") + 1 :] if "--" in args[start:] else []
+    rest = args[start + 1 :]
+    paths: list[str] = []
+    for index, token in enumerate(rest):
+        after_source = index > 0 and rest[index - 1] in {"-s", "--source"}  # `--source main`
+        if not token.startswith("-") and not after_source:
+            paths.append(token)
+    return paths
+
+
+def _target_directory(tokens: list[str]) -> list[str]:
+    """Цель `cp -t КУДА`: отдельным словом, слитно (`-tsrc`), в связке (`-vt src`) или через `=`."""
+    found: list[str] = []
+    for index, token in enumerate(tokens[1:], start=1):
+        if token.startswith("--target-directory="):
+            found.append(token.split("=", 1)[1])
+        elif token == "--target-directory" and index + 1 < len(tokens):
+            found.append(tokens[index + 1])
+        elif re.fullmatch(r"-[a-zA-Z]*t.*", token) and not token.startswith("--"):
+            rest = token[token.index("t") + 1 :]
+            if rest:
+                found.append(rest)
+            elif index + 1 < len(tokens):
+                found.append(tokens[index + 1])
+    return found
+
+
+def _files_after_scripts(tokens: list[str]) -> list[str]:
+    """Файлы sed/perl без выражений: значения `-e`, `-pe`, `-f`, `--expression` не пути, а если
+    выражений через флаги нет, выражением считается первое слово без дефиса."""
+    files: list[str] = []
+    skip_next = False
+    had_script = False
+    for token in tokens[1:]:
+        if skip_next:
+            skip_next = False
+        elif token.startswith(">"):
+            continue
+        elif token.startswith("-"):
+            if token in {"--expression", "--file"} or re.fullmatch(r"-[a-zA-Z]*[ef]", token):
+                skip_next = had_script = True
+            elif token.startswith(("--expression=", "--file=")):
+                had_script = True
+        else:
+            files.append(token)
+    return files if had_script else files[1:]
+
+
+def _in_place_flag(tokens: list[str]) -> bool:
+    """sed/perl правят файл на месте: `-i[.bak]`, `-Ei`, `-pi.bak`, `--in-place[=.bak]`."""
+    return any(
+        t.startswith("--in-place") or (re.match(r"-[a-hj-zA-LN-Z]*i", t) is not None)
+        for t in tokens[1:]
+        if t.startswith("-")
+    )
+
+
+def _tester_shell_exempt(raw: str, rel: str, root: Path, command: str) -> bool:
+    """Оболочка, tester: отчёты тестов, покрытие, временные файлы (как в guard_shell_writes).
+    Имена отчётов принимаются только в корне проекта и в тестовых папках, `htmlcov` только верхней
+    папкой: иначе `touch src/junit.xml` или `cp x src/htmlcov/y.py` обходили бы строгое правило."""
+    cleaned = raw.strip("\"'")
+    if not target_allowed(cleaned, root, command):
+        return False
+    if cleaned.startswith(TEMP_PREFIXES):
+        # `$TEMP/x`: после склейки с cwd путь попал бы внутрь проекта; `$TEMP/../src/a.py` нет
+        return ".." not in cleaned.replace("\\", "/").split("/")
+    parts = PurePosixPath(rel).parts
+    return len(parts) <= 1 or parts[0] in TESTER_TEST_DIRS | {"htmlcov"}
+
+
+def _written_paths(tokens: list[str], strict: bool = False) -> list[str]:
     """Пути, которые команда (по грубой оценке) меняет, создаёт или удаляет."""
     name = command_name(tokens)
     paths: list[str] = []
@@ -321,21 +459,32 @@ def _written_paths(tokens: list[str]) -> list[str]:
             skip_next = False
             continue
         if token in {">", ">>", "1>", "2>", "&>"} and index + 1 < len(tokens):
-            paths.append(tokens[index + 1])
+            if not (strict and tokens[index + 1].startswith("&")):  # `> &2`: поток, не файл
+                paths.append(tokens[index + 1])
             skip_next = True
         elif token.startswith(">") and len(token) > 1:
-            paths.append(token.lstrip(">"))
+            target = token.lstrip(">")
+            if not (strict and target.startswith("&")):  # `>&2`: поток, не файл
+                paths.append(target)
     positional = [t for t in tokens[1:] if not t.startswith(("-", ">"))]
     if name in _MUTATING_COMMANDS:
-        if name == "sed" and not any(t.startswith("-i") or t == "--in-place" for t in tokens):
+        if strict and name in {"sed", "perl"}:
+            if not _in_place_flag(tokens):
+                return paths
+            positional = _files_after_scripts(tokens)
+        elif name == "sed" and not any(t.startswith("-i") or t == "--in-place" for t in tokens):
             return paths
-        if name == "perl" and not any(t.startswith("-i") for t in tokens):
+        elif name == "perl" and not any(t.startswith("-i") for t in tokens):
             return paths
         paths.extend(positional)
     elif name in _COPY_COMMANDS and positional:
-        paths.append(positional[-1])
+        targets = _target_directory(tokens) if strict else []
+        if targets:  # `cp -t КУДА что`: пишется только в КУДА, источники не меняются
+            paths.extend(targets)
+        else:
+            paths.append(positional[-1])
     elif name == "git" and any(t in tokens for t in ("checkout", "restore", "rm", "mv")):
-        paths.extend(positional)
+        paths.extend(_git_paths(tokens, strict))
     return paths
 
 
@@ -354,6 +503,8 @@ def _check_paths(
             rel = rel_posix(cleaned, root)
             if rel is None:
                 continue
+            if role == "tester" and command and _tester_shell_exempt(raw, rel, root, command):
+                continue
             decision = _decide(rel, Path(cleaned), role, root, data, command)
             if isinstance(decision, Block):
                 return decision
@@ -365,13 +516,34 @@ def _check_paths(
     return asked
 
 
+def _tester_raws(command: str, cwd: Path) -> list[str]:
+    """Пути записи команды для tester с учётом `cd` внутри команды: после `cd tests` путь
+    `../src/x` ведёт в src, а `a.py` лежит в tests. Без `cd` пути остаются как написаны."""
+    base = cwd
+    raws: list[str] = []
+    for tokens in command_tokens(command):
+        if command_name(tokens) in CD_COMMANDS:
+            args = [t for t in tokens[1:] if not t.startswith("-")]
+            if args and not args[0].startswith(("$", "%", "~")):
+                base = (base / args[0].strip("\"'").replace("\\", "/")).resolve()
+            continue
+        for raw in _written_paths(tokens, strict=True):
+            plain = raw.strip("\"'").replace("\\", "/")
+            moved = base != cwd and not Path(plain).is_absolute() and not plain.startswith("$")
+            raws.append(str(base / plain) if moved else raw)
+    return raws
+
+
 def check(data: JsonDict, project: Path) -> Block | Ask | None:
     role = agent_role(data)
     tool = get_str(data, "tool_name")
     command = ""
     if tool in SHELL_TOOLS:
         command = shell_command(data)
-        raws = [raw for tokens in command_tokens(command) for raw in _written_paths(tokens)]
+        if role == "tester":
+            raws = _tester_raws(command, Path(get_str(data, "cwd") or project))
+        else:
+            raws = [raw for tokens in command_tokens(command) for raw in _written_paths(tokens)]
     elif tool in FILE_TOOLS:
         raws = target_paths(data)
     else:

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import file_call, run_hook
+from conftest import bash, file_call, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "plugin" / "agents"
@@ -83,14 +83,205 @@ def test_guard_paths_lets_tester_write_tests_and_nobody_else(project: Path) -> N
     assert nobody.blocked and "основная сессия без роли" in (nobody.stdout + nobody.stderr)
 
 
-def test_guard_paths_does_not_yet_stop_tester_from_editing_code(project: Path) -> None:
-    """Известный пробел, записан в BACKLOG: охрана путей не умеет «tester не правит код», это держит только инструкция
-    роли. Тест фиксирует нынешнее поведение, чтобы изменение охраны было осознанным (по слову владельца)."""
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "src/convert.py",  # код блока
+        "state/baseline.json",  # храповик: утверждает владелец
+        "state/features.json",
+        ".circleci/config.yml",  # CI
+        "pyproject.toml",  # настройки проверок
+        "docs/GOAL.md",
+        "docs/specs/F1.md",  # спецификацию пишет не tester
+        "plugin/templates/docs/specs/x.md",  # спецификация не в корневом docs/
+        "src/contests/x.py",  # папка «оканчивается на tests», но это не тестовая папка
+        "src/latest.cs",  # имя оканчивается на test, но это не тест
+        "src/Shop.Testing/Shop.cs",  # не проект тестов
+        "src/Shop.Tests.Helpers/Shop.cs",  # не проект тестов
+        "specs/x.md",  # папка specs для tester не тестовая
+        "src/app.test/main.py",  # суффикс .test не делает папку тестовой
+        "plugin/hooks.test/x.py",
+        "src/hooks.tests/main.py",  # суффикс .tests: только файлы C#, не любой код
+    ],
+)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_tester_cannot_write_anything_but_tests_and_the_questions_file(
+    rel: str, tool: str, project: Path
+) -> None:
+    """Плохие примеры: tester пишет код, baseline, CI, настройки, цель, спецификацию: блок с понятным сообщением по-русски."""
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, "parch:tester")
+    assert result.blocked, rel
+    shown = result.stdout + result.stderr
+    assert "Роль tester правит только тесты и docs/QUESTIONS.md" in shown and rel.lower() in shown
+    assert "implementer" in shown  # сообщение говорит, к кому идти за правкой кода
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "tests/test_convert.py",
+        "tests/conftest.py",
+        "tests/data/sample.json",
+        "tests/unit/test_deep.py",
+        "src/test_helpers.py",  # маска test_*.py
+        "src/shop_test.py",
+        "web/app.spec.ts",
+        "src/Shop.Tests.cs",
+        "Shop.Tests/ShopTests.cs",  # проект тестов C#
+        "docs/QUESTIONS.md",
+        "docs/questions.md",
+    ],
+)
+def test_tester_can_write_tests_and_the_questions_file(rel: str, project: Path) -> None:
+    """Хорошие случаи: тест, фикстуры и данные тестов в `tests/`, вопросы по описанию блока в `docs/QUESTIONS.md`."""
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, "parch:tester")
+    assert result.code == 0 and not result.blocked, (rel, result.stdout + result.stderr)
+
+
+def test_tester_is_blocked_on_code_written_through_the_shell_too(project: Path) -> None:
+    result = run_hook("guard_paths.py", bash("echo x > src/convert.py"), project, "parch:tester")
+    assert result.blocked and "Роль tester правит только тесты" in (result.stdout + result.stderr)
+    harmless = run_hook(
+        "guard_paths.py", bash("python -m pytest tests/test_convert.py"), project, "parch:tester"
+    )
+    assert harmless.code == 0 and not harmless.blocked  # запуск тестов не запись
+
+
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        # обычная работа tester: должно проходить без ложных блоков (правило 9 остановило бы работу)
+        ("python -m pytest tests/test_convert.py", True),
+        ("python -m pytest tests/ > test-report.xml", True),  # то же разрешает guard_shell_writes
+        ("python -m pytest --junitxml=test-report.xml > junit.xml", True),
+        ("python -m pytest tests/ > /dev/null 2>&1", True),
+        ("git status", True),
+        ("git diff", True),
+        ("git log --oneline", True),
+        ("git add tests/test_convert.py", True),
+        ("git commit -m 'тест'", True),
+        ("git checkout main", True),  # ветка, не путь
+        ("git checkout -b F1-tests", True),
+        ("git checkout -- tests/test_convert.py", True),
+        ("git restore tests/test_convert.py", True),
+        ("git rm tests/test_old.py", True),
+        ("git mv tests/a.py tests/test_b.py", True),
+        ("python -m pytest > $TEMP/out.txt", True),  # временный файл вне проекта
+        ("python -m pytest | tee $TEMP/log.txt", True),
+        ("python -m pytest > /tmp/out.txt", True),
+        ("python -m pytest --cov > .coverage", True),  # отчёт в корне проекта
+        ("python -m pytest --cov-report=html > htmlcov/index.html", True),
+        ("sed -i 's/a/b/' tests/test_convert.py", True),  # выражение это не путь
+        ("perl -i -pe 's/a/b/' tests/test_convert.py", True),
+        ("echo x >&2", True),  # поток stderr, не файл
+        ("python -m pytest > /dev/null 2>&1 >&2", True),
+        ("echo x > &2", True),
+        ("sed -i -e 's/a/b/' -e 's/c/d/' tests/test_convert.py", True),  # несколько выражений
+        ("sed -i --expression='s/a/b/' tests/test_convert.py", True),
+        ("sed -i -f script.sed tests/test_convert.py", True),
+        ("perl -i -pe 's/a/b/' -e 's/c/d/' tests/test_convert.py", True),
+        ("cp src/a.py tests/", True),  # сама папка тестов как цель
+        ("mv junit.xml tests/", True),
+        ("git checkout -- tests/", True),
+        ("git checkout HEAD -- tests/", True),
+        ("git restore tests", True),
+        ("git restore --source main tests/a.py", True),  # значение --source это не путь
+        ("git restore -s main tests/a.py", True),
+        ("cp -t tests src/a.py", True),  # пишется только в tests, источник не меняется
+        ("cd tests && touch a.py", True),  # после cd пути считаются от tests
+        ("cd tests && rm -rf __pycache__", True),
+        ("rm -rf Shop.Tests/bin", True),
+        ("rm -rf Shop.Tests/obj", True),
+        ("rm -rf TestResults", True),
+        ("rm -rf .pytest_cache", True),
+        ("rm -rf tests/__pycache__", True),
+        ("touch tests/test_new.py", True),
+        ("cp tests/a.py tests/test_b.py", True),
+        # плохие примеры: запись в код и настройки
+        ("git checkout -- src/convert.py", False),
+        ("git restore src/convert.py", False),
+        ("git rm src/convert.py", False),
+        ("git mv src/convert.py src/old.py", False),
+        ("rm src/convert.py", False),
+        ("touch src/new.py", False),
+        ("cp tests/a.py src/convert.py", False),
+        ("echo x > src/convert.py", False),
+        ("python -m pytest tests/ > out.txt", False),  # посторонний файл в корне проекта
+        ("echo x >> state/baseline.json", False),
+        ("sed -i 's/a/b/' src/convert.py", False),
+        ("perl -i -pe 's/a/b/' src/convert.py", False),
+        ("cp -t src tests/a.py", False),  # настоящая цель стоит после -t
+        ("cp --target-directory=src tests/a.py", False),
+        ("mv -t src tests/a.py", False),
+        ("cp tests/a.py src/htmlcov/convert.py", False),  # имя отчёта не оправдывает код
+        ("touch src/junit.xml", False),
+        ("touch src/.coverage", False),
+        ("cp tests/a.py src/htmlcov/x.py", False),
+        ("rm -rf src/__pycache__/x.py", False),  # файл внутри кэша не кэш
+        ("rm -rf docs/specs/__pycache__", False),
+        ("cp -vt src tests/a.py", False),  # цель в связке флагов
+        ("cp -tsrc tests/a.py", False),  # цель слитно с флагом
+        ("perl -pi.bak -e 's/a/b/' src/convert.py", False),
+        ("perl -pi -e 's/a/b/' src/convert.py", False),
+        ("sed --in-place=.bak 's/a/b/' src/convert.py", False),
+        ("sed -Ei 's/a/b/' src/convert.py", False),
+        ("sed -ni 's/a/b/p' src/convert.py", False),
+        ("cd tests && rm ../src/convert.py", False),  # cd внутри команды учитывается
+        ("cd tests && cp x ../src/y.py", False),
+        ("cd src && touch a.py", False),
+        ("touch $TEMP/../src/a.py", False),  # выход из временной папки в код
+        ("cp tests/a.py $TEMP/../src/a.py", False),
+        ("sed -i -e 's/a/b/' -e 's/c/d/' src/convert.py", False),
+        ("sed -i -f script.sed src/convert.py", False),
+        ("echo x >&2 > src/a.py", False),  # поток не прячет настоящую запись
+        ("rm -rf Shop.Tests/Shop.cs.py", False),
+        ("git checkout -- .", False),  # корень проекта: понятный блок, не внутренняя ошибка
+        ("rm -rf .", False),
+    ],
+)
+def test_tester_shell_commands_are_blocked_only_when_they_write_outside_the_tests(
+    command: str, allowed: bool, project: Path
+) -> None:
+    """Обычная работа tester в оболочке проходит, запись в код и baseline блокируется: правило запрета
+    нельзя строить на грубой оценке «что команда пишет» (лишнее слово даёт ложный блок)."""
+    result = run_hook("guard_paths.py", bash(command), project, "parch:tester")
+    shown = result.stdout + result.stderr
+    if allowed:
+        assert result.code == 0 and not result.blocked, (command, shown)
+    else:
+        assert result.blocked and "Роль tester правит только тесты" in shown, (command, shown)
+
+
+def test_other_roles_keep_the_rough_git_path_estimate(project: Path) -> None:
+    """Для остальных ролей git-пути по-прежнему берутся грубо (слово подкоманды как путь): защищённый
+    путь после `git checkout` не проскакивает, хотя `--` нет."""
+    result = run_hook(
+        "guard_paths.py", bash("git checkout state/baseline.json"), project, "parch:implementer"
+    )
+    assert result.code == 0 and "ask" in result.stdout
+
+
+@pytest.mark.parametrize("rel", ["tests/state/baseline.json", "tests/docs/GOAL.md"])
+def test_tester_asks_the_owner_for_protected_files_inside_the_tests_folder(
+    rel: str, project: Path
+) -> None:
+    """Раннего выхода нет: путь разрешён tester по месту (`tests/`), но защищённое имя файла остаётся
+    под подтверждением владельца."""
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, "parch:tester")
+    assert result.code == 0 and '"permissionDecision": "ask"' in result.stdout, result.stdout
+
+
+def test_the_other_roles_keep_their_rules_after_the_tester_rule(project: Path) -> None:
+    """Правило tester не задело остальных: `implementer` пишет код, но не тесты; основная сессия пишет код."""
     code = project / "src" / "convert.py"
-    result = run_hook("guard_paths.py", file_call("Write", code), project, "parch:tester")
-    assert result.code == 0 and not result.blocked
-    backlog = BACKLOG.read_text(encoding="utf-8")
-    assert "tester" in backlog and "не умеет" in backlog  # пробел назван в BACKLOG
+    assert (
+        run_hook("guard_paths.py", file_call("Write", code), project, "parch:implementer").code == 0
+    )
+    assert run_hook("guard_paths.py", file_call("Write", code), project, None).code == 0
+    test = project / "tests" / "test_convert.py"
+    assert run_hook(
+        "guard_paths.py", file_call("Write", test), project, "parch:implementer"
+    ).blocked
 
 
 # ---------- согласованность ролей ----------
