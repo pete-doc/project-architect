@@ -50,6 +50,18 @@ TESTER_EXTRA_PATHS = frozenset(
     {"docs/questions.md"}
 )  # сюда tester пишет вопросы по описанию блока (в нижнем регистре)
 
+TESTER_TEST_DIRS = frozenset({"tests", "test", "__tests__"})
+# файлы вне тестовой папки, которые tester вправе писать (имена в нижнем регистре)
+TESTER_NAME_PATTERNS = (
+    "test_*.py",
+    "*_test.py",
+    "conftest.py",
+    "*.test.*",
+    "*.spec.*",
+    "*.tests.cs",
+    "*.tests.ps1",
+)
+
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs"}
 _TEST_NAME_PATTERNS = (
     "test_*.py",
@@ -117,11 +129,20 @@ def _is_test_path(rel: str) -> bool:
 
 
 def _tester_may_write(rel: str) -> bool:
-    """Тесты и вопросы по описанию блока. docs/specs/ общее правило считает тестовым путём
-    (папка specs), но спецификацию пишет не tester."""
-    if rel.lower() in TESTER_EXTRA_PATHS:
+    """Тесты и вопросы по описанию блока, по более строгому правилу, чем общее `_is_test_path`:
+    тестовая папка только с именем ровно из TESTER_TEST_DIRS или проект тестов `Имя.Tests`
+    (не specs и не «оканчивается на tests», как `contests`),
+    файл вне такой папки только по строгим маскам; всё под docs/ и путь с docs/specs закрыты."""
+    low = rel.lower()
+    if low in TESTER_EXTRA_PATHS:
         return True
-    return _is_test_path(rel) and not rel.lower().startswith("docs/")
+    parts = PurePosixPath(low).parts
+    pairs = list(zip(parts, parts[1:], strict=False))
+    if parts[0] == "docs" or ("docs", "specs") in pairs:
+        return False
+    if any(d in TESTER_TEST_DIRS or d.endswith((".tests", ".test")) for d in parts[:-1]):
+        return True
+    return any(fnmatch.fnmatch(parts[-1], pattern) for pattern in TESTER_NAME_PATTERNS)
 
 
 def _is_accepted_adr(rel: str, project: Path) -> bool:

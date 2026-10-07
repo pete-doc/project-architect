@@ -93,6 +93,12 @@ def test_guard_paths_lets_tester_write_tests_and_nobody_else(project: Path) -> N
         "pyproject.toml",  # настройки проверок
         "docs/GOAL.md",
         "docs/specs/F1.md",  # спецификацию пишет не tester
+        "plugin/templates/docs/specs/x.md",  # спецификация не в корневом docs/
+        "src/contests/x.py",  # папка «оканчивается на tests», но это не тестовая папка
+        "src/latest.cs",  # имя оканчивается на test, но это не тест
+        "src/Shop.Testing/Shop.cs",  # не проект тестов
+        "src/Shop.Tests.Helpers/Shop.cs",  # не проект тестов
+        "specs/x.md",  # папка specs для tester не тестовая
     ],
 )
 @pytest.mark.parametrize("tool", ["Write", "Edit"])
@@ -113,6 +119,12 @@ def test_tester_cannot_write_anything_but_tests_and_the_questions_file(
         "tests/test_convert.py",
         "tests/conftest.py",
         "tests/data/sample.json",
+        "tests/unit/test_deep.py",
+        "src/test_helpers.py",  # маска test_*.py
+        "src/shop_test.py",
+        "web/app.spec.ts",
+        "src/Shop.Tests.cs",
+        "Shop.Tests/ShopTests.cs",  # проект тестов C#
         "docs/QUESTIONS.md",
         "docs/questions.md",
     ],
