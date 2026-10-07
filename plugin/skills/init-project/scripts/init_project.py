@@ -104,9 +104,9 @@ LANGUAGES = {
         "pytest, pytest-cov, coverage, ruff, pyright, import-linter, vulture, deptry",
         (
             "pytest -q",  # как в CI: `python -m pytest` добавляет корень проекта в путь импорта
-            "python -m ruff check .",
-            "python -m ruff format --check .",
-            "python -m pyright",
+            "ruff check .",
+            "ruff format --check .",
+            "pyright",
             *(f"python {CI_SCRIPT} {check}" for check in LOCAL_CI_CHECKS),
         ),
     ),

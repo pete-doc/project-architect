@@ -3,7 +3,7 @@
 Команды берутся из раздела «Команды проверки» в CONSTITUTION.md (по команде на строку):
 
     ## Команды проверки
-    - python -m pytest -q
+    - pytest -q
     - ruff check .
 
 Если раздела нет, для Python-проекта используются pytest, ruff и pyright, когда они настроены.
@@ -39,6 +39,7 @@ from loop_guard import loop_flag, report_written_since
 
 HOOK = "stop_gate"
 COMMAND_TIMEOUT = 600
+PYTHON_TOOLS = frozenset({"pytest", "ruff", "pyright"})  # как в CI; без PATH запускаются через -m
 TAIL_LINES = 40
 _HEADING = re.compile(r"^#{1,6}\s*(команды проверки|check commands)\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s")
@@ -66,11 +67,11 @@ def detected_commands(project: Path) -> list[str]:
     text = pyproject.read_text(encoding="utf-8", errors="replace") if pyproject.is_file() else ""
     has_python = pyproject.is_file() or (project / "pytest.ini").is_file()
     if has_python and ((project / "tests").is_dir() or "[tool.pytest" in text):
-        commands.append("python -m pytest -q")
+        commands.append("pytest -q")  # как в CI: `python -m pytest` скрывает ошибку импорта
     if "[tool.ruff" in text or (project / "ruff.toml").is_file():
-        commands.append("python -m ruff check .")
+        commands.append("ruff check .")
     if "[tool.pyright" in text or (project / "pyrightconfig.json").is_file():
-        commands.append("python -m pyright")
+        commands.append("pyright")
     return commands
 
 
@@ -113,6 +114,8 @@ def run_checks(project: Path, commands: list[str]) -> list[str]:
         found = shutil.which(argv[0])  # npm, npx и другие .cmd на Windows находятся только так
         if found:
             argv = [found, *argv[1:]]
+        elif argv[0] in PYTHON_TOOLS:  # нет в PATH (pip --user, venv не активирован): не блокируем
+            argv = [sys.executable, "-m", *argv]
         try:
             result = subprocess.run(
                 argv,

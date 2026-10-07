@@ -167,6 +167,53 @@ def test_stop_gate_detects_python_project_checks(project: Path) -> None:
     assert "assert False" in result.stderr
 
 
+def test_stop_gate_catches_an_import_error_that_python_m_pytest_hid(project: Path) -> None:
+    """Плохой пример: пакет `src` без корня проекта в пути импорта. `python -m pytest` добавляет
+    корень и молчит, обычный `pytest` (как в CI) падает с ModuleNotFoundError: шлюз должен ловить
+    то, что поймает CI."""
+    settings = '[tool.pytest.ini_options]\ntestpaths = ["tests"]\npythonpath = ["src"]\n'
+    (project / "pyproject.toml").write_text(settings, encoding="utf-8")
+    (project / "src" / "pkg").mkdir(parents=True)
+    (project / "src" / "pkg" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (project / "tests").mkdir()
+    (project / "tests" / "test_pkg.py").write_text(
+        "from src.pkg import VALUE\n\n\ndef test_value() -> None:\n    assert VALUE == 1\n",
+        encoding="utf-8",
+    )
+    hidden = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        check=False,
+    )
+    assert hidden.returncode == 0  # так ошибка скрыта: именно поэтому шлюз не должен запускать так
+    result = stop(project)
+    assert result.blocked, result.stderr
+    assert "No module named 'src'" in result.stderr
+
+
+def test_stop_gate_runs_pytest_through_python_when_it_is_not_in_path(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Без `pytest` в PATH (pip --user, venv не активирован) шлюз не блокирует каждую остановку
+    записью «не удалось выполнить», а запускает инструмент через `python -m`."""
+    import stop_gate
+
+    def not_found(_name: str) -> None:
+        return None
+
+    monkeypatch.setattr(stop_gate.shutil, "which", not_found)
+    (project / "tests").mkdir()
+    (project / "tests" / "test_ok.py").write_text("def test_ok() -> None:\n    pass\n", "utf-8")
+    assert stop_gate.run_checks(project, ["pytest -q"]) == []
+    (project / "tests" / "test_bad.py").write_text(
+        "def test_bad() -> None:\n    assert 0\n", "utf-8"
+    )
+    failures = stop_gate.run_checks(project, ["pytest -q"])
+    assert len(failures) == 1 and "assert 0" in failures[0]
+    assert "не удалось выполнить" not in failures[0]
+
+
 # ---------- audit_log ----------
 
 

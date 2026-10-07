@@ -7,6 +7,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -165,7 +166,11 @@ def test_tiny_files_do_not_hide_a_duplicate_that_appears_later(
     shop.passes("duplicates")
     shop.append("src/shop/pricing.py", DUPLICATE_BODY.format(n=1))
     shop.append("src/shop/orders.py", DUPLICATE_BODY.format(n=2))
-    assert "новые дубли" in shop.fails("duplicates")
+    out = shop.fails("duplicates")
+    assert "новые дубли" in out  # отказ храповика, а не сбой
+    found = re.search(r"Found (\d+) clones", out)  # настоящий дубль, а не сбой запуска jscpd
+    assert found is not None and int(found.group(1)) >= 1, out
+    assert "analyzed no files" not in out
 
 
 def test_a_package_that_jscpd_cannot_see_still_fails_the_duplicates_check(
