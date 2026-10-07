@@ -145,6 +145,11 @@ CI_TEMPLATES = {
     "csharp": "circleci/csharp.yml",
     "powershell": "circleci/powershell.yml",
 }  # шаблоны заданий CircleCI (ADR-0022); GitHub Actions в шаблонах больше нет
+STATE_REPORTS = {
+    "python": "test-report.xml",
+    "typescript": "test-report.json",
+    "csharp": "test-results",
+}
 CIRCLE_CONFIG = ".circleci/config.yml"
 CIRCLE_NOT_BRANCHES = ("main", "status")  # ветки, на которых workflow `ci` не идёт
 GITIGNORE_LINES = [".claude/audit/", ".claude/settings.local.json"]
@@ -534,6 +539,15 @@ def render_circleci(languages: list[str]) -> str:
     parts += [
         (TEMPLATES / "ci" / CI_TEMPLATES[lang]).read_text(encoding="utf-8") for lang in ci_languages
     ]
+    # Табло (задание `state`, только main): тесты первого языка с тестами, отчёт только его (ADR-0022).
+    primary = next((lang for lang in ci_languages if lang in STATE_REPORTS), None)
+    state_dir = TEMPLATES / "ci" / "circleci" / "state"
+    state = [(state_dir / "head.yml").read_text(encoding="utf-8")]
+    if primary:
+        state.append((state_dir / f"{primary}.yml").read_text(encoding="utf-8"))
+    tail = (state_dir / "tail.yml").read_text(encoding="utf-8")
+    state.append(tail.replace("__REPORT__", STATE_REPORTS.get(primary or "", "")))
+    parts.append("".join(part.replace("\r\n", "\n").rstrip("\n") + "\n" for part in state))
     jobs = "".join(f"      - check-{lang}\n" for lang in ci_languages)
     requires = "".join(f"            - check-{lang}\n" for lang in ci_languages)
     skip = "".join(
@@ -551,6 +565,11 @@ def render_circleci(languages: list[str]) -> str:
         "      - check:\n"
         "          requires:\n"
         f"{requires}"
+        "  state:\n"
+        "    when:\n"
+        "      equal: [main, << pipeline.git.branch >>]\n"
+        "    jobs:\n"
+        "      - state\n"
     )
     return "\n".join(part.replace("\r\n", "\n").rstrip("\n") + "\n" for part in parts)
 
@@ -604,6 +623,7 @@ def init_project(
         report.copy("ci/parch/parch_catalog.py", ".github/parch/parch_catalog.py")
         report.copy("ci/parch/parch_libraries.py", ".github/parch/parch_libraries.py")
         report.copy("ci/parch/parch_standard.py", ".github/parch/parch_standard.py")
+        report.copy("ci/parch/parch_state.py", ".github/parch/parch_state.py")
         report.write(
             "state/baseline.json",
             json.dumps(initial_baseline(project, languages, existing_code), indent=2) + "\n",

@@ -99,21 +99,21 @@ def circleci_config(language: str) -> str:
 @pytest.mark.parametrize(
     "template",
     [
-        *sorted((REPO / "plugin" / "templates" / "ci").glob("*.yml")),
         *sorted(p for p in CIRCLE_TEMPLATES.glob("*.yml") if p.name != "head.yml"),
+        # id прежний (храповик не даёт переименовать тест): шаблон табло теперь задание `state` в собранном конфиге
+        pytest.param(CIRCLE_TEMPLATES / "state" / "tail.yml", id="state.yml"),
     ],
     ids=lambda p: p.name,
 )
 def test_each_ci_template_passes_the_standard_check(tmp_path: Path, template: Path) -> None:
-    """Шаблон Actions (state.yml, до PR 2 блока F24) идёт как workflow, шаблоны CircleCI как собранный init `.circleci/config.yml`."""
-    if template.parent == CIRCLE_TEMPLATES:
-        (tmp_path / ".circleci").mkdir()
-        (tmp_path / ".circleci" / "config.yml").write_text(
-            circleci_config(template.stem), encoding="utf-8", newline="\n"
-        )
-        passes(tmp_path)
-    else:
-        passes(project(tmp_path, template.read_text(encoding="utf-8"), template.name))
+    """Шаблоны CircleCI идут как собранный init `.circleci/config.yml` (с заданием `state`); шаблонов Actions в `ci/` больше нет."""
+    assert template.is_file()
+    language = template.stem if template.parent == CIRCLE_TEMPLATES else "python"
+    (tmp_path / ".circleci").mkdir()
+    (tmp_path / ".circleci" / "config.yml").write_text(
+        circleci_config(language), encoding="utf-8", newline="\n"
+    )
+    passes(tmp_path)
 
 
 # ---------- таймаут ----------

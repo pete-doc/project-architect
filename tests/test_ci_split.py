@@ -113,7 +113,7 @@ def test_shared_code_and_settings_run_every_language(shared: str) -> None:
 
 def test_hooks_run_on_windows_only_when_hooks_templates_or_github_change() -> None:
     assert scope("plugin/hooks/pre_push.py")["hooks"] == "true"
-    assert scope("plugin/templates/ci/state.yml")["hooks"] == "true"
+    assert scope("plugin/templates/ci/circleci/state/tail.yml")["hooks"] == "true"
     assert scope(".github/workflows/full.yml")["hooks"] == "true"
     assert scope("tests/test_status.py", "docs/a.md")["hooks"] == "false"
 

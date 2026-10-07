@@ -97,6 +97,13 @@ def file_call(tool: str, path: Path | str, event: str = "PreToolUse") -> dict[st
     return {"hook_event_name": event, "tool_name": tool, "tool_input": {"file_path": str(path)}}
 
 
+@pytest.fixture(autouse=True)
+def no_ci_bash_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Урок «локально проходит, в CI падает» (LESSONS.md): CircleCI задаёт BASH_ENV, и bash ставит
+    в PATH настоящие dotnet, node, pwsh впереди подставных команд; тест его не видит."""
+    monkeypatch.delenv("BASH_ENV", raising=False)
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """Проект, подключённый к ProjectArchitect: есть CONSTITUTION.md, принятый и новый ADR."""

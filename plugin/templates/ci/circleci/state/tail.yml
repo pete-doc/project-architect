@@ -1,0 +1,34 @@
+      # Итог тестов: упали, нет отчёта при существующих тестах, в проекте нет тестов, всё хорошо (parch_state.py).
+      # Без шага тестов (проект без тестового языка) код выхода 5 означает «тестов нет».
+      - run:
+          name: Итог тестов
+          no_output_timeout: 5m
+          command: python .github/parch/parch_state.py verdict --report "__REPORT__" --exit-code "$(cat /tmp/tests-exit 2>/dev/null || echo 5)" --out /tmp/verdict.json
+      - run:
+          name: Табло
+          no_output_timeout: 10m
+          command: |
+            short="${CIRCLE_SHA1:0:7}"
+            args=()
+            git fetch --no-tags origin '+refs/heads/status:refs/remotes/origin/status' || true
+            if git rev-parse --verify origin/status >/dev/null 2>&1; then
+              git show origin/status:state/STATUS.md > /tmp/previous.md || true
+              [ -s /tmp/previous.md ] && args+=(--previous /tmp/previous.md)
+            fi
+            report="__REPORT__"
+            if [ -n "$report" ] && [ -e "$report" ]; then
+              args+=(--report "$report" --report-commit "$short" --report-same-tree yes)
+            fi
+            python .github/parch/parch_status.py --project . --commit "$short" --out /tmp/STATUS.md "${args[@]}"
+            python .github/parch/parch_state.py annotate --file /tmp/STATUS.md --verdict /tmp/verdict.json
+      # Ключ записи подключается только здесь: после тестов проекта и только в задании state (пункт В5 инструкции).
+      - add_ssh_keys
+      - run:
+          name: Публикация на ветке status
+          no_output_timeout: 10m
+          command: python .github/parch/parch_state.py publish --status /tmp/STATUS.md --report "__REPORT__"
+      # Цвет задания: красное, если тесты упали или отчёта нет при существующих тестах.
+      - run:
+          name: Итог задания
+          no_output_timeout: 1m
+          command: python .github/parch/parch_state.py final --verdict /tmp/verdict.json

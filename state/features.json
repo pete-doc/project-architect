@@ -419,7 +419,8 @@
       ],
       "spec": "docs/specs/F24-circleci-templates.md",
       "acceptance_tests": [
-        "tests/test_circleci_templates.py"
+        "tests/test_circleci_templates.py",
+        "tests/test_parch_state.py"
       ],
       "status": "planned",
       "passes": false,

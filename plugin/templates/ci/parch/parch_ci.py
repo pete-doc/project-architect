@@ -3382,6 +3382,26 @@ def circleci_problems(path: Path, adr_text: str) -> list[str]:
                 "no_output_timeout и команду timeout вокруг тестов. У CircleCI нет "
                 "timeout-minutes на задание, зависший тест идёт до часа."
             )
+    # Ключ записи (ADR-0022): только в задании state и только после тестов проекта.
+    jobs_text = (
+        text.split("\njobs:\n", 1)[1].split("\nworkflows:\n", 1)[0] if "\njobs:\n" in text else ""
+    )
+    for chunk in re.split(r"(?m)^  (?=[\w-]+:[ \t]*$)", jobs_text):
+        if "add_ssh_keys" not in chunk:
+            continue
+        job = chunk.split(":", 1)[0].strip()
+        key_at = chunk.index("add_ssh_keys")
+        tests_after_key = any(m.start() > key_at for m in CIRCLE_HEAVY.finditer(chunk))
+        if job != "state":
+            problems.append(
+                f"{rel}: add_ssh_keys в задании {job}: ключ записи подключается только в задании "
+                "state, иначе проверки веток PR получили бы право писать в репозиторий."
+            )
+        elif tests_after_key:  # любой шаг тестов после ключа, а не только первый
+            problems.append(
+                f"{rel}: в задании state ключ записи (add_ssh_keys) подключён до тестов проекта: "
+                "код проекта выполнился бы с ключом. Поставьте add_ssh_keys после шага тестов."
+            )
     # Итоговый `check` (ADR-0022): единственная обязательная проверка main,
     # он обязан требовать все языковые задания.
     languages = "python|typescript|csharp|powershell"  # `check-text` продукта не языковое

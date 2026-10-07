@@ -19,7 +19,7 @@ SETUP = REPO / ".circleci" / "config.yml"  # CI продукта живёт на
 PRODUCT = REPO / ".circleci" / "continue_config.yml"
 SCOPE = REPO / ".github" / "scope.py"  # какие языки и проверки нужны PR
 # Шаблоны проектов пользователей на CircleCI (ADR-0022): общая часть head.yml и по заданию на язык.
-# state.yml (GitHub Actions, пересчёт табло, ADR-0012) устроен иначе, см. tests/test_status.py (до PR 2 блока F24).
+# Задание `state` (табло, ADR-0012) лежит в circleci/state/ и собирается init отдельно, см. tests/test_status.py.
 ALL_TEMPLATES = sorted((REPO / "plugin" / "templates" / "ci" / "circleci").glob("*.yml"))
 TEMPLATES = [p for p in ALL_TEMPLATES if p.name != "head.yml"]
 INIT = REPO / "plugin" / "skills" / "init-project" / "scripts" / "init_project.py"
@@ -191,7 +191,13 @@ def test_templates_are_found() -> None:
         "csharp.yml", "head.yml", "powershell.yml", "python.yml", "typescript.yml",
     }  # fmt: skip
     old = {p.name for p in (REPO / "plugin" / "templates" / "ci").glob("*.yml")}
-    assert old <= {"state.yml"}  # state.yml уходит в PR 2 блока F24 вместе со своими тестами
+    assert (
+        old == set()
+    )  # шаблон табло на Actions (state.yml) заменён заданием `state` (PR 2 блока F24)
+    state = {
+        p.name for p in (REPO / "plugin" / "templates" / "ci" / "circleci" / "state").glob("*.yml")
+    }
+    assert state == {"head.yml", "python.yml", "typescript.yml", "csharp.yml", "tail.yml"}
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)

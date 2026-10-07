@@ -1,0 +1,28 @@
+      - restore_cache:
+          keys:
+            - dotnet-v1-
+      - run:
+          name: .NET SDK по global.json
+          no_output_timeout: 10m
+          command: |
+            sudo apt-get update -qq && sudo apt-get install -y -qq libicu-dev
+            if [ ! -x "$HOME/.dotnet/dotnet" ]; then
+              curl -sSfL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+              bash /tmp/dotnet-install.sh --jsonfile global.json --install-dir "$HOME/.dotnet"
+            fi
+            echo 'export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$HOME/.dotnet:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: dotnet restore
+          no_output_timeout: 10m
+          command: dotnet restore --locked-mode
+      # Код выхода тестов запоминается, шаг задание не прерывает: итог и цвет задают шаги ниже.
+      - run:
+          name: Тесты для табло
+          no_output_timeout: 15m
+          command: |
+            code=0
+            timeout 900 dotnet test --no-restore --logger trx --results-directory test-results || code=$?
+            echo $code > /tmp/tests-exit
+      - store_artifacts:
+          when: always
+          path: test-results
