@@ -27,4 +27,4 @@
 | [0019](0019-fail-dolga-state-standard-baseline-json-zaschischen-kak-stat.md) | Файл долга state/standard-baseline.json защищён как state/baseline.json | accepted | обратимое | 2026-10-05 |
 | [0020](0020-perehod-ci-s-github-actions-na-circleci.md) | CI продукта живёт на CircleCI, GitHub Actions для CI самого репозитория убраны | accepted | обратимое | 2026-10-06 |
 | [0021](0021-faily-dolga-catalog-baseline-json-i-modules-baseline-json-za.md) | Файлы долга catalog-baseline.json и modules-baseline.json защищены как standard-baseline.json | accepted | обратимое | 2026-10-06 |
-| [0022](0022-shablony-ci-na-circleci.md) | Шаблоны CI для проектов пользователей: CircleCI вместо GitHub Actions | proposed | обратимое по коду | 2026-10-06 |
+| [0022](0022-shablony-ci-na-circleci.md) | Шаблоны CI для проектов пользователей: CircleCI вместо GitHub Actions | accepted | обратимое по коду | 2026-10-06 |
