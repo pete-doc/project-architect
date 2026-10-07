@@ -118,7 +118,9 @@
    репозиторий (если приложение стоит «на все репозитории», шаг не нужен).
 В2. **Создать проект:** CircleCI → Home → **Create Project** → имя проекта → «Next: Set up a pipeline» → имя `ci` → «Next:
    Choose a repo» → плитка **GitHub Cloud** → репозиторий → **использовать существующий конфиг** (`.circleci/config.yml`) → триггер
-   «PR opened or pushed to, default branch and tag pushes» → завершить настройку. Токены и переменные проекта не нужны. После В1–В3 и
+   «PR opened or pushed to, default branch and tag pushes» → завершить настройку. **Проверить:** Project Settings → Project Setup →
+   у pipeline `ci` в «Trigger on…» должен стоять этот триггер; если там пусто, нажать **Add GitHub trigger** (находка прогона F20
+   2026-10-07: без триггера CircleCI не запускается сам ни на PR, ни на слияние в `main`, только вручную). Токены и переменные проекта не нужны. После В1–В3 и
    отправки PR дождаться **первого зелёного `check`**.
 В3. **Project Settings → Advanced → Auto-cancel Redundant Workflows**: включить (иначе устаревшие прогоны тратят кредиты).
 В4. **Защита `main` после первого зелёного `check`:** GitHub → Settings → Rules → New branch ruleset → `main` → Require status

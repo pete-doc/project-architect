@@ -807,7 +807,9 @@ def check_dead_code(project: Path, language: str) -> Result:
 
 def jscpd_command() -> list[str]:
     override = os.environ.get("PARCH_JSCPD")
-    return shlex.split(override) if override else ["npx", "--yes", f"jscpd@{JSCPD_VERSION}"]
+    # на Windows npx это npx.cmd: subprocess без полного пути его не находит
+    npx = shutil.which("npx") or "npx"
+    return shlex.split(override) if override else [npx, "--yes", f"jscpd@{JSCPD_VERSION}"]
 
 
 def source_roots(project: Path, language: str) -> list[str]:
@@ -821,7 +823,12 @@ def source_roots(project: Path, language: str) -> list[str]:
     return ["."]
 
 
-def jscpd_args(project: Path, language: str) -> list[str]:
+def jscpd_args(
+    project: Path,
+    language: str,
+    min_lines: str = JSCPD_MIN_LINES,
+    min_tokens: str = JSCPD_MIN_TOKENS,
+) -> list[str]:
     roots = [r for r in source_roots(project, language) if (project / r).exists()]
     ignored = [
         "tests", ".github", "docs", "state", "node_modules", ".venv", "__pycache__", "bin", "obj",
@@ -831,8 +838,8 @@ def jscpd_args(project: Path, language: str) -> list[str]:
     return [
         *roots,
         *("--format", COLLECTORS[language].jscpd_format),
-        *("--min-lines", JSCPD_MIN_LINES),
-        *("--min-tokens", JSCPD_MIN_TOKENS),
+        *("--min-lines", min_lines),
+        *("--min-tokens", min_tokens),
         *("--ignore", ignore),
         *("--reporters", "console"),
         *("--baseline", JSCPD_BASELINE_FILE),
@@ -848,6 +855,18 @@ def ensure_empty_jscpd_baseline(project: Path) -> None:
         )
 
 
+def only_short_files(project: Path, language: str) -> bool:
+    """jscpd «не проанализировал файлов»: файлы кода есть, но короче порога, а не пути неверны.
+
+    Повторный запуск с порогом в один токен и строку находит файлы, если они есть. Пустой результат
+    и тогда значит, что jscpd ничего не видит (неверные пути, формат): настоящая ошибка проверки.
+    """
+    args = jscpd_args(project, language, min_lines="1", min_tokens="1")
+    cut = args.index("--baseline")  # пробе baseline не нужен: файл долга ей трогать нельзя
+    probe = [*jscpd_command(), *args[:cut], *args[cut + 2 :], "--fail-on-empty"]
+    return run(probe, project).returncode == 0
+
+
 def check_duplicates(project: Path, language: str) -> Result:
     result = Result()
     if not COLLECTORS[language].has_sources(project):
@@ -857,7 +876,16 @@ def check_duplicates(project: Path, language: str) -> Result:
     extra = ["--fail-on-new-clones", "0", "--fail-on-empty"]
     done = run([*jscpd_command(), *jscpd_args(project, language), *extra], project)
     output = re.sub(r"\x1b\[[0-9;]*m", "", done.stdout + done.stderr).strip()
-    if done.returncode != 0:
+    if (
+        done.returncode != 0
+        and "analyzed no files" in output
+        and only_short_files(project, language)
+    ):
+        result.note(
+            f"Код короче порога jscpd ({JSCPD_MIN_LINES} строк, {JSCPD_MIN_TOKENS} токенов): "
+            "повторов быть не может, пока файлы не вырастут."
+        )
+    elif done.returncode != 0:
         result.fail(
             "Найдены новые дубли кода (или jscpd не отработал):",
             *output.splitlines()[-25:],

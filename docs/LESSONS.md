@@ -19,11 +19,16 @@
 
 ## Закрыто автоматикой
 
-- Тест проходит локально и падает в CI (2 повтора: импорт `tests.…` на Linux, 2026-10-03; BASH_ENV и PATH CircleCI ставят
-  настоящие dotnet и node впереди подставных команд теста, 2026-10-06, PR 68) → автофикстура `no_ci_bash_env` в
-  `tests/conftest.py` (BASH_ENV не виден ни одному тесту), тест
+- Тест проходит локально и падает в CI (3 повтора: импорт `tests.…` на Linux, 2026-10-03; BASH_ENV и PATH CircleCI ставят
+  настоящие dotnet и node впереди подставных команд теста, 2026-10-06, PR 68; `python -m pytest` вместо `pytest`
+  скрыл `No module named 'src'`, 2026-10-07, прогон F20) → автофикстура `no_ci_bash_env` в `tests/conftest.py`
+  (BASH_ENV не виден ни одному тесту), тест
   `tests/test_parch_state.py::test_a_ci_bash_env_never_reaches_the_shell_tests` (запускает тесты шагов под BASH_ENV
-  в стиле CI). Импорты на Linux по-прежнему ловит только CI.
+  в стиле CI); команды проверок из CONSTITUTION (список `init`) обязаны запускаться так же, как в шаблонах CircleCI:
+  `tests/test_command_parity.py::test_check_commands_in_the_constitution_run_the_same_way_as_in_ci` (плохой пример:
+  `tests/test_command_parity.py::test_pytest_through_python_m_is_a_mismatch_with_plain_pytest_in_ci`), шлюз Stop
+  запускает `pytest -q` и ловит ошибку импорта: `tests/test_flow.py::test_stop_gate_catches_an_import_error_that_python_m_pytest_hid`.
+  Импорты на Linux по-прежнему ловит только CI.
 
 - Версия плагина не поднята после правок `plugin/` (у владельца остался 0.1.6, а в `main` ушло 11 файлов, около 760
   строк) → `scripts/release_check.py` (сверка с тегом `v*`, `--strict` для PR «выпуск»), сообщение в `preflight.py`,
