@@ -103,7 +103,7 @@ LANGUAGES = {
         "pip",
         "pytest, pytest-cov, coverage, ruff, pyright, import-linter, vulture, deptry",
         (
-            "python -m pytest -q",
+            "pytest -q",  # как в CI: `python -m pytest` добавляет корень проекта в путь импорта
             "python -m ruff check .",
             "python -m ruff format --check .",
             "python -m pyright",
@@ -262,7 +262,9 @@ CIRCLECI_STEPS_NOTE = (
     "выберите этот репозиторий (если приложение стоит на все репозитории, шаг не нужен).\n"
     "В2. Создать проект в CircleCI: Home → Create Project → имя → Next: Set up a pipeline → имя ci → Next: Choose a "
     "repo → GitHub Cloud → репозиторий → использовать существующий конфиг (.circleci/config.yml) → триггер «PR opened "
-    "or pushed to, default branch and tag pushes». Никакие токены для проверки не нужны.\n"
+    "or pushed to, default branch and tag pushes». Проверьте: Project Settings → Project Setup → у pipeline ci в "
+    "«Trigger on…» должен быть этот триггер; если там пусто, нажмите Add GitHub trigger (без него CircleCI не "
+    "запускается сам, только вручную). Никакие токены для проверки не нужны.\n"
     "В3. Включить автоотмену устаревших прогонов: Project Settings → Advanced → Auto-cancel Redundant Workflows.\n"
     "В4. После первого зелёного `check` включить защиту main: GitHub → Settings → Rules → New branch ruleset → main → "
     "Require status checks → добавить одну проверку `ci/circleci: check` (её имя появляется в списке только после "

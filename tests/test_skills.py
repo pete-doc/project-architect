@@ -128,7 +128,8 @@ def test_init_creates_a_working_structure(tmp_path: Path) -> None:
     assert (
         "- pip: pytest, pytest-cov, coverage, ruff, pyright, import-linter, vulture" in constitution
     )
-    assert "- python -m pytest -q" in constitution
+    assert "- pytest -q" in constitution  # та же команда, что в CI (не `python -m pytest`)
+    assert "python -m pytest" not in constitution
     assert "{{" not in constitution
     assert "- Python 3.12+" in constitution
     assert "надёжность" in constitution

@@ -132,6 +132,54 @@ def test_duplicate_code_is_caught(shop: Shop) -> None:
     assert "новые дубли" in out
 
 
+def replace_sources(shop: Shop, init_text: str) -> None:
+    """Весь код проекта заменён одним файлом src/shop/__init__.py."""
+    for path in sorted((shop.root / "src").rglob("*")):
+        if path.is_file():
+            path.unlink()
+    (shop.root / "src" / "shop").mkdir(parents=True, exist_ok=True)
+    shop.write("src/shop/__init__.py", init_text)
+
+
+def shrink_to_tiny_module(shop: Shop) -> None:
+    """Весь код проекта короче порога jscpd (6 строк, 60 токенов), как в первом PR с кодом."""
+    replace_sources(shop, '"""Магазин."""\n\n\ndef one() -> int:\n    return 1\n')
+
+
+def test_a_project_with_only_tiny_files_passes_the_duplicates_check(
+    make_shop: Callable[[], Shop],
+) -> None:
+    """Плохой пример: `--fail-on-empty` красил CI, если весь код короче порога jscpd."""
+    shop = make_shop()
+    shrink_to_tiny_module(shop)
+    out = shop.passes("duplicates")
+    assert "короче порога" in out
+
+
+def test_tiny_files_do_not_hide_a_duplicate_that_appears_later(
+    make_shop: Callable[[], Shop],
+) -> None:
+    """Исключение для короткого кода не отключает проверку: выросший дубль снова ловится."""
+    shop = make_shop()
+    shrink_to_tiny_module(shop)
+    shop.passes("duplicates")
+    shop.append("src/shop/pricing.py", DUPLICATE_BODY.format(n=1))
+    shop.append("src/shop/orders.py", DUPLICATE_BODY.format(n=2))
+    assert "новые дубли" in shop.fails("duplicates")
+
+
+def test_a_package_that_jscpd_cannot_see_still_fails_the_duplicates_check(
+    make_shop: Callable[[], Shop],
+) -> None:
+    """Проверка, которая ничего не видит, остаётся красной: пустой пакет не «короткий код»."""
+    shop = make_shop()
+    replace_sources(shop, "")
+    out = shop.fails("duplicates")
+    assert (
+        "analyzed no files" in out and "короче порога" not in out
+    )  # именно эта ветка, не сбой jscpd
+
+
 def test_dead_function_is_caught(shop: Shop) -> None:
     shop.append("src/shop/util.py", "\n\ndef never_called() -> int:\n    return 42\n")
     out = shop.fails("dead-code")
