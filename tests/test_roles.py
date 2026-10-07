@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
-from conftest import file_call, run_hook
+from conftest import bash, file_call, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "plugin" / "agents"
@@ -83,14 +83,66 @@ def test_guard_paths_lets_tester_write_tests_and_nobody_else(project: Path) -> N
     assert nobody.blocked and "основная сессия без роли" in (nobody.stdout + nobody.stderr)
 
 
-def test_guard_paths_does_not_yet_stop_tester_from_editing_code(project: Path) -> None:
-    """Известный пробел, записан в BACKLOG: охрана путей не умеет «tester не правит код», это держит только инструкция
-    роли. Тест фиксирует нынешнее поведение, чтобы изменение охраны было осознанным (по слову владельца)."""
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "src/convert.py",  # код блока
+        "state/baseline.json",  # храповик: утверждает владелец
+        "state/features.json",
+        ".circleci/config.yml",  # CI
+        "pyproject.toml",  # настройки проверок
+        "docs/GOAL.md",
+        "docs/specs/F1.md",  # спецификацию пишет не tester
+    ],
+)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_tester_cannot_write_anything_but_tests_and_the_questions_file(
+    rel: str, tool: str, project: Path
+) -> None:
+    """Плохие примеры: tester пишет код, baseline, CI, настройки, цель, спецификацию: блок с понятным сообщением по-русски."""
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, "parch:tester")
+    assert result.blocked, rel
+    shown = result.stdout + result.stderr
+    assert "Роль tester правит только тесты и docs/QUESTIONS.md" in shown and rel.lower() in shown
+    assert "implementer" in shown  # сообщение говорит, к кому идти за правкой кода
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "tests/test_convert.py",
+        "tests/conftest.py",
+        "tests/data/sample.json",
+        "docs/QUESTIONS.md",
+        "docs/questions.md",
+    ],
+)
+def test_tester_can_write_tests_and_the_questions_file(rel: str, project: Path) -> None:
+    """Хорошие случаи: тест, фикстуры и данные тестов в `tests/`, вопросы по описанию блока в `docs/QUESTIONS.md`."""
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, "parch:tester")
+    assert result.code == 0 and not result.blocked, (rel, result.stdout + result.stderr)
+
+
+def test_tester_is_blocked_on_code_written_through_the_shell_too(project: Path) -> None:
+    result = run_hook("guard_paths.py", bash("echo x > src/convert.py"), project, "parch:tester")
+    assert result.blocked and "Роль tester правит только тесты" in (result.stdout + result.stderr)
+    harmless = run_hook(
+        "guard_paths.py", bash("python -m pytest tests/test_convert.py"), project, "parch:tester"
+    )
+    assert harmless.code == 0 and not harmless.blocked  # запуск тестов не запись
+
+
+def test_the_other_roles_keep_their_rules_after_the_tester_rule(project: Path) -> None:
+    """Правило tester не задело остальных: `implementer` пишет код, но не тесты; основная сессия пишет код."""
     code = project / "src" / "convert.py"
-    result = run_hook("guard_paths.py", file_call("Write", code), project, "parch:tester")
-    assert result.code == 0 and not result.blocked
-    backlog = BACKLOG.read_text(encoding="utf-8")
-    assert "tester" in backlog and "не умеет" in backlog  # пробел назван в BACKLOG
+    assert (
+        run_hook("guard_paths.py", file_call("Write", code), project, "parch:implementer").code == 0
+    )
+    assert run_hook("guard_paths.py", file_call("Write", code), project, None).code == 0
+    test = project / "tests" / "test_convert.py"
+    assert run_hook(
+        "guard_paths.py", file_call("Write", test), project, "parch:implementer"
+    ).blocked
 
 
 # ---------- согласованность ролей ----------

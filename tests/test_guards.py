@@ -266,6 +266,16 @@ def assert_asks_owner(result: HookResult, rel: str) -> None:
     assert rel in answer["permissionDecisionReason"]
 
 
+def is_stopped_for_tester(result: HookResult, role: str | None) -> bool:
+    """Роль tester правит только тесты и docs/QUESTIONS.md (охрана путей): любой другой путь для
+    неё блок с понятным сообщением. True: для tester проверка здесь закончена."""
+    if role != "parch:tester":
+        return False
+    assert result.blocked, result.stdout
+    assert "Роль tester правит только тесты и docs/QUESTIONS.md" in result.stdout + result.stderr
+    return True
+
+
 @pytest.mark.parametrize("rel", GATED)
 @pytest.mark.parametrize("role", EVERY_ROLE)
 @pytest.mark.parametrize("tool", ["Write", "Edit"])
@@ -273,6 +283,8 @@ def test_protected_paths_need_owner_confirmation_for_every_role(
     rel: str, role: str | None, tool: str, project: Path
 ) -> None:
     result = run_hook("guard_paths.py", file_call(tool, project / rel), project, role)
+    if is_stopped_for_tester(result, role):
+        return
     assert_asks_owner(result, rel.lower())
 
 
@@ -321,6 +333,8 @@ def test_shell_writes_to_protected_paths_need_owner_confirmation(
     command: str, role: str | None, project: Path
 ) -> None:
     result = run_hook("guard_paths.py", bash(command), project, role)
+    if is_stopped_for_tester(result, role):
+        return
     assert result.code == 0, result.stderr
     assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
@@ -329,6 +343,8 @@ def test_shell_writes_to_protected_paths_need_owner_confirmation(
 @pytest.mark.parametrize("role", EVERY_ROLE)
 def test_ordinary_paths_are_free_for_every_role(rel: str, role: str | None, project: Path) -> None:
     result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    if is_stopped_for_tester(result, role):
+        return
     assert result.code == 0, result.stderr
     assert result.stdout == ""
 
@@ -504,6 +520,8 @@ def test_agent_cannot_flip_an_adr_to_accepted_on_its_own(
     old: str, new: str, role: str | None, project: Path
 ) -> None:
     result = run_hook("guard_paths.py", edit_call(project / ADR_PROPOSED, old, new), project, role)
+    if is_stopped_for_tester(result, role):
+        return
     assert_asks_owner(result, ADR_PROPOSED)
     assert (
         "ставит только владелец"
@@ -647,6 +665,8 @@ def test_settings_files_need_owner_confirmation_for_every_role(
     rel: str, role: str | None, project: Path
 ) -> None:
     result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    if is_stopped_for_tester(result, role):
+        return
     assert asks(result), result.stderr
     reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "настройки проверок" in reason

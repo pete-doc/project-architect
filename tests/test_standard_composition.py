@@ -260,6 +260,10 @@ def test_an_agent_cannot_add_a_report_to_the_debt_it_needs_the_owner(
     from conftest import file_call, run_hook
 
     result = run_hook("guard_paths.py", file_call(tool, project / DEBT), project, role)
+    # tester правит только тесты и docs/QUESTIONS.md: блок раньше вопроса владельцу
+    if role == "parch:tester":
+        assert result.blocked and "Роль tester правит только тесты" in result.stdout + result.stderr
+        return
     assert result.code == 0, result.stderr
     answer = json.loads(result.stdout)["hookSpecificOutput"]
     assert answer["permissionDecision"] == "ask"
@@ -301,6 +305,10 @@ def test_an_agent_cannot_add_a_key_to_the_catalog_or_modules_debt(
     from conftest import file_call, run_hook
 
     result = run_hook("guard_paths.py", file_call(tool, project / rel), project, role)
+    # tester правит только тесты и docs/QUESTIONS.md: блок раньше вопроса владельцу
+    if role == "parch:tester":
+        assert result.blocked and "Роль tester правит только тесты" in result.stdout + result.stderr
+        return
     assert result.code == 0, result.stderr
     answer = json.loads(result.stdout)["hookSpecificOutput"]
     assert answer["permissionDecision"] == "ask"

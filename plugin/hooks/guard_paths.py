@@ -1,6 +1,7 @@
 """PreToolUse: охрана путей. Правила одинаковы для всех, включая основную сессию без роли.
 
-1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок.
+1. Тесты: правят только роли architect и tester (список TEST_ROLES). Остальным блок. Роль
+   tester, наоборот, правит только тесты и docs/QUESTIONS.md (TESTER_EXTRA_PATHS): остальное блок.
 2. Защищённые пути (настройки Claude и hooks, CI-файлы, файлы state/ проверок, CONSTITUTION.md,
    docs/GOAL.md, принятые ADR): блокировка для всех. Снять её может только владелец,
    подтвердив запрос, который Claude Code показывает ему (решение «ask»). Агент подтвердить
@@ -45,6 +46,9 @@ from _common import (
 
 HOOK = "guard_paths"
 TEST_ROLES = frozenset({"architect", "tester"})
+TESTER_EXTRA_PATHS = frozenset(
+    {"docs/questions.md"}
+)  # сюда tester пишет вопросы по описанию блока (в нижнем регистре)
 
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs"}
 _TEST_NAME_PATTERNS = (
@@ -110,6 +114,14 @@ def _is_test_path(rel: str) -> bool:
     if any(d in _TEST_DIRS or d.endswith((".tests", ".test")) or d.endswith("tests") for d in dirs):
         return True
     return any(fnmatch.fnmatch(name, pattern) for pattern in _TEST_NAME_PATTERNS)
+
+
+def _tester_may_write(rel: str) -> bool:
+    """Тесты и вопросы по описанию блока. docs/specs/ общее правило считает тестовым путём
+    (папка specs), но спецификацию пишет не tester."""
+    if rel.lower() in TESTER_EXTRA_PATHS:
+        return True
+    return _is_test_path(rel) and not rel.lower().startswith("docs/")
 
 
 def _is_accepted_adr(rel: str, project: Path) -> bool:
@@ -232,6 +244,14 @@ def _settings_reason(rel: str, real: Path, data: JsonDict, command: str) -> str 
 def _decide(
     rel: str, real: Path, role: str, project: Path, data: JsonDict, command: str
 ) -> Block | Ask | None:
+    if role == "tester" and not _tester_may_write(rel):
+        return Block(
+            HOOK,
+            f"Роль tester правит только тесты и docs/QUESTIONS.md, а {rel} к ним не относится: "
+            "код блока, CI, настройки проверок и baseline правят другие роли. Если для теста нужна "
+            "правка кода, остановись и опиши её в ответе: её сделает исполнитель (implementer) "
+            "или основная сессия.",
+        )
     if _is_test_path(rel) and role not in TEST_ROLES:
         shown = f"«{role}»" if role else "основная сессия без роли"
         return Block(
