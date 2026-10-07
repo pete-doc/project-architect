@@ -61,6 +61,8 @@ def test_the_tester_instruction_says_what_the_standard_requires() -> None:
         "остановись и сообщи",  # нужна правка кода: сообщает
         "state/baseline.json",  # baseline обновляет владелец
         "не ослабляют",  # тест не подгоняют и не ослабляют
+        "STANDARD.md, раздел 5, п. 3",  # тест до кода, без кода падает
+        "падает на неверном ожидании или заведомо неверной реализации",  # показывает, что тест умеет падать
     ):
         assert must in text, must
     assert "skip" in text and "xfail" in text  # пропуски запрещены
