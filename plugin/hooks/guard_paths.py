@@ -405,6 +405,27 @@ def _target_directory(tokens: list[str]) -> list[str]:
     return found
 
 
+def _files_after_scripts(tokens: list[str]) -> list[str]:
+    """Файлы sed/perl без выражений: значения `-e`, `-pe`, `-f`, `--expression` не пути, а если
+    выражений через флаги нет, выражением считается первое слово без дефиса."""
+    files: list[str] = []
+    skip_next = False
+    had_script = False
+    for token in tokens[1:]:
+        if skip_next:
+            skip_next = False
+        elif token.startswith(">"):
+            continue
+        elif token.startswith("-"):
+            if token in {"--expression", "--file"} or re.fullmatch(r"-[a-zA-Z]*[ef]", token):
+                skip_next = had_script = True
+            elif token.startswith(("--expression=", "--file=")):
+                had_script = True
+        else:
+            files.append(token)
+    return files if had_script else files[1:]
+
+
 def _in_place_flag(tokens: list[str]) -> bool:
     """sed/perl правят файл на месте: `-i[.bak]`, `-Ei`, `-pi.bak`, `--in-place[=.bak]`."""
     return any(
@@ -422,7 +443,8 @@ def _tester_shell_exempt(raw: str, rel: str, root: Path, command: str) -> bool:
     if not target_allowed(cleaned, root, command):
         return False
     if cleaned.startswith(TEMP_PREFIXES):
-        return True  # `$TEMP/x`: после склейки с папкой вызова путь попал бы внутрь проекта
+        # `$TEMP/x`: после склейки с cwd путь попал бы внутрь проекта; `$TEMP/../src/a.py` нет
+        return ".." not in cleaned.replace("\\", "/").split("/")
     parts = PurePosixPath(rel).parts
     return len(parts) <= 1 or parts[0] in TESTER_TEST_DIRS | {"htmlcov"}
 
@@ -437,16 +459,19 @@ def _written_paths(tokens: list[str], strict: bool = False) -> list[str]:
             skip_next = False
             continue
         if token in {">", ">>", "1>", "2>", "&>"} and index + 1 < len(tokens):
-            paths.append(tokens[index + 1])
+            if not (strict and tokens[index + 1].startswith("&")):  # `> &2`: поток, не файл
+                paths.append(tokens[index + 1])
             skip_next = True
         elif token.startswith(">") and len(token) > 1:
-            paths.append(token.lstrip(">"))
+            target = token.lstrip(">")
+            if not (strict and target.startswith("&")):  # `>&2`: поток, не файл
+                paths.append(target)
     positional = [t for t in tokens[1:] if not t.startswith(("-", ">"))]
     if name in _MUTATING_COMMANDS:
         if strict and name in {"sed", "perl"}:
             if not _in_place_flag(tokens):
                 return paths
-            positional = positional[1:]  # первое слово без дефиса это выражение, а не файл
+            positional = _files_after_scripts(tokens)
         elif name == "sed" and not any(t.startswith("-i") or t == "--in-place" for t in tokens):
             return paths
         elif name == "perl" and not any(t.startswith("-i") for t in tokens):

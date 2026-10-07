@@ -173,6 +173,13 @@ def test_tester_is_blocked_on_code_written_through_the_shell_too(project: Path) 
         ("python -m pytest --cov-report=html > htmlcov/index.html", True),
         ("sed -i 's/a/b/' tests/test_convert.py", True),  # выражение это не путь
         ("perl -i -pe 's/a/b/' tests/test_convert.py", True),
+        ("echo x >&2", True),  # поток stderr, не файл
+        ("python -m pytest > /dev/null 2>&1 >&2", True),
+        ("echo x > &2", True),
+        ("sed -i -e 's/a/b/' -e 's/c/d/' tests/test_convert.py", True),  # несколько выражений
+        ("sed -i --expression='s/a/b/' tests/test_convert.py", True),
+        ("sed -i -f script.sed tests/test_convert.py", True),
+        ("perl -i -pe 's/a/b/' -e 's/c/d/' tests/test_convert.py", True),
         ("cp src/a.py tests/", True),  # сама папка тестов как цель
         ("mv junit.xml tests/", True),
         ("git checkout -- tests/", True),
@@ -222,6 +229,11 @@ def test_tester_is_blocked_on_code_written_through_the_shell_too(project: Path) 
         ("cd tests && rm ../src/convert.py", False),  # cd внутри команды учитывается
         ("cd tests && cp x ../src/y.py", False),
         ("cd src && touch a.py", False),
+        ("touch $TEMP/../src/a.py", False),  # выход из временной папки в код
+        ("cp tests/a.py $TEMP/../src/a.py", False),
+        ("sed -i -e 's/a/b/' -e 's/c/d/' src/convert.py", False),
+        ("sed -i -f script.sed src/convert.py", False),
+        ("echo x >&2 > src/a.py", False),  # поток не прячет настоящую запись
         ("rm -rf Shop.Tests/Shop.cs.py", False),
         ("git checkout -- .", False),  # корень проекта: понятный блок, не внутренняя ошибка
         ("rm -rf .", False),
