@@ -125,6 +125,43 @@ def test_a_different_subcommand_is_a_mismatch() -> None:
     assert mismatches(["dotnet build -warnaserror", "npm test"], ci) == []
 
 
+def load_by_path(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def constitution_candidates_differ(template: tuple[str, ...], hooks: tuple[str, ...]) -> bool:
+    return tuple(template) != tuple(hooks)  # порядок важен: он задаёт, какой файл читается первым
+
+
+def test_the_constitution_candidates_in_the_standard_check_match_the_hooks() -> None:
+    """`is_managed` (шаблон CI) и hooks ищут CONSTITUTION в тех же местах и в том же порядке."""
+    template = load_by_path(
+        "parch_standard_parity",
+        ROOT / "plugin" / "templates" / "ci" / "parch" / "parch_standard.py",
+    ).CONSTITUTION_CANDIDATES
+    hooks = load_by_path(
+        "hooks_common_parity", ROOT / "plugin" / "hooks" / "_common.py"
+    ).CONSTITUTION_CANDIDATES
+    assert template and hooks
+    assert not constitution_candidates_differ(template, hooks), (
+        f"списки CONSTITUTION_CANDIDATES разошлись: шаблон {template}, hooks {hooks}"
+    )
+
+
+def test_a_diverged_constitution_candidates_list_is_detected() -> None:
+    """Плохой пример: в одном списке другой порядок или лишний/недостающий путь."""
+    good = ("docs/CONSTITUTION.md", "CONSTITUTION.md")
+    assert not constitution_candidates_differ(good, good)
+    assert constitution_candidates_differ(good, good[::-1])
+    assert constitution_candidates_differ(good, good[:1])
+    assert constitution_candidates_differ(good, (*good, ".github/CONSTITUTION.md"))
+
+
 def test_every_ci_template_yields_commands_to_compare() -> None:
     """Разбор шаблона не молчит: в каждом есть команды `.github/parch/parch_ci.py ...`."""
     for language in LANGUAGES:
