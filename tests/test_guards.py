@@ -203,6 +203,30 @@ def test_only_architect_and_tester_may_edit_tests(
     assert_blocked(result, "guard_paths", "architect и tester", rel.lower())
 
 
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "docs/specs/F1-convert.md",  # спецификация блока: до F25 (шаг 0а) здесь был блок
+        "docs/specs/tests/plan.md",
+        "docs/test_plan.md",
+        "Docs/Specs/F2.md",
+    ],
+)
+@pytest.mark.parametrize("role", [None, IMPLEMENTER, "parch:reviewer"])
+def test_documents_under_docs_are_never_tests(rel: str, role: str | None, project: Path) -> None:
+    """Плохой пример, который был нормой: `docs/specs/` совпадала с тестовой папкой `specs`, и
+    спецификацию не могла записать ни основная сессия, ни implementer (находка F25)."""
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, role)
+    assert result.code == 0 and not result.blocked, (rel, result.stderr)
+
+
+@pytest.mark.parametrize("rel", ["spec/app.spec.ts", "specs/convert.spec.py", "src/specs/x.py"])
+def test_spec_folders_outside_docs_stay_test_paths(rel: str, project: Path) -> None:
+    """Правка не ослабила охрану: папка `spec`/`specs` вне docs/ по-прежнему тестовая."""
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, IMPLEMENTER)
+    assert_blocked(result, "guard_paths", "architect и tester")
+
+
 def test_main_session_without_role_is_told_so(project: Path) -> None:
     result = run_hook("guard_paths.py", file_call("Edit", project / "tests/test_x.py"), project)
     assert_blocked(result, "guard_paths", "основная сессия без роли")
@@ -254,7 +278,13 @@ GATED = [
     "docs/adr/0001-accepted.md",
 ]
 EVERY_ROLE = [None, IMPLEMENTER, "parch:architect", "parch:tester", "parch:reviewer"]
-ORDINARY = ["src/app.py", "docs/adr/0002-proposed.md", "docs/adr/0009-new.md", "docs/notes.md"]
+ORDINARY = [
+    "src/app.py",
+    "docs/adr/0002-proposed.md",
+    "docs/adr/0009-new.md",
+    "docs/notes.md",
+    "docs/specs/F1.md",  # спецификация блока: папка specs под docs/ не тестовая (F25, шаг 0а)
+]
 
 
 def assert_asks_owner(result: HookResult, rel: str) -> None:
