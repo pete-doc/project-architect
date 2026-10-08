@@ -286,6 +286,19 @@ def create_python_package(report: Report, name: str, description: str) -> None:
     )
 
 
+def is_init_package(project: Path, name: str) -> bool:
+    """Единственный Python-модуль проекта - нетронутый пакет `src/<имя>/`, созданный самим init."""
+    package = package_name(name)
+    if parch_ci.py_modules(project) != [f"src/{package}"]:
+        return False
+    folder = project / "src" / package
+    init = folder / "__init__.py"
+    if not init.is_file() or [p for p in folder.rglob("*.py") if p != init]:
+        return False
+    text = init.read_text(encoding="utf-8")
+    return text.startswith('"""') and text.endswith('"""\n\n__all__: list[str] = []\n')
+
+
 def has_python_tests(project: Path) -> bool:
     """В проекте уже есть тесты Python (`test_*.py` или `*_test.py` вне служебных папок)."""
     skip = {".venv", "venv", "node_modules", ".git", "site-packages"}
@@ -733,11 +746,15 @@ def init_project(
         raise ValueError(f"languages: выберите из {', '.join(LANGUAGES)}; получено {languages}")
     if not name.strip():
         raise ValueError("нужно название проекта (name)")
-    existing_code = any(
+    # До того, как init что-либо создаст: код уже есть значит проект существующий. Пакет, созданный
+    # самим init (повторный запуск), кодом не считается.
+    init_package = is_init_package(project, name)
+    py_existing = "python" in languages and not init_package and parch_ci.py_has_sources(project)
+    existing_code = py_existing or any(
         parch_ci.COLLECTORS[lang].has_sources(project)
         for lang in languages
-        if lang in parch_ci.COLLECTORS
-    )  # до того, как init что-либо создаст: код уже есть значит проект существующий
+        if lang in parch_ci.COLLECTORS and lang != "python"
+    )
     project.mkdir(parents=True, exist_ok=True)
     python_tests = "python" in languages and has_python_tests(project)
     report = Report(project)
@@ -762,12 +779,10 @@ def init_project(
         else:
             # В новом проекте тест импортирует пакет: без этого coverage не видит данных пакета.
             smoke = (
-                SMOKE_TEST
-                if existing_code
-                else PACKAGE_SMOKE_TEST.format(package=package_name(name))
+                SMOKE_TEST if py_existing else PACKAGE_SMOKE_TEST.format(package=package_name(name))
             )
             report.write("tests/test_smoke.py", smoke)
-        if existing_code:
+        if py_existing:
             report.notes.append(
                 "Пакет и .importlinter не созданы: в проекте уже есть код. Правило архитектуры "
                 "существующего кода - решение владельца через /parch:analyze-existing."

@@ -663,10 +663,59 @@ def test_init_twice_keeps_the_contract_and_does_not_duplicate_the_modules_row(
     package = new_package(tmp_path)
     config = (tmp_path / ".importlinter").read_bytes()
     modules = (tmp_path / "docs" / "MODULES.md").read_bytes()
-    init(tmp_path)
+    init_file = (package / "__init__.py").read_bytes()
+    second = init(tmp_path)
     assert (tmp_path / ".importlinter").read_bytes() == config
+    assert (package / "__init__.py").read_bytes() == init_file
+    assert new_package(tmp_path) == package
     assert (tmp_path / "docs" / "MODULES.md").read_bytes() == modules
     assert modules.decode("utf-8").count(f"src/{package.name}") == 1
+    # Плохой пример: собственный пакет init засчитан как «код пользователя», проект новый
+    # превращается в существующий (признак existing_project, предупреждения вместо ошибок).
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert "existing_project" not in baseline
+    for note in second["notes"]:
+        assert "уже есть код" not in note and "existing_project" not in note, note
+
+
+def test_init_twice_after_the_user_added_a_module_treats_the_project_as_existing(
+    tmp_path: Path,
+) -> None:
+    """Код пользователя в пакете делает проект существующим; пакет и контракт не перезаписаны."""
+    init(tmp_path)
+    package = new_package(tmp_path)
+    logic = package / "logic.py"
+    logic.write_text("def total(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+    config = (tmp_path / ".importlinter").read_bytes()
+    init_file = (package / "__init__.py").read_bytes()
+    modules = (tmp_path / "docs" / "MODULES.md").read_bytes()
+    init(tmp_path)
+    assert (tmp_path / ".importlinter").read_bytes() == config
+    assert (package / "__init__.py").read_bytes() == init_file
+    assert "def total" in logic.read_text(encoding="utf-8")
+    assert (tmp_path / "docs" / "MODULES.md").read_bytes() == modules
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["existing_project"] is True
+
+
+def test_python_next_to_typescript_code_still_gets_a_package_and_a_contract(
+    tmp_path: Path,
+) -> None:
+    """Плохой пример: код TypeScript в папке отменяет пакет Python, хотя Python-кода ещё нет."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    result = init(tmp_path, languages=["python", "typescript"])
+    packages = [p for p in (tmp_path / "src").iterdir() if (p / "__init__.py").is_file()]
+    assert len(packages) == 1, list(tmp_path.joinpath("src").iterdir())
+    package = packages[0]
+    assert (tmp_path / "src" / "index.ts").is_file()
+    text = (tmp_path / ".importlinter").read_text(encoding="utf-8")
+    assert re.search(rf"^root_package\s*=\s*{package.name}\s*$", text, re.M)
+    assert re.search(r"^forbidden_modules\s*=\s*\n?\s*pytest\s*$", text, re.M)
+    modules = (tmp_path / "docs" / "MODULES.md").read_text(encoding="utf-8")
+    assert len(re.findall(rf"src/{package.name}\b", modules)) == 1
+    for note in result["notes"]:
+        assert "Пакет и .importlinter не созданы" not in note, note
 
 
 def test_init_never_overwrites_an_existing_importlinter(tmp_path: Path) -> None:
