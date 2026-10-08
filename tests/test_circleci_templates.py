@@ -429,6 +429,211 @@ def test_the_old_pull_request_body_route_still_works_for_projects_on_actions() -
     assert "нет раздела" in standard_module.basis_problem("## Что сделано\n\nтекст\n")
 
 
+# ---------- «Защищённые файлы, изменённые в PR» из сообщений коммитов ----------
+
+PROTECTED_RED = "Защищённые файлы в PR"
+
+
+def project_with_file_commit(tmp_path: Path, files: dict[str, str], message: str) -> Path:
+    """Подключённый проект: поверх origin/main один коммит, который дописывает файлы (в конец или создаёт)."""
+    project = project_with_commits(tmp_path, [])
+    for rel, extra in files.items():
+        target = project / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        old = target.read_text(encoding="utf-8") if target.is_file() else ""
+        target.write_text(old + extra, encoding="utf-8", newline="\n")
+        git(project, "add", rel)
+    git(project, "commit", "-q", "-m", message)
+    return project
+
+
+def protected_standard_module() -> Any:
+    return load(
+        REPO / "plugin" / "templates" / "ci" / "parch" / "parch_standard.py",
+        "parch_standard_protected_test",
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".github/parch/parch_ci.py",
+        ".circleci/config.yml",
+        ".claude/settings.json",
+        "state/baseline.json",
+        "state/acceptance/F1.md",
+        "docs/CONSTITUTION.md",
+        "docs/GOAL.md",
+        "AGENTS.md",
+        "pyproject.toml",
+        ".importlinter",
+    ],
+)
+def test_protected_paths_are_recognized(path: str) -> None:
+    assert protected_standard_module().is_protected(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/convert/__init__.py", "tests/test_convert.py", "docs/MODULES.md", "state/incidents/x.md"],
+)
+def test_ordinary_paths_and_incident_reports_are_not_protected(path: str) -> None:
+    assert not protected_standard_module().is_protected(path)
+
+
+def test_a_branch_that_changes_a_protected_file_without_the_section_is_red(tmp_path: Path) -> None:
+    """Плохой пример: PR 2 прогона F20 менял `.github/parch/parch_ci.py`, а в описании об этом не было ни слова."""
+    project = project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, GOOD_BASIS)
+    done = standard(project)
+    assert done.returncode == 1
+    assert PROTECTED_RED in done.stdout and "AGENTS.md" in done.stdout
+    assert "нет раздела «Защищённые файлы, изменённые в PR»" in done.stdout
+
+
+def test_the_section_that_names_the_file_makes_it_green(tmp_path: Path) -> None:
+    message = (
+        GOOD_BASIS
+        + "\n## Защищённые файлы, изменённые в PR\n\nAGENTS.md: добавил правило по просьбе владельца.\n"
+    )
+    done = standard(project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, message))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_section_may_name_the_folder_and_the_plain_label_works(tmp_path: Path) -> None:
+    message = (
+        GOOD_BASIS + "\nЗащищённые файлы, изменённые в PR: .circleci/ целиком (шаг для табло)\n"
+    )
+    done = standard(project_with_file_commit(tmp_path, {".circleci/config.yml": "# ok\n"}, message))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_section_that_misses_a_changed_protected_file_is_red(tmp_path: Path) -> None:
+    message = GOOD_BASIS + "\n## Защищённые файлы, изменённые в PR\n\nAGENTS.md: правило.\n"
+    files = {"AGENTS.md": "\nправило\n", ".circleci/config.yml": "# ok\n"}
+    done = standard(project_with_file_commit(tmp_path, files, message))
+    assert done.returncode == 1
+    assert PROTECTED_RED in done.stdout and "не названы" in done.stdout
+    assert ".circleci/config.yml" in done.stdout
+
+
+def test_an_empty_section_is_the_same_as_no_section(tmp_path: Path) -> None:
+    message = GOOD_BASIS + "\n## Защищённые файлы, изменённые в PR\n\n"
+    done = standard(project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, message))
+    assert done.returncode == 1 and "нет раздела" in done.stdout
+
+
+def test_ordinary_files_and_incident_reports_need_no_section(tmp_path: Path) -> None:
+    files = {"src/convert.py": "X = 1\n", "state/incidents/2026-10-08-NONE-x.md": "текст\n"}
+    done = standard(project_with_file_commit(tmp_path, files, GOOD_BASIS))
+    assert PROTECTED_RED not in done.stdout
+
+
+def test_naming_another_file_of_the_same_unprotected_folder_does_not_cover_a_protected_file(
+    tmp_path: Path,
+) -> None:
+    """Плохой пример: `docs/QUESTIONS.md` назван, а `docs/GOAL.md` (цель, файл владельца) изменён молча."""
+    message = (
+        GOOD_BASIS
+        + "\n## Защищённые файлы, изменённые в PR\n\ndocs/QUESTIONS.md: вопросы по блоку.\n"
+    )
+    files = {"docs/GOAL.md": "\nправка цели\n"}
+    done = standard(project_with_file_commit(tmp_path, files, message))
+    assert done.returncode == 1
+    assert PROTECTED_RED in done.stdout and "docs/GOAL.md" in done.stdout
+
+
+def test_a_name_inside_another_path_does_not_count(tmp_path: Path) -> None:
+    """`AGENTS.md` внутри `docs/AGENTS.md` и `NOT_AGENTS.md` не называет корневой `AGENTS.md`."""
+    message = (
+        GOOD_BASIS
+        + "\n## Защищённые файлы, изменённые в PR\n\ndocs/AGENTS.md и NOT_AGENTS.md: заметки.\n"
+    )
+    done = standard(project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, message))
+    assert done.returncode == 1 and "не названы" in done.stdout
+
+
+def test_a_renamed_protected_file_is_still_seen(tmp_path: Path) -> None:
+    """Плохой пример: `git mv docs/GOAL.md …` показал бы только новое имя и спрятал защищённый файл."""
+    project = project_with_commits(tmp_path, [])
+    git(project, "mv", "docs/GOAL.md", "docs/old-goal.txt")
+    git(project, "commit", "-q", "-m", GOOD_BASIS)
+    done = standard(project)
+    assert done.returncode == 1
+    assert PROTECTED_RED in done.stdout and "docs/GOAL.md" in done.stdout
+
+
+def test_a_protected_file_with_a_non_ascii_name_is_seen(tmp_path: Path) -> None:
+    """Имя с русскими буквами git без `-z` печатает в кавычках: файл не считался бы защищённым."""
+    files = {"state/заметка.json": "{}\n"}
+    red = standard(project_with_file_commit(tmp_path, files, GOOD_BASIS))
+    assert red.returncode == 1 and PROTECTED_RED in red.stdout
+    (tmp_path / "ok").mkdir()
+    message = (
+        GOOD_BASIS + "\n## Защищённые файлы, изменённые в PR\n\nstate/: заметка для приёмки.\n"
+    )
+    green = standard(project_with_file_commit(tmp_path / "ok", files, message))
+    assert green.returncode == 0, green.stdout + green.stderr
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## Защищённые файлы, изменённые в PR",
+        "## Защищенные файлы, изменённые в PR",  # без «ё»
+        "### Защищённые файлы, изменённые в PR",
+        "## **Защищённые файлы, изменённые в PR**",
+        "**Защищённые файлы, изменённые в PR:**",
+    ],
+)
+def test_the_section_is_recognized_in_normal_spellings(tmp_path: Path, heading: str) -> None:
+    message = GOOD_BASIS + f"\n{heading}\n\nAGENTS.md: правило по просьбе владельца.\n"
+    done = standard(project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, message))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_an_existing_project_without_debt_gets_a_warning_instead_of_red(tmp_path: Path) -> None:
+    project = project_with_commits(tmp_path, [])
+    baseline = project / "state" / "baseline.json"
+    data = json.loads(baseline.read_text(encoding="utf-8"))
+    data["existing_project"] = True
+    baseline.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    goal = project / "docs" / "GOAL.md"
+    goal.write_text(goal.read_text(encoding="utf-8") + "\nправка\n", encoding="utf-8")
+    git(project, "add", "-A")
+    git(project, "commit", "-q", "-m", GOOD_BASIS)
+    done = standard(project)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Предупреждение (существующий проект, долг не записан)" in done.stdout
+    assert "защищённые файлы" in done.stdout
+
+
+def test_the_actions_route_does_not_check_protected_files(tmp_path: Path) -> None:
+    """У проектов на Actions описание PR идёт в PARCH_PR_BODY, коммиты ветки не читаются: раздел не требуется."""
+    project = project_with_file_commit(tmp_path, {"AGENTS.md": "\nправило\n"}, GOOD_BASIS)
+    env = {k: v for k, v in os.environ.items() if k != "PARCH_BASE_REF"}
+    env["PARCH_PR_BODY"] = GOOD_BASIS
+    done = subprocess.run(
+        [sys.executable, str(project / ".github" / "parch" / "parch_ci.py"), "standard"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert PROTECTED_RED not in done.stdout
+
+
+def test_the_pull_request_template_has_the_protected_files_section() -> None:
+    template = (REPO / "plugin" / "templates" / "github" / "pull_request_template.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Защищённые файлы, изменённые в PR" in template
+    assert "CI проверяет сообщения коммитов" in template
+
+
 # ---------- «Основания» пишутся один раз ----------
 
 
