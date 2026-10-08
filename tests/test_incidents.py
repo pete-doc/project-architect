@@ -147,6 +147,8 @@ def test_the_budget_comes_from_constitution_and_a_block_may_have_its_own(tmp_pat
     (root / "docs" / "CONSTITUTION.md").write_text(
         "## Целевая ОС\n\nWindows 11\n\nБюджет инцидентов на блок: 3\n", encoding="utf-8"
     )
+    for rel in ("GOAL.md", "MODULES.md", "INCIDENT_TEMPLATE.md"):
+        (root / "docs" / rel).write_text("x\n", encoding="utf-8")  # полный состав проекта
     std.passes(root)  # два из трёх
     third = ("2026-10-06-F4-loop.md", report())
     (root / "state" / "incidents" / third[0]).write_text(third[1], encoding="utf-8")

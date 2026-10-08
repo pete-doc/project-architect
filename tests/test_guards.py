@@ -902,6 +902,12 @@ def test_push_through_powershell_is_checked_too(project: Path) -> None:
 
 def test_push_is_allowed_when_standard_is_satisfied(project: Path) -> None:
     with_workflow(project, GOOD_WORKFLOW)
+    for rel in ("docs/GOAL.md", "docs/MODULES.md", "docs/INCIDENT_TEMPLATE.md"):
+        (project / rel).write_text("x\n", encoding="utf-8")  # полный состав подключённого проекта
+    (project / "state").mkdir()
+    (project / "state" / "features.json").write_text(
+        json.dumps({"version": 1, "features": []}), encoding="utf-8"
+    )
     result = run_hook("pre_push.py", bash("git push origin feature"), project)
     assert result.code == 0, result.stderr
 

@@ -2,8 +2,9 @@
 """Правила состава проекта для проверки `standard` (F14, PR 1; STANDARD.md, раздел 11).
 
 Три правила: обязательные файлы на месте; нет конкурирующих файлов инструкций для ИИ; нет `.md` вне разрешённых мест.
-Применяются только к подключённому проекту: у него установлен `.github/parch/parch_ci.py` (в репозитории самого продукта
-скрипт лежит в `plugin/templates/`, поэтому правила его не касаются).
+Применяются только к подключённому проекту: у него есть CONSTITUTION.md (docs/ или корень, как в hooks) или установлен
+`.github/parch/parch_ci.py` (в репозитории самого продукта скрипт лежит в `plugin/templates/`, а CONSTITUTION подключает его
+к собственным правилам, F25).
 
 Строгость (решение владельца, 2026-10-05): на новом проекте нарушение это провал. Проект, записанный как существующий
 (`existing_project: true` в `state/baseline.json`, его ставит init-project, если при подключении уже был код), сначала только
@@ -45,9 +46,18 @@ ROOT_MD = {
 ALLOWED_TOP = {"docs", "state", "analysis", ".github", ".claude"}
 
 
+CONSTITUTION_CANDIDATES = (
+    "docs/CONSTITUTION.md",
+    "CONSTITUTION.md",
+)  # те же, что в plugin/hooks/_common.py
+
+
 def is_managed(project: Path) -> bool:
-    """Подключённый проект: у него установлен скрипт проверок `.github/parch/parch_ci.py`."""
-    return (project / ".github" / "parch" / "parch_ci.py").is_file()
+    """Подключённый проект: есть CONSTITUTION.md (как в hooks) или установлен `.github/parch/parch_ci.py`."""
+    return (
+        exists_any(project, CONSTITUTION_CANDIDATES)
+        or (project / ".github" / "parch" / "parch_ci.py").is_file()
+    )
 
 
 def exists_any(project: Path, options: tuple[str, ...]) -> bool:
@@ -503,7 +513,7 @@ def check(
     """
     if not is_managed(project):
         return [], [
-            "Правила состава проекта (файлы, инструкции, .md) не применяются: проект не подключён (нет .github/parch/)."
+            "Правила состава проекта (файлы, инструкции, .md) не применяются: проект не подключён (нет CONSTITUTION.md и нет .github/parch/)."
         ]
     found = {
         **file_violations(project),
