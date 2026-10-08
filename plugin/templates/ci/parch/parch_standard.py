@@ -347,6 +347,113 @@ def commits_basis_problem(messages: list[str], error: str | None = None) -> str 
     return f"ни в одном из {len(messages)} коммитов ветки нет корректного раздела «{BASIS_HEADING}»; последний коммит: {last}"
 
 
+PROTECTED_HEADING = "Защищ[её]нные файлы"  # шаблон регулярного выражения: «ё» и «е»
+PROTECTED_SECTION = "Защищённые файлы, изменённые в PR"
+PROTECTED_PATHS = (
+    ".github/", ".circleci/", ".claude/", "state/", "docs/CONSTITUTION.md", "CONSTITUTION.md",
+    "docs/GOAL.md", "AGENTS.md", "CLAUDE.md", ".importlinter", "pyproject.toml",
+)  # fmt: skip
+PROTECTED_EXEMPT = (
+    "state/incidents/",
+)  # отчёты об инцидентах пишет исполнитель, это не файлы владельца
+PROTECTED_LABEL = re.compile(rf"^\**{PROTECTED_HEADING}[^:\n]*:\**\s*(.*)$", re.IGNORECASE)
+PROTECTED_MD_HEADING = re.compile(rf"^#{{1,6}}\s+\**{PROTECTED_HEADING}\b", re.IGNORECASE)
+
+
+def is_protected(path: str) -> bool:
+    """Файл, который в проекте утверждает владелец: CI, правила, настройки Claude, state/, цель и инструкции."""
+    path = path.replace("\\", "/")
+    if any(path.startswith(prefix) for prefix in PROTECTED_EXEMPT):
+        return False
+    return any(
+        path == item or (item.endswith("/") and path.startswith(item)) for item in PROTECTED_PATHS
+    )
+
+
+def changed_files(project: Path, base_ref: str) -> tuple[list[str], str | None]:
+    """Файлы, изменённые веткой относительно основной (`git diff base...HEAD`), и пояснение, если история недоступна."""
+    try:
+        done = subprocess.run(
+            # --no-renames: при переименовании видны оба пути, `-z`: имена не в кавычках (не-ASCII)
+            ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_ref}...HEAD"],
+            cwd=project, capture_output=True, text=True, encoding="utf-8", check=False, timeout=120,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as error:
+        return [], f"не удалось запустить git для списка изменённых файлов: {error}"
+    if done.returncode != 0:
+        reason = (done.stderr or done.stdout).strip().splitlines()[:1]
+        return [], (
+            f"список изменённых файлов от {base_ref} недоступен "
+            f"({reason[0] if reason else 'git diff завершился ошибкой'})"
+        )
+    return [name for name in done.stdout.split("\0") if name.strip()], None
+
+
+def protected_section_text(message: str) -> str:
+    """Текст раздела «Защищённые файлы…» в сообщении коммита (`## Защищённые файлы…` или строка «Защищённые файлы…:»)."""
+    section: list[str] = []
+    inside = False
+    plain = False
+    blank = 0
+    fenced = False
+    for line in message.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        heading = not fenced and re.match(r"^#{1,6}\s", line) is not None
+        if not inside:
+            if not fenced and PROTECTED_MD_HEADING.match(line):
+                inside, plain = True, False
+            elif not fenced and (label := PROTECTED_LABEL.match(line)):
+                inside, plain = True, True
+                section.append(label[1])
+            continue
+        if heading or (plain and blank >= 2):
+            break
+        blank = blank + 1 if not line.strip() else 0
+        section.append(line)
+    return "\n".join(section).strip()
+
+
+def mentioned(name: str, text: str) -> bool:
+    """`name` стоит в тексте отдельным путём: `AGENTS.md` не засчитывается в `docs/AGENTS.md` и `NOT_AGENTS.md`."""
+    # после имени папки не должно идти продолжение пути: `state/features.json` не называет папку `state/`
+    pattern = rf"(?<![\w./-]){re.escape(name)}" + (
+        r"(?!\w)" if name.endswith("/") else r"(?![\w/])"
+    )
+    return re.search(pattern, text) is not None
+
+
+def named_in(path: str, text: str) -> bool:
+    """Файл назван сам или его защищённой папкой (`.github/parch/`, `state/`); `docs/` и `src/` не защищены, не в счёт."""
+    path = path.replace("\\", "/")
+    if mentioned(path, text):
+        return True
+    return any(
+        is_protected(f"{parent}/") and mentioned(f"{parent}/", text)
+        for parent in PurePosixPath(path).parents
+        if str(parent) != "."
+    )
+
+
+def commits_protected_problem(messages: list[str], changed: list[str]) -> str | None:
+    """Если ветка меняет защищённые файлы, в коммитах есть раздел с их названием и причиной (владелец утверждает такие PR)."""
+    touched = [path for path in changed if is_protected(path)]
+    if not touched:
+        return None
+    text = "\n".join(filter(None, (protected_section_text(m) for m in messages)))
+    names = ", ".join(touched[:5]) + (f" и ещё {len(touched) - 5}" if len(touched) > 5 else "")
+    if not text.strip():
+        return (
+            f"ветка меняет защищённые файлы ({names}), но в сообщениях коммитов нет раздела «{PROTECTED_SECTION}»: "
+            "назовите каждый файл (или папку) и зачем он изменён; такой PR утверждает владелец"
+        )
+    unnamed = [path for path in touched if not named_in(path, text)]
+    if unnamed:
+        shown = ", ".join(unnamed[:5]) + (f" и ещё {len(unnamed) - 5}" if len(unnamed) > 5 else "")
+        return f"в разделе «{PROTECTED_SECTION}» не названы изменённые защищённые файлы: {shown}"
+    return None
+
+
 def read_debt(project: Path) -> set[str] | None:
     path = project / DEBT_FILE
     if not path.is_file():
@@ -384,12 +491,15 @@ def check(
     extra: dict[str, str] | None = None,
     pr_body: str | None = None,
     commits: tuple[list[str], str | None] | None = None,
+    changed: tuple[list[str], str | None] | None = None,
 ) -> tuple[list[str], list[str]]:
     """(провалы, пометки): правила состава проекта в трёх режимах: новый проект, существующий без долга, с храповиком.
 
     `extra` — нарушения, которые находит вызывающий (отчёты об инцидентах, ключ `incident:<имя>`): они идут
     через тот же долг. `pr_body` — описание PR (старые проекты на Actions); `commits` — (сообщения коммитов ветки, пояснение
-    об ошибке истории) для проектов на CircleCI (ADR-0022). Оба None: проверка «Оснований» не идёт (локальный запуск).
+    об ошибке истории) для проектов на CircleCI (ADR-0022); `changed` — (файлы, изменённые веткой, пояснение об ошибке):
+    если среди них защищённые, в коммитах нужен раздел «Защищённые файлы, изменённые в PR». None: проверка «Оснований»
+    и защищённых файлов не идёт (локальный запуск).
     """
     if not is_managed(project):
         return [], [
@@ -413,6 +523,13 @@ def check(
             notes.append(f"Предупреждение (существующий проект, долг не записан): {basis}.")
         else:
             problems.append(f"Основания в PR: {basis}.")
+    if commits is not None and changed is not None:
+        protected = changed[1] or commits_protected_problem(commits[0], changed[0])
+        if protected is not None:
+            if debt is None and existing_project(project):
+                notes.append(f"Предупреждение (существующий проект, долг не записан): {protected}.")
+            else:
+                problems.append(f"Защищённые файлы в PR: {protected}.")
     recording = (
         update and accept_new
     )  # владелец записывает долг: предупреждение не нужно, долг пишется ниже

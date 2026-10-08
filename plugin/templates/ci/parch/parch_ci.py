@@ -3779,8 +3779,13 @@ def check_standard(
             if base_ref and pr_body is None
             else None
         )
+        changed = (
+            parch_standard.changed_files(project, base_ref)
+            if commits is not None and base_ref
+            else None
+        )
         composition_problems, composition_notes = parch_standard.check(
-            project, update, accept_new, extra, pr_body, commits
+            project, update, accept_new, extra, pr_body, commits, changed
         )
         problems.extend(composition_problems)
         if (
