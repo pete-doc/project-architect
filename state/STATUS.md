@@ -1,5 +1,5 @@
 # Прогресс: 16 из 25 блоков готово · G1 — 4 из 10 · G2 — 7 из 9 · критерий G3 выполнен · G4 — 1 из 3 · критерий G5 выполнен · G6 — 3 из 5
-Обновлено: 2026-10-08, коммит `ccb885f` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`
+Обновлено: 2026-10-08, коммит `0ca16aa` · данные: `state/features.json`, `docs/GOAL.md`, отчёт CI, `state/incidents/`
 
 ## Нужно ваше решение
 - ничего: всё идёт без вашего участия
@@ -208,10 +208,10 @@ graph LR
 ```
 
 ## Тесты
-- Всего **2086** (было 2081).
+- Всего **2093** (было 2086).
 - Упавших: **1**. Пропущенных: **9**.
   - упал: tests.test_circleci_templates::test_the_official_validator_rejects_a_broken_config
-- Источник: отчёт прогона CI на коммите `ccb885f` (то же содержимое, что у табло).
+- Источник: отчёт прогона CI на коммите `0ca16aa` (то же содержимое, что у табло).
 
 ## Расход CI
 Минуты и деньги смотрите на GitHub: [использование Actions](https://github.com/settings/billing/summary), [бюджеты](https://github.com/settings/billing/budgets).
