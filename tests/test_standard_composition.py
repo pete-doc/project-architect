@@ -372,3 +372,60 @@ def test_the_shell_is_also_stopped_by_the_path_guard_for_every_debt_file(project
             assert (
                 answer["permissionDecision"] == "ask" and rel in answer["permissionDecisionReason"]
             )
+
+
+# Шаг 0(д) F25: проект подключён по CONSTITUTION (как в hooks) или по копии скрипта проверок.
+
+
+def without_parch_copy(root: Path) -> Path:
+    (root / ".github" / "parch" / "parch_ci.py").unlink()
+    (root / ".github" / "parch").rmdir()
+    return root
+
+
+def test_a_project_with_constitution_and_no_parch_copy_is_managed_and_missing_goal_fails(
+    tmp_path: Path,
+) -> None:
+    root = without_parch_copy(managed(tmp_path))
+    (root / "docs" / "GOAL.md").unlink()
+    done = standard(root)
+    assert done.returncode == 1 and "docs/GOAL.md" in done.stdout
+    assert "не подключён" not in done.stdout + done.stderr
+
+
+def test_a_complete_project_with_constitution_and_no_parch_copy_passes(tmp_path: Path) -> None:
+    done = standard(without_parch_copy(managed(tmp_path)))
+    assert done.returncode == 0, done.stdout
+
+
+def test_a_project_with_neither_constitution_nor_parch_copy_is_not_managed_and_composition_is_skipped(
+    tmp_path: Path,
+) -> None:
+    root = without_parch_copy(managed(tmp_path))
+    (root / "docs" / "CONSTITUTION.md").unlink()
+    (root / "docs" / "GOAL.md").unlink()
+    done = standard(root)
+    assert "не подключён" in done.stdout + done.stderr
+    assert "docs/GOAL.md" not in done.stdout
+
+
+def test_a_project_with_a_parch_copy_but_no_constitution_stays_managed(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    (root / "docs" / "CONSTITUTION.md").unlink()
+    (root / "docs" / "GOAL.md").unlink()
+    done = standard(root)
+    assert done.returncode == 1 and "docs/GOAL.md" in done.stdout
+    assert "не подключён" not in done.stdout + done.stderr
+
+
+def test_constitution_in_the_project_root_without_docs_copy_also_makes_the_project_managed(
+    tmp_path: Path,
+) -> None:
+    root = without_parch_copy(managed(tmp_path))
+    text = (root / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
+    (root / "docs" / "CONSTITUTION.md").unlink()
+    write(root / "CONSTITUTION.md", text)
+    (root / "docs" / "GOAL.md").unlink()
+    done = standard(root)
+    assert done.returncode == 1 and "docs/GOAL.md" in done.stdout
+    assert "не подключён" not in done.stdout + done.stderr

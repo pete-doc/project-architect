@@ -464,6 +464,12 @@ def standard_on(folder: Path, config: str, adr: str = "") -> subprocess.Complete
     (folder / "docs").mkdir()
     constitution = "# CONSTITUTION\n\n## Целевая ОС\n\nWindows 11\n\n## Бюджеты\n\nБюджет инцидентов на блок: 2\n"
     (folder / "docs" / "CONSTITUTION.md").write_text(constitution, encoding="utf-8")
+    for rel in ("docs/GOAL.md", "docs/MODULES.md", "docs/INCIDENT_TEMPLATE.md"):
+        (folder / rel).write_text("x\n", encoding="utf-8")  # полный состав подключённого проекта
+    (folder / "state").mkdir()
+    (folder / "state" / "features.json").write_text(
+        '{"version": 1, "features": []}', encoding="utf-8"
+    )
     if adr:
         (folder / "docs" / "adr").mkdir()
         (folder / "docs" / "adr" / "0001-x.md").write_text(adr, encoding="utf-8")
