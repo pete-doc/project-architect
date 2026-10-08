@@ -21,7 +21,6 @@ import fnmatch
 import importlib
 import re
 import sys
-import tomllib
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import cast
@@ -296,32 +295,32 @@ def _code_only_implementer(project: Path) -> bool:
 
 
 def _code_roots(project: Path) -> list[str]:
-    """Корни кода: `[tool.parch] source_roots` из pyproject.toml и `src`, если он есть."""
-    roots = ["src"]
-    pyproject = project / "pyproject.toml"
+    """Корни кода (в нижнем регистре) по тем же правилам, что `py_source_roots` в parch_ci.py:
+    `[tool.parch] source_roots`, иначе `src`, если он есть, иначе корень проекта."""
+    fallback = ["src"] if (project / "src").is_dir() else ["."]
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
-    except (OSError, ValueError):
-        data = {}  # битый pyproject не должен ронять охрану: остаётся только src
-    tool = data.get("tool")
-    parch = cast(dict[str, object], tool).get("parch") if isinstance(tool, dict) else None
-    parch_table = cast(dict[str, object], parch) if isinstance(parch, dict) else {}
-    configured = parch_table.get("source_roots")
-    if isinstance(configured, list):
-        for item in cast(list[object], configured):
-            if isinstance(item, str):
-                roots.append(item.replace("\\", "/").strip("/").lower() or ".")
-    return roots
+        roots = cast("list[str]", _ci_module().py_source_roots(project))
+    except (OSError, ValueError, ImportError):
+        roots = fallback  # битый pyproject или нет parch_ci: умолчание, а не «разрешить всё»
+    result = [r.replace("\\", "/").removeprefix("./").strip("/").lower() or "." for r in roots]
+    if "src" not in result:
+        result.insert(0, "src")  # src кодом считается всегда, даже без папки и при source_roots
+    return result
 
 
 def _is_code_path(rel: str, project: Path) -> bool:
-    """Код для правила «только implementer»: файл .py в корне кода проекта. Документы (.md, в том
-    числе описания агентов и SKILL.md), plugin.json, .yml и .json кодом не считаются."""
+    """Код для правила «только implementer»: файл .py в корне кода проекта, кроме тестовых путей
+    (папки tests, test, __tests__ на любой глубине, файлы test_*.py и *_test.py). Документы (.md,
+    в том числе описания агентов и SKILL.md), plugin.json, .yml и .json кодом не считаются."""
     if not rel.endswith(".py"):
         return False
+    parts = PurePosixPath(rel).parts
+    if any(d in TESTER_TEST_DIRS for d in parts[:-1]):
+        return False
+    if fnmatch.fnmatch(parts[-1], "test_*.py") or fnmatch.fnmatch(parts[-1], "*_test.py"):
+        return False
     for root in _code_roots(project):
-        root = root.removeprefix("./")
-        if root in ("", ".") or rel == root or rel.startswith(root + "/"):
+        if root == "." or rel == root or rel.startswith(root + "/"):
             return True
     return False
 
