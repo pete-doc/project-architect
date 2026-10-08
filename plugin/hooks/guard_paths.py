@@ -126,7 +126,12 @@ _COPY_COMMANDS = {"cp", "copy", "copy-item", "cpi", "xcopy"}
 
 
 def _is_test_path(rel: str) -> bool:
+    """Тестовый путь: тестовая папка или имя теста. Документы под docs/ тестами не бывают: папка
+    `docs/specs/` (спецификации блоков) совпадала с тестовой `specs`, и основная сессия не могла
+    записать спецификацию (находка самоприменения, F25, шаг 0а)."""
     parts = PurePosixPath(rel).parts
+    if not parts or parts[0].lower() == "docs":
+        return False
     name = parts[-1]
     dirs = parts[:-1]
     if any(d in _TEST_DIRS or d.endswith((".tests", ".test")) or d.endswith("tests") for d in dirs):
