@@ -188,8 +188,46 @@ def test_smoke() -> None:
 '''
 
 
+def has_python_tests(project: Path) -> bool:
+    """В проекте уже есть тесты Python (`test_*.py` или `*_test.py` вне служебных папок)."""
+    skip = {".venv", "venv", "node_modules", ".git", "site-packages"}
+    for pattern in ("test_*.py", "*_test.py"):
+        for path in project.rglob(pattern):
+            if not (skip & set(path.relative_to(project).parts)):
+                return True
+    return False
+
+
+def mark_existing_project(project: Path, report: Report) -> None:
+    """Baseline уже был, а код есть: ставит `existing_project: true`, иначе правила состава проекта падают
+    сразу, а не предупреждают (находка самоприменения, F25, шаг 0в)."""
+    path = project / "state" / "baseline.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        report.notes.append(
+            "state/baseline.json уже был, но прочитать его не удалось: поставьте в нём "
+            '"existing_project": true вручную, иначе правила состава проекта падают, а не предупреждают.'
+        )
+        return
+    if not isinstance(data, dict):
+        report.notes.append(
+            'state/baseline.json уже был и устроен иначе: поставьте в нём "existing_project": true вручную.'
+        )
+        return
+    baseline = cast("dict[str, Any]", data)
+    if baseline.get("existing_project") is True:
+        return
+    baseline["existing_project"] = True
+    path.write_text(json.dumps(baseline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report.notes.append(
+        "state/baseline.json уже был: в него добавлен признак existing_project (в проекте уже есть код), "
+        "правила состава проекта сначала предупреждают, долг записывает владелец (standard --update --accept-new)."
+    )
+
+
 def initial_baseline(
-    project: Path, languages: list[str], existing_code: bool = False
+    project: Path, languages: list[str], existing_code: bool = False, python_smoke: bool = True
 ) -> dict[str, Any]:
     """Начальный baseline: известные тесты, пропуски, подавления и настройки каждого языка.
 
@@ -198,7 +236,7 @@ def initial_baseline(
     MODULES.md), пока владелец не запишет долг.
     """
     first_tests = {
-        "python": ["tests/test_smoke.py::test_smoke"],
+        "python": ["tests/test_smoke.py::test_smoke"] if python_smoke else [],
         "typescript": ["smoke.test.ts::smoke"],
         "csharp": ["App.Tests.SmokeTests.Smoke"],
     }
@@ -596,6 +634,7 @@ def init_project(
         if lang in parch_ci.COLLECTORS
     )  # до того, как init что-либо создаст: код уже есть значит проект существующий
     project.mkdir(parents=True, exist_ok=True)
+    python_tests = "python" in languages and has_python_tests(project)
     report = Report(project)
     for doc in ("MODULES", "INTERFACES", "LESSONS", "QUESTIONS"):
         report.copy(f"docs/{doc}.md", f"docs/{doc}.md")
@@ -610,7 +649,13 @@ def init_project(
         report.write("pyproject.toml", PYPROJECT)
         report.write("requirements.txt", REQUIREMENTS)
         report.write("requirements-dev.txt", REQUIREMENTS_DEV)
-        report.write("tests/test_smoke.py", SMOKE_TEST)
+        if python_tests:
+            report.notes.append(
+                "tests/test_smoke.py не создан: в проекте уже есть тесты; известные тесты записывает "
+                "владелец командой baseline --update после первого полного прогона."
+            )
+        else:
+            report.write("tests/test_smoke.py", SMOKE_TEST)
     if "typescript" in languages:
         create_typescript_files(project, report, name)
     if "csharp" in languages:
@@ -626,10 +671,10 @@ def init_project(
         report.copy("ci/parch/parch_libraries.py", ".github/parch/parch_libraries.py")
         report.copy("ci/parch/parch_standard.py", ".github/parch/parch_standard.py")
         report.copy("ci/parch/parch_state.py", ".github/parch/parch_state.py")
-        report.write(
-            "state/baseline.json",
-            json.dumps(initial_baseline(project, languages, existing_code), indent=2) + "\n",
-        )
+        baseline = initial_baseline(project, languages, existing_code, not python_tests)
+        report.write("state/baseline.json", json.dumps(baseline, indent=2) + "\n")
+        if "state/baseline.json" in report.skipped and existing_code:
+            mark_existing_project(project, report)
         report.write(CIRCLE_CONFIG, render_circleci(languages))
     merge_permissions(report)
     update_gitignore(report, languages)
