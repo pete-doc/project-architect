@@ -522,6 +522,27 @@ def test_init_on_a_project_with_code_and_an_old_baseline_marks_it_existing(tmp_p
     assert any("existing_project" in note for note in result["notes"])
 
 
+def test_init_keeps_an_explicit_existing_project_false_and_writes_lf(tmp_path: Path) -> None:
+    """Явная запись владельца не переписывается, а записанный файл без CRLF (целевая ОС Windows)."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    path = tmp_path / "state" / "baseline.json"
+    old: dict[str, Any] = {"version": 1, "existing_project": False, "tests": {"python": []}}
+    path.write_text(json.dumps(old), encoding="utf-8")
+    result = init(tmp_path)
+    assert json.loads(path.read_text(encoding="utf-8"))["existing_project"] is False
+    assert any("existing_project: false" in note for note in result["notes"])
+    (tmp_path / "second").mkdir()
+    (tmp_path / "second" / "src").mkdir()
+    (tmp_path / "second" / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "second" / "state").mkdir()
+    fresh = tmp_path / "second" / "state" / "baseline.json"
+    fresh.write_text(json.dumps({"version": 1, "tests": {"python": []}}), encoding="utf-8")
+    init(tmp_path / "second")
+    assert b"\r\n" not in fresh.read_bytes()
+
+
 def test_init_on_a_project_without_code_leaves_an_old_baseline_alone(tmp_path: Path) -> None:
     (tmp_path / "state").mkdir()
     old: dict[str, Any] = {"version": 1, "tests": {"python": []}, "skips": {}, "config": {}}

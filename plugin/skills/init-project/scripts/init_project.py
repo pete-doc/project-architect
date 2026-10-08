@@ -216,10 +216,17 @@ def mark_existing_project(project: Path, report: Report) -> None:
         )
         return
     baseline = cast("dict[str, Any]", data)
-    if baseline.get("existing_project") is True:
-        return
+    if "existing_project" in baseline:
+        if baseline["existing_project"] is not True:
+            report.notes.append(
+                "state/baseline.json уже был, и в нём стоит existing_project: false (запись владельца): "
+                "не тронуто; в проекте уже есть код, правила состава будут падать, а не предупреждать."
+            )
+        return  # явную запись владельца init не переписывает
     baseline["existing_project"] = True
-    path.write_text(json.dumps(baseline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(baseline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     report.notes.append(
         "state/baseline.json уже был: в него добавлен признак existing_project (в проекте уже есть код), "
         "правила состава проекта сначала предупреждают, долг записывает владелец (standard --update --accept-new)."

@@ -1868,6 +1868,7 @@
       "tests/test_skills.py::test_init_creates_a_working_structure",
       "tests/test_skills.py::test_init_does_not_add_a_smoke_test_when_tests_already_exist",
       "tests/test_skills.py::test_init_is_idempotent_and_never_overwrites",
+      "tests/test_skills.py::test_init_keeps_an_explicit_existing_project_false_and_writes_lf",
       "tests/test_skills.py::test_init_keeps_existing_ci_and_merges_permissions",
       "tests/test_skills.py::test_init_on_a_project_with_code_and_an_old_baseline_marks_it_existing",
       "tests/test_skills.py::test_init_on_a_project_without_code_leaves_an_old_baseline_alone",
