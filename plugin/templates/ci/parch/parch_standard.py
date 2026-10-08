@@ -416,7 +416,10 @@ def protected_section_text(message: str) -> str:
 
 def mentioned(name: str, text: str) -> bool:
     """`name` стоит в тексте отдельным путём: `AGENTS.md` не засчитывается в `docs/AGENTS.md` и `NOT_AGENTS.md`."""
-    pattern = rf"(?<![\w./-]){re.escape(name)}" + ("" if name.endswith("/") else r"(?![\w/])")
+    # после имени папки не должно идти продолжение пути: `state/features.json` не называет папку `state/`
+    pattern = rf"(?<![\w./-]){re.escape(name)}" + (
+        r"(?!\w)" if name.endswith("/") else r"(?![\w/])"
+    )
     return re.search(pattern, text) is not None
 
 

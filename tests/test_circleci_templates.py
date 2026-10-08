@@ -542,6 +542,24 @@ def test_naming_another_file_of_the_same_unprotected_folder_does_not_cover_a_pro
     assert PROTECTED_RED in done.stdout and "docs/GOAL.md" in done.stdout
 
 
+@pytest.mark.parametrize(
+    ("named", "changed"),
+    [
+        ("state/features.json", "state/baseline.json"),  # другой файл той же защищённой папки
+        (".github/parch/parch_ci.py", ".github/pull_request_template.md"),
+        (".claude/settings.json", ".claude/hooks.json"),
+    ],
+)
+def test_naming_one_file_of_a_protected_folder_does_not_cover_the_whole_folder(
+    tmp_path: Path, named: str, changed: str
+) -> None:
+    """Плохой пример: владелец видит список из одного файла и думает, что он полный."""
+    message = GOOD_BASIS + f"\n## Защищённые файлы, изменённые в PR\n\n{named}: правка.\n"
+    done = standard(project_with_file_commit(tmp_path, {changed: "x\n"}, message))
+    assert done.returncode == 1
+    assert "не названы" in done.stdout and changed in done.stdout
+
+
 def test_a_name_inside_another_path_does_not_count(tmp_path: Path) -> None:
     """`AGENTS.md` внутри `docs/AGENTS.md` и `NOT_AGENTS.md` не называет корневой `AGENTS.md`."""
     message = (
