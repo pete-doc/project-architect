@@ -425,6 +425,22 @@
       "status": "planned",
       "passes": false,
       "incidents": 0
+    },
+    {
+      "id": "F25",
+      "title": "Самоприменение: продукт работает под своими же правилами",
+      "goal": [
+        "G4",
+        "G1"
+      ],
+      "depends_on": [
+        "F20"
+      ],
+      "spec": "docs/specs/F25-self-application.md",
+      "acceptance_tests": [],
+      "status": "planned",
+      "passes": false,
+      "incidents": 0
     }
   ]
 }
