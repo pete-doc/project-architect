@@ -35,6 +35,7 @@ from _common import (
     agent_role,
     command_name,
     command_tokens,
+    constitution_path,
     get_str,
     is_managed,
     rel_posix,
@@ -281,6 +282,49 @@ def _settings_reason(rel: str, real: Path, data: JsonDict, command: str) -> str 
     return None
 
 
+_CODE_ONLY_LINE = re.compile(r"(?im)^\s*(?:[-*]\s*)?Код правят только роли implementer:\s*да\s*$")
+
+
+def _code_only_implementer(project: Path) -> bool:
+    """Правило включено строкой `Код правят только роли implementer: да` в CONSTITUTION.md.
+    Умолчанием оно не становится: без строки (или со словом «нет») код правят все, как раньше."""
+    path = constitution_path(project)
+    if path is None:
+        return False
+    return bool(_CODE_ONLY_LINE.search(path.read_text(encoding="utf-8", errors="replace")))
+
+
+def _code_roots(project: Path) -> list[str]:
+    """Корни кода (в нижнем регистре) по тем же правилам, что `py_source_roots` в parch_ci.py:
+    `[tool.parch] source_roots`, иначе `src`, если он есть, иначе корень проекта."""
+    fallback = ["src"] if (project / "src").is_dir() else ["."]
+    try:
+        roots = cast("list[str]", _ci_module().py_source_roots(project))
+    except (OSError, ValueError, ImportError):
+        roots = fallback  # битый pyproject или нет parch_ci: умолчание, а не «разрешить всё»
+    result = [r.replace("\\", "/").removeprefix("./").strip("/").lower() or "." for r in roots]
+    if "src" not in result:
+        result.insert(0, "src")  # src кодом считается всегда, даже без папки и при source_roots
+    return result
+
+
+def _is_code_path(rel: str, project: Path) -> bool:
+    """Код для правила «только implementer»: файл .py в корне кода проекта, кроме тестовых путей
+    (папки tests, test, __tests__ на любой глубине, файлы test_*.py и *_test.py). Документы (.md,
+    в том числе описания агентов и SKILL.md), plugin.json, .yml и .json кодом не считаются."""
+    if not rel.endswith(".py"):
+        return False
+    parts = PurePosixPath(rel).parts
+    if any(d in TESTER_TEST_DIRS for d in parts[:-1]):
+        return False
+    if fnmatch.fnmatch(parts[-1], "test_*.py") or fnmatch.fnmatch(parts[-1], "*_test.py"):
+        return False
+    for root in _code_roots(project):
+        if root == "." or rel == root or rel.startswith(root + "/"):
+            return True
+    return False
+
+
 def _decide(
     rel: str, real: Path, role: str, project: Path, data: JsonDict, command: str
 ) -> Block | Ask | None:
@@ -299,6 +343,15 @@ def _decide(
             f"Тесты ({rel}) правят только роли architect и tester, а у тебя {shown}. "
             "Тест — это требование, а не деталь реализации. Опиши нужную правку в ответе: "
             "её сделает architect или tester.",
+        )
+    if role != "implementer" and _is_code_path(rel, project) and _code_only_implementer(project):
+        shown = f"«{role}»" if role else "основная сессия без роли"
+        return Block(
+            HOOK,
+            f"Код ({rel}) в этом проекте правят только роли implementer (строка «Код правят только "
+            f"роли implementer: да» в CONSTITUTION.md), а у тебя {shown}. Опиши нужную правку в "
+            "ответе и передай её агенту parch:implementer; тесты пишет tester. Описания агентов, "
+            "SKILL.md и другие .md это не код, их правят без него.",
         )
     gated = _gated_reason(rel, project)
     if gated is None and _is_adr(rel) and _sets_accepted_status(data, command):
