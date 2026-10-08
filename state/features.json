@@ -358,8 +358,8 @@
       ],
       "spec": "docs/specs/F20-end-to-end.md",
       "acceptance_tests": [],
-      "status": "planned",
-      "passes": false,
+      "status": "in_progress",
+      "passes": true,
       "incidents": 0
     },
     {
