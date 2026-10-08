@@ -21,6 +21,7 @@ import fnmatch
 import importlib
 import re
 import sys
+import tomllib
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import cast
@@ -35,6 +36,7 @@ from _common import (
     agent_role,
     command_name,
     command_tokens,
+    constitution_path,
     get_str,
     is_managed,
     rel_posix,
@@ -281,6 +283,49 @@ def _settings_reason(rel: str, real: Path, data: JsonDict, command: str) -> str 
     return None
 
 
+_CODE_ONLY_LINE = re.compile(r"(?im)^\s*(?:[-*]\s*)?Код правят только роли implementer:\s*да\s*$")
+
+
+def _code_only_implementer(project: Path) -> bool:
+    """Правило включено строкой `Код правят только роли implementer: да` в CONSTITUTION.md.
+    Умолчанием оно не становится: без строки (или со словом «нет») код правят все, как раньше."""
+    path = constitution_path(project)
+    if path is None:
+        return False
+    return bool(_CODE_ONLY_LINE.search(path.read_text(encoding="utf-8", errors="replace")))
+
+
+def _code_roots(project: Path) -> list[str]:
+    """Корни кода: `[tool.parch] source_roots` из pyproject.toml и `src`, если он есть."""
+    roots = ["src"]
+    pyproject = project / "pyproject.toml"
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+    except (OSError, ValueError):
+        data = {}  # битый pyproject не должен ронять охрану: остаётся только src
+    tool = data.get("tool")
+    parch = cast(dict[str, object], tool).get("parch") if isinstance(tool, dict) else None
+    parch_table = cast(dict[str, object], parch) if isinstance(parch, dict) else {}
+    configured = parch_table.get("source_roots")
+    if isinstance(configured, list):
+        for item in cast(list[object], configured):
+            if isinstance(item, str):
+                roots.append(item.replace("\\", "/").strip("/").lower() or ".")
+    return roots
+
+
+def _is_code_path(rel: str, project: Path) -> bool:
+    """Код для правила «только implementer»: файл .py в корне кода проекта. Документы (.md, в том
+    числе описания агентов и SKILL.md), plugin.json, .yml и .json кодом не считаются."""
+    if not rel.endswith(".py"):
+        return False
+    for root in _code_roots(project):
+        root = root.removeprefix("./")
+        if root in ("", ".") or rel == root or rel.startswith(root + "/"):
+            return True
+    return False
+
+
 def _decide(
     rel: str, real: Path, role: str, project: Path, data: JsonDict, command: str
 ) -> Block | Ask | None:
@@ -299,6 +344,15 @@ def _decide(
             f"Тесты ({rel}) правят только роли architect и tester, а у тебя {shown}. "
             "Тест — это требование, а не деталь реализации. Опиши нужную правку в ответе: "
             "её сделает architect или tester.",
+        )
+    if role != "implementer" and _is_code_path(rel, project) and _code_only_implementer(project):
+        shown = f"«{role}»" if role else "основная сессия без роли"
+        return Block(
+            HOOK,
+            f"Код ({rel}) в этом проекте правят только роли implementer (строка «Код правят только "
+            f"роли implementer: да» в CONSTITUTION.md), а у тебя {shown}. Опиши нужную правку в "
+            "ответе и передай её агенту parch:implementer; тесты пишет tester. Описания агентов, "
+            "SKILL.md и другие .md это не код, их правят без него.",
         )
     gated = _gated_reason(rel, project)
     if gated is None and _is_adr(rel) and _sets_accepted_status(data, command):

@@ -288,6 +288,119 @@ def test_the_other_roles_keep_their_rules_after_the_tester_rule(project: Path) -
     ).blocked
 
 
+# ---------- правило «код правят только роли implementer» (F25, п. 1.3) ----------
+
+CODE_ONLY_YES = "Код правят только роли implementer: да"
+CODE_ONLY_NO = "Код правят только роли implementer: нет"
+CODE_PATHS = [
+    "plugin/hooks/x.py",
+    "plugin/templates/ci/parch/x.py",
+    "plugin/skills/x/scripts/x.py",
+    "src/x.py",
+]
+NOT_CODE_PATHS = [
+    "plugin/agents/x.md",
+    "plugin/skills/x/SKILL.md",
+    "plugin/.claude-plugin/plugin.json",
+    "docs/x.md",
+]
+CODE_ONLY_MSG = "только роли implementer"
+
+
+def code_only_project(project: Path, line: str | None = CODE_ONLY_YES) -> Path:
+    """Проект с `[tool.parch] source_roots` и (если задана) строкой правила в CONSTITUTION.md."""
+    (project / "pyproject.toml").write_text(
+        '[tool.parch]\nsource_roots = ["plugin/hooks", "plugin/templates/ci/parch", '
+        '"plugin/skills", "scripts"]\n',
+        encoding="utf-8",
+    )
+    if line is not None:
+        const = project / "docs" / "CONSTITUTION.md"
+        const.write_text(
+            const.read_text(encoding="utf-8") + f"\n## Кто правит код\n\n{line}\n", encoding="utf-8"
+        )
+    return project
+
+
+@pytest.mark.parametrize("rel", CODE_PATHS)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_code_only_rule_blocks_the_main_session_on_code(rel: str, tool: str, project: Path) -> None:
+    """Плохой пример: основная сессия без роли правит код проекта со строкой «да»: блок по-русски с путём."""
+    code_only_project(project)
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, None)
+    shown = result.stdout + result.stderr
+    assert result.blocked, (rel, shown)
+    assert CODE_ONLY_MSG in shown and rel in shown, shown
+
+
+@pytest.mark.parametrize("rel", NOT_CODE_PATHS)
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_code_only_rule_does_not_touch_documents_and_manifests(
+    rel: str, tool: str, project: Path
+) -> None:
+    """Документы, SKILL.md и plugin.json кодом не считаются: правило их не блокирует. Для plugin.json охрана
+    путей может спросить владельца по другой причине (защищённый путь); важно, что это не блок
+    «только роли implementer»."""
+    code_only_project(project)
+    result = run_hook("guard_paths.py", file_call(tool, project / rel), project, None)
+    shown = result.stdout + result.stderr
+    assert result.code == 0 and not result.blocked, (rel, shown)
+    assert CODE_ONLY_MSG not in shown, (rel, shown)
+
+
+@pytest.mark.parametrize("line", [None, CODE_ONLY_NO], ids=["no-line", "line-no"])
+@pytest.mark.parametrize("rel", CODE_PATHS)
+def test_code_only_rule_is_off_without_the_yes_line(
+    rel: str, line: str | None, project: Path
+) -> None:
+    """Без строки (фикстура `project`) и со строкой «нет» код правят все, как раньше."""
+    code_only_project(project, line)
+    result = run_hook("guard_paths.py", file_call("Write", project / rel), project, None)
+    assert result.code == 0 and not result.blocked, (rel, result.stdout + result.stderr)
+    assert CODE_ONLY_MSG not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("rel", CODE_PATHS)
+def test_code_only_rule_lets_the_implementer_write_code(rel: str, project: Path) -> None:
+    code_only_project(project)
+    result = run_hook(
+        "guard_paths.py", file_call("Write", project / rel), project, "parch:implementer"
+    )
+    assert result.code == 0 and not result.blocked, (rel, result.stdout + result.stderr)
+
+
+def test_code_only_rule_still_blocks_tester_on_code_with_its_own_rule(project: Path) -> None:
+    code_only_project(project)
+    result = run_hook(
+        "guard_paths.py", file_call("Write", project / "src" / "x.py"), project, "parch:tester"
+    )
+    assert result.blocked and "Роль tester правит только тесты" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Код правят только роли implementer: нет",
+        "Правило: Код правят только роли implementer: да, но не всегда.",
+        "Заметка. Код правят только роли implementer: да",  # слово в середине строки
+        "Код правят только роли implementer: да, кроме скриптов",
+        "Код правят только роли implementer",
+    ],
+)
+def test_code_only_rule_needs_the_exact_line(text: str, project: Path) -> None:
+    """Плохой пример: строка в другом виде или слово в середине абзаца правило не включает."""
+    code_only_project(project, text)
+    result = run_hook("guard_paths.py", file_call("Write", project / "src" / "x.py"), project, None)
+    assert result.code == 0 and not result.blocked, (text, result.stdout + result.stderr)
+
+
+def test_the_constitution_template_has_the_code_only_line_set_to_no_exactly_once() -> None:
+    """Чужие проекты работают как раньше: в шаблоне правило выключено, строка одна."""
+    text = (ROOT / "plugin" / "templates" / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
+    assert text.count(CODE_ONLY_NO) == 1
+    assert "Код правят только роли implementer: да" not in text
+
+
 # ---------- согласованность ролей ----------
 
 
