@@ -507,6 +507,70 @@ def test_package_added_through_a_manifest_is_caught_in_the_generated_project(
     assert "flask" in done.stdout and "Разрешённые пакеты" in done.stdout
 
 
+def test_init_on_a_project_with_code_and_an_old_baseline_marks_it_existing(tmp_path: Path) -> None:
+    """Плохой пример (самоприменение, F25 шаг 0в): baseline уже есть, код есть, а признака
+    `existing_project` нет: правила состава проекта падали бы сразу, а не предупреждали."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    old: dict[str, Any] = {"version": 1, "tests": {"python": []}, "skips": {}, "config": {}}
+    (tmp_path / "state" / "baseline.json").write_text(json.dumps(old), encoding="utf-8")
+    result = init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["existing_project"] is True
+    assert baseline["tests"] == {"python": []}  # остальное содержимое не тронуто
+    assert any("existing_project" in note for note in result["notes"])
+
+
+def test_init_keeps_an_explicit_existing_project_false_and_writes_lf(tmp_path: Path) -> None:
+    """Явная запись владельца не переписывается, а записанный файл без CRLF (целевая ОС Windows)."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "state").mkdir()
+    path = tmp_path / "state" / "baseline.json"
+    old: dict[str, Any] = {"version": 1, "existing_project": False, "tests": {"python": []}}
+    path.write_text(json.dumps(old), encoding="utf-8")
+    result = init(tmp_path)
+    assert json.loads(path.read_text(encoding="utf-8"))["existing_project"] is False
+    assert any("existing_project: false" in note for note in result["notes"])
+    (tmp_path / "second").mkdir()
+    (tmp_path / "second" / "src").mkdir()
+    (tmp_path / "second" / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "second" / "state").mkdir()
+    fresh = tmp_path / "second" / "state" / "baseline.json"
+    fresh.write_text(json.dumps({"version": 1, "tests": {"python": []}}), encoding="utf-8")
+    init(tmp_path / "second")
+    assert b"\r\n" not in fresh.read_bytes()
+
+
+def test_init_on_a_project_without_code_leaves_an_old_baseline_alone(tmp_path: Path) -> None:
+    (tmp_path / "state").mkdir()
+    old: dict[str, Any] = {"version": 1, "tests": {"python": []}, "skips": {}, "config": {}}
+    (tmp_path / "state" / "baseline.json").write_text(json.dumps(old), encoding="utf-8")
+    init(tmp_path)
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert "existing_project" not in baseline  # кода нет: проект новый
+
+
+def test_init_does_not_add_a_smoke_test_when_tests_already_exist(tmp_path: Path) -> None:
+    """Плохой пример: у продукта 2000 тестов, а init добавлял `tests/test_smoke.py`, который
+    основная сессия после включения охраны удалить не может (tests/ ей закрыт)."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_app() -> None:\n    pass\n", "utf-8")
+    result = init(tmp_path)
+    assert not (tmp_path / "tests" / "test_smoke.py").exists()
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["tests"]["python"] == []  # известные тесты запишет владелец после прогона
+    assert any("test_smoke.py не создан" in note for note in result["notes"])
+
+
+def test_init_still_creates_the_smoke_test_for_a_project_without_tests(tmp_path: Path) -> None:
+    (tmp_path / ".venv" / "lib").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib" / "test_vendored.py").write_text("", encoding="utf-8")  # не свои
+    init(tmp_path)
+    assert (tmp_path / "tests" / "test_smoke.py").is_file()
+
+
 def test_deleting_the_smoke_test_is_caught_in_the_generated_project(tmp_path: Path) -> None:
     init(tmp_path)
     (tmp_path / "tests" / "test_smoke.py").write_text(
