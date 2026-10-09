@@ -266,10 +266,11 @@ def test_the_target_ci_templates_run_the_standard_check() -> None:
         assert "parch_ci.py standard" in text, name
 
 
-def test_the_product_repository_itself_is_not_subject_to_the_composition_rules() -> None:
-    """Продукт подключён к своим правилам: состав проверяется, найденное записано в долг.
+def test_the_product_repository_is_subject_to_the_composition_rules_with_a_recorded_debt() -> None:
+    """Продукт подключён по CONSTITUTION (F25, шаг 2): правила состава на нём работают.
 
-    (Имя исторически осталось; по смыслу: правила состава к продукту применяются.)
+    Нарушения записаны долгом (`standard-baseline.json`), поэтому код 0 и строка
+    «Нарушений состава в долге: N»; признаков «не подключён» в выводе нет.
     """
     done = subprocess.run(
         [sys.executable, str(SCRIPT), "standard", "--project", str(REPO)],

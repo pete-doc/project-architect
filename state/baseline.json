@@ -2109,7 +2109,7 @@
       "tests/test_standard_full.py::test_markdown_is_not_hidden_in_nested_docs_agents_or_build_folders",
       "tests/test_standard_full.py::test_markdown_outside_the_allowed_places_fails",
       "tests/test_standard_full.py::test_the_owner_records_the_debt_then_new_violations_fail_and_fixed_ones_shrink_it",
-      "tests/test_standard_full.py::test_the_product_repository_itself_is_not_subject_to_the_composition_rules",
+      "tests/test_standard_full.py::test_the_product_repository_is_subject_to_the_composition_rules_with_a_recorded_debt",
       "tests/test_standard_full.py::test_the_target_ci_templates_run_the_standard_check",
       "tests/test_standard_full.py::test_with_a_debt_file_a_removed_required_file_fails_even_on_an_existing_project",
       "tests/test_status.py::test_a_block_is_done_only_when_its_acceptance_tests_ran_and_passed",
