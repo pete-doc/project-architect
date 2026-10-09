@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "violations": [
+    "md:BUILD_PLAN.md",
+    "md:plugin/templates/docs/CONSTITUTION.md",
+    "md:plugin/templates/docs/GOAL.md",
+    "md:plugin/templates/docs/INCIDENT_TEMPLATE.md",
+    "md:plugin/templates/docs/INTERFACES.md",
+    "md:plugin/templates/docs/LESSONS.md",
+    "md:plugin/templates/docs/MODULES.md",
+    "md:plugin/templates/docs/QUESTIONS.md",
+    "md:plugin/templates/docs/adr/0000-template.md",
+    "md:plugin/templates/github/pull_request_template.md",
+    "md:plugin/templates/state/STATUS.md",
+    "md:tests/projects/cs_shop/docs/CONSTITUTION.md",
+    "md:tests/projects/cs_shop/docs/MODULES.md",
+    "md:tests/projects/python_shop/docs/CONSTITUTION.md",
+    "md:tests/projects/python_shop/docs/MODULES.md",
+    "md:tests/projects/ts_shop/docs/CONSTITUTION.md",
+    "md:tests/projects/ts_shop/docs/MODULES.md"
+  ]
+}

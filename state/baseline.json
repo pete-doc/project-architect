@@ -18,6 +18,7 @@
       "vulture|tests/test_ci_typescript.py|variable|pytestmark"
     ]
   },
+  "existing_project": true,
   "skipped_tests": {
     "python": [],
     "python@posix": [
@@ -1884,6 +1885,22 @@
       "tests/test_roles.py::test_the_other_roles_keep_their_rules_after_the_tester_rule",
       "tests/test_roles.py::test_the_tester_instruction_says_what_the_standard_requires",
       "tests/test_roles.py::test_the_tester_role_file_has_the_fields_claude_code_requires",
+      "tests/test_self_application.py::test_bad_code_only_line_missing_is_rejected",
+      "tests/test_self_application.py::test_bad_code_only_line_set_to_no_is_rejected",
+      "tests/test_self_application.py::test_bad_copy_of_parch_ci_in_github_is_found",
+      "tests/test_self_application.py::test_bad_extra_package_in_constitution_is_rejected",
+      "tests/test_self_application.py::test_bad_missing_package_in_constitution_is_rejected",
+      "tests/test_self_application.py::test_bad_missing_pyright_in_check_commands_is_rejected",
+      "tests/test_self_application.py::test_bad_preflight_in_check_commands_is_rejected",
+      "tests/test_self_application.py::test_bad_pytest_in_check_commands_is_rejected",
+      "tests/test_self_application.py::test_code_only_line_yes_is_accepted",
+      "tests/test_self_application.py::test_exactly_three_ruff_and_pyright_commands_are_accepted",
+      "tests/test_self_application.py::test_no_github_parch_folder_or_empty_one_is_clean",
+      "tests/test_self_application.py::test_packages_equal_to_requirements_without_versions_are_accepted",
+      "tests/test_self_application.py::test_product_allowed_packages_match_requirements_dev",
+      "tests/test_self_application.py::test_product_check_commands_are_ruff_format_pyright_only",
+      "tests/test_self_application.py::test_product_code_is_edited_only_by_implementer_roles",
+      "tests/test_self_application.py::test_product_has_no_copies_of_checks_in_github_parch",
       "tests/test_shell_writes.py::test_a_literal_temp_path_outside_the_project_passes_but_inside_it_does_not",
       "tests/test_shell_writes.py::test_lessons_move_the_heredoc_error_to_closed_and_agents_md_states_the_rule",
       "tests/test_shell_writes.py::test_powershell_writers_are_blocked_too['x' | Out-File f.txt]",
@@ -1917,6 +1934,7 @@
       "tests/test_shell_writes.py::test_writing_a_project_file_from_the_command_line_is_blocked[sed -i s/a/b/ f.py]",
       "tests/test_shell_writes.py::test_writing_a_project_file_from_the_command_line_is_blocked[tee out.txt]",
       "tests/test_skills.py::test_adr_index_lists_statuses_and_is_stable",
+      "tests/test_skills.py::test_adr_index_skips_only_the_template_and_lists_every_real_decision",
       "tests/test_skills.py::test_adr_is_created_even_without_docs_adr_folder",
       "tests/test_skills.py::test_adr_new_creates_a_numbered_file_and_updates_the_index",
       "tests/test_skills.py::test_adr_numbers_increase",

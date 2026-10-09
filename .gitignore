@@ -13,3 +13,5 @@ obj/
 TestResults/
 test-results/
 test-report.xml
+.claude/audit/
+.claude/settings.local.json
