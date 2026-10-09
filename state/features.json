@@ -438,7 +438,7 @@
       ],
       "spec": "docs/specs/F25-self-application.md",
       "acceptance_tests": [],
-      "status": "planned",
+      "status": "in_progress",
       "passes": false,
       "incidents": 0
     }

@@ -5,6 +5,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.parch]
+# Корни кода продукта для проверок modules, catalog, dead-code, duplicates (F25, самоприменение).
+source_roots = ["plugin/hooks", "plugin/templates/ci/parch", "plugin/skills", "scripts", ".circleci"]
+
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"

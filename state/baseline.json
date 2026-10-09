@@ -1,4 +1,23 @@
 {
+  "dead_code": {
+    "python": [
+      "vulture|plugin/skills/analyze-existing/scripts/analyze_report.py|variable|MIN_RISKS",
+      "vulture|plugin/templates/ci/parch/parch_ci.py|variable|module_names",
+      "vulture|tests/conftest.py|function|no_ci_bash_env",
+      "vulture|tests/conftest.py|function|pytest_collection_modifyitems",
+      "vulture|tests/test_analyze_seam_chain.py|variable|SKILL_SCRIPTS",
+      "vulture|tests/test_analyze_seam_launch.py|variable|SKILL_SCRIPTS",
+      "vulture|tests/test_analyze_seam_names.py|variable|SKILL_SCRIPTS",
+      "vulture|tests/test_ci_csharp.py|variable|pytestmark",
+      "vulture|tests/test_ci_powershell.py|function|ps_shell",
+      "vulture|tests/test_ci_powershell.py|function|psa",
+      "vulture|tests/test_ci_rules.py|variable|NOWARN_PROPS",
+      "vulture|tests/test_ci_rules.py|variable|TS_SKIP",
+      "vulture|tests/test_ci_rules.py|variable|TS_SRC",
+      "vulture|tests/test_ci_rules.py|variable|TS_TEST",
+      "vulture|tests/test_ci_typescript.py|variable|pytestmark"
+    ]
+  },
   "skipped_tests": {
     "python": [],
     "python@posix": [
