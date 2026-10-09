@@ -571,6 +571,160 @@ def test_init_still_creates_the_smoke_test_for_a_project_without_tests(tmp_path:
     assert (tmp_path / "tests" / "test_smoke.py").is_file()
 
 
+def new_package(project: Path) -> Path:
+    """Единственный пакет в src/ (имя транслитерации не фиксируется)."""
+    found = [p for p in (project / "src").iterdir() if (p / "__init__.py").is_file()]
+    assert len(found) == 1, found
+    assert [p.name for p in (project / "src").iterdir()] == [found[0].name]
+    return found[0]
+
+
+def test_init_of_a_new_project_creates_a_package_with_a_docstring(tmp_path: Path) -> None:
+    init(tmp_path)
+    package = new_package(tmp_path)
+    assert re.fullmatch(r"[a-z][a-z0-9_]*", package.name), package.name
+    text = (package / "__init__.py").read_text(encoding="utf-8")
+    assert text.lstrip().startswith(('"""', "'''")), text  # однострочное описание, а не пусто
+
+
+def test_init_writes_one_real_forbidden_contract_against_pytest(tmp_path: Path) -> None:
+    init(tmp_path)
+    package = new_package(tmp_path)
+    text = (tmp_path / ".importlinter").read_text(encoding="utf-8")
+    assert re.search(rf"^root_package\s*=\s*{package.name}\s*$", text, re.M)
+    assert re.search(r"^include_external_packages\s*=\s*True\s*$", text, re.M | re.I)
+    assert len(re.findall(r"^\[importlinter:contract:", text, re.M)) == 1
+    assert re.search(r"^type\s*=\s*forbidden\s*$", text, re.M)
+    assert re.search(r"^forbidden_modules\s*=\s*\n?\s*pytest\s*$", text, re.M)
+
+
+def test_new_project_is_green_on_architecture_right_after_init(tmp_path: Path) -> None:
+    """Плохой пример: пусто-зелёный прогон. Контракт должен быть реально проверен."""
+    init(tmp_path)
+    done = parch_check(tmp_path, "architecture")
+    assert done.returncode == 0, f"{done.stdout}{done.stderr}"
+    assert "Правила архитектуры соблюдены" in done.stdout
+
+
+def test_import_pytest_in_the_generated_package_breaks_the_architecture_contract(
+    tmp_path: Path,
+) -> None:
+    """Плохой пример для контракта init: тестовый каркас в рабочем коде."""
+    init(tmp_path)
+    (new_package(tmp_path) / "bad.py").write_text("import pytest\n\nX = pytest\n", "utf-8")
+    done = parch_check(tmp_path, "architecture")
+    assert done.returncode == 1, f"{done.stdout}{done.stderr}"
+    assert "pytest" in done.stdout
+
+
+def test_single_module_instead_of_a_package_is_red_with_a_hint(tmp_path: Path) -> None:
+    """Плохой пример: src/convert.py одиночным файлом, root_package = convert."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "convert.py").write_text("X = 1\n", encoding="utf-8")
+    init(tmp_path)
+    (tmp_path / ".importlinter").write_text(
+        "[importlinter]\nroot_package = convert\ninclude_external_packages = True\n\n"
+        "[importlinter:contract:no-pytest]\nname = no pytest\ntype = forbidden\n"
+        "source_modules =\n    convert\nforbidden_modules =\n    pytest\n",
+        encoding="utf-8",
+    )
+    done = parch_check(tmp_path, "architecture")
+    assert done.returncode == 1, f"{done.stdout}{done.stderr}"
+    assert "корневой пакет должен быть пакетом" in (done.stdout + done.stderr).lower()
+
+
+def test_init_on_a_project_with_code_creates_no_package_and_no_contract(tmp_path: Path) -> None:
+    """Плохой пример: пакет-заготовка рядом с чужим кодом и правило, которое владелец не выбирал."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("X = 1\n", encoding="utf-8")
+    result = init(tmp_path)
+    assert [p.name for p in (tmp_path / "src").iterdir()] == ["app.py"]
+    assert not (tmp_path / ".importlinter").exists()
+    modules = (tmp_path / "docs" / "MODULES.md").read_text(encoding="utf-8")
+    assert "src/app" not in modules and "| src/" not in modules
+    assert result["created"]
+
+
+def test_init_adds_the_package_row_to_modules_and_the_modules_check_is_green(
+    tmp_path: Path,
+) -> None:
+    init(tmp_path)
+    package = new_package(tmp_path)
+    modules = (tmp_path / "docs" / "MODULES.md").read_text(encoding="utf-8")
+    assert len(re.findall(rf"src/{package.name}\b", modules)) == 1
+    done = parch_check(tmp_path, "modules")
+    assert done.returncode == 0, f"{done.stdout}{done.stderr}"
+
+
+def test_init_twice_keeps_the_contract_and_does_not_duplicate_the_modules_row(
+    tmp_path: Path,
+) -> None:
+    init(tmp_path)
+    package = new_package(tmp_path)
+    config = (tmp_path / ".importlinter").read_bytes()
+    modules = (tmp_path / "docs" / "MODULES.md").read_bytes()
+    init_file = (package / "__init__.py").read_bytes()
+    second = init(tmp_path)
+    assert (tmp_path / ".importlinter").read_bytes() == config
+    assert (package / "__init__.py").read_bytes() == init_file
+    assert new_package(tmp_path) == package
+    assert (tmp_path / "docs" / "MODULES.md").read_bytes() == modules
+    assert modules.decode("utf-8").count(f"src/{package.name}") == 1
+    # Плохой пример: собственный пакет init засчитан как «код пользователя», проект новый
+    # превращается в существующий (признак existing_project, предупреждения вместо ошибок).
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert "existing_project" not in baseline
+    for note in second["notes"]:
+        assert "уже есть код" not in note and "existing_project" not in note, note
+
+
+def test_init_twice_after_the_user_added_a_module_treats_the_project_as_existing(
+    tmp_path: Path,
+) -> None:
+    """Код пользователя в пакете делает проект существующим; пакет и контракт не перезаписаны."""
+    init(tmp_path)
+    package = new_package(tmp_path)
+    logic = package / "logic.py"
+    logic.write_text("def total(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+    config = (tmp_path / ".importlinter").read_bytes()
+    init_file = (package / "__init__.py").read_bytes()
+    modules = (tmp_path / "docs" / "MODULES.md").read_bytes()
+    init(tmp_path)
+    assert (tmp_path / ".importlinter").read_bytes() == config
+    assert (package / "__init__.py").read_bytes() == init_file
+    assert "def total" in logic.read_text(encoding="utf-8")
+    assert (tmp_path / "docs" / "MODULES.md").read_bytes() == modules
+    baseline = json.loads((tmp_path / "state" / "baseline.json").read_text(encoding="utf-8"))
+    assert baseline["existing_project"] is True
+
+
+def test_python_next_to_typescript_code_still_gets_a_package_and_a_contract(
+    tmp_path: Path,
+) -> None:
+    """Плохой пример: код TypeScript в папке отменяет пакет Python, хотя Python-кода ещё нет."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.ts").write_text("export const x = 1;\n", encoding="utf-8")
+    result = init(tmp_path, languages=["python", "typescript"])
+    packages = [p for p in (tmp_path / "src").iterdir() if (p / "__init__.py").is_file()]
+    assert len(packages) == 1, list(tmp_path.joinpath("src").iterdir())
+    package = packages[0]
+    assert (tmp_path / "src" / "index.ts").is_file()
+    text = (tmp_path / ".importlinter").read_text(encoding="utf-8")
+    assert re.search(rf"^root_package\s*=\s*{package.name}\s*$", text, re.M)
+    assert re.search(r"^forbidden_modules\s*=\s*\n?\s*pytest\s*$", text, re.M)
+    modules = (tmp_path / "docs" / "MODULES.md").read_text(encoding="utf-8")
+    assert len(re.findall(rf"src/{package.name}\b", modules)) == 1
+    for note in result["notes"]:
+        assert "Пакет и .importlinter не созданы" not in note, note
+
+
+def test_init_never_overwrites_an_existing_importlinter(tmp_path: Path) -> None:
+    mine = "[importlinter]\nroot_package = mine\n# правило владельца\n"
+    (tmp_path / ".importlinter").write_text(mine, encoding="utf-8")
+    init(tmp_path)
+    assert (tmp_path / ".importlinter").read_text(encoding="utf-8") == mine
+
+
 def test_deleting_the_smoke_test_is_caught_in_the_generated_project(tmp_path: Path) -> None:
     init(tmp_path)
     (tmp_path / "tests" / "test_smoke.py").write_text(

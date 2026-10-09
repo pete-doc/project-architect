@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import keyword
 import os
 import re
 import shutil
@@ -186,6 +187,116 @@ SMOKE_TEST = '''"""Начальный тест: проверки проекта 
 def test_smoke() -> None:
     assert True
 '''
+PACKAGE_SMOKE_TEST = '''"""Начальный тест: пакет проекта импортируется. Замените его настоящими тестами."""
+
+import {package}
+
+
+def test_smoke() -> None:
+    assert {package}.__all__ == []
+'''
+
+
+CYRILLIC = {
+    **{
+        letter: latin
+        for letter, latin in zip(
+            "абвгдеёзийклмнопрстуфыэ", "abvgdeeziyklmnoprstufye", strict=True
+        )
+    },
+    "ж": "zh", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
+    "ю": "yu", "я": "ya", "ъ": "", "ь": "",
+}  # fmt: skip
+FALLBACK_PACKAGE = "app"
+RESERVED_PACKAGES = {"pytest", "src", "test", "tests"}
+PACKAGE_DESCRIPTION_LIMIT = 80
+IMPORTLINTER = """[importlinter]
+root_package = {package}
+include_external_packages = True
+
+[importlinter:contract:no-pytest-in-code]
+name = Рабочий код не импортирует pytest
+type = forbidden
+source_modules = {package}
+forbidden_modules = pytest
+allow_indirect_imports = True
+"""
+
+
+def package_name(project_name: str) -> str:
+    """Имя пакета Python из названия проекта: латиница [a-z0-9_], запасное имя `app` при конфликте."""
+    letters = "".join(CYRILLIC.get(ch, ch) for ch in project_name.lower())
+    name = re.sub(r"[^a-z0-9]+", "_", letters).strip("_")
+    name = name.lstrip("0123456789_")
+    if (
+        not name
+        or keyword.iskeyword(name)
+        or name in sys.stdlib_module_names
+        or name in RESERVED_PACKAGES
+    ):
+        return FALLBACK_PACKAGE
+    return name
+
+
+def package_docstring(project_name: str, description: str) -> str:
+    """Однострочное описание пакета: из description, иначе из названия проекта; без кавычек и `\\`."""
+    text = (
+        " ".join(description.split()) or f"Рабочий код проекта «{' '.join(project_name.split())}»."
+    )
+    text = text.replace('"', "").replace("\\", "")
+    if len(text) > PACKAGE_DESCRIPTION_LIMIT:
+        text = text[: PACKAGE_DESCRIPTION_LIMIT - 1].rstrip() + "…"
+    return text
+
+
+def register_package_module(report: Report, package: str) -> None:
+    """Строка пакета в docs/MODULES.md (если её нет) и запись в долг «модуль без блока»."""
+    rel = "docs/MODULES.md"
+    path = report.project / rel
+    module_path = f"src/{package}"
+    if not path.is_file():
+        return
+    if module_path in parch_ci.modules_table(report.project):
+        return
+    text = path.read_text(encoding="utf-8")
+    if "|" not in text:
+        report.notes.append(f"В {rel} нет таблицы: добавьте строку пакета {module_path} вручную.")
+        return
+    row = f"| {package} | {module_path} | Рабочий код проекта | Python | active | — |\n"
+    path.write_text(text.rstrip("\n") + "\n" + row, encoding="utf-8", newline="\n")
+    if rel not in report.created:
+        report.created.append(f"{rel} (добавлена строка пакета)")
+    # Блока у пакета пока нет (features.json пуст): это записанный долг, а не красная проверка.
+    debt = parch_ci.read_modules_debt(report.project) or set()
+    parch_ci.write_modules_debt(report.project, debt | {module_path})
+    report.created.append("state/modules-baseline.json (пакет без блока, пока блок не заведён)")
+
+
+def create_python_package(report: Report, name: str, description: str) -> None:
+    """Новый Python-проект: пакет `src/<имя>/__init__.py`, `.importlinter` с контрактом и строка в MODULES.md."""
+    package = package_name(name)
+    doc = package_docstring(name, description)
+    report.write(f"src/{package}/__init__.py", f'"""{doc}"""\n\n__all__: list[str] = []\n')
+    report.write(".importlinter", IMPORTLINTER.format(package=package))
+    register_package_module(report, package)
+    report.notes.append(
+        f"Создан пакет src/{package}/ и правило архитектуры .importlinter (рабочий код не "
+        "импортирует pytest). Код проекта пишите внутри этого пакета; блок пакета впишите в "
+        "docs/MODULES.md, когда заведёте первый блок в state/features.json."
+    )
+
+
+def is_init_package(project: Path, name: str) -> bool:
+    """Единственный Python-модуль проекта - нетронутый пакет `src/<имя>/`, созданный самим init."""
+    package = package_name(name)
+    if parch_ci.py_modules(project) != [f"src/{package}"]:
+        return False
+    folder = project / "src" / package
+    init = folder / "__init__.py"
+    if not init.is_file() or [p for p in folder.rglob("*.py") if p != init]:
+        return False
+    text = init.read_text(encoding="utf-8")
+    return text.startswith('"""') and text.endswith('"""\n\n__all__: list[str] = []\n')
 
 
 def has_python_tests(project: Path) -> bool:
@@ -635,11 +746,15 @@ def init_project(
         raise ValueError(f"languages: выберите из {', '.join(LANGUAGES)}; получено {languages}")
     if not name.strip():
         raise ValueError("нужно название проекта (name)")
-    existing_code = any(
+    # До того, как init что-либо создаст: код уже есть значит проект существующий. Пакет, созданный
+    # самим init (повторный запуск), кодом не считается.
+    init_package = is_init_package(project, name)
+    py_existing = "python" in languages and not init_package and parch_ci.py_has_sources(project)
+    existing_code = py_existing or any(
         parch_ci.COLLECTORS[lang].has_sources(project)
         for lang in languages
-        if lang in parch_ci.COLLECTORS
-    )  # до того, как init что-либо создаст: код уже есть значит проект существующий
+        if lang in parch_ci.COLLECTORS and lang != "python"
+    )
     project.mkdir(parents=True, exist_ok=True)
     python_tests = "python" in languages and has_python_tests(project)
     report = Report(project)
@@ -662,7 +777,18 @@ def init_project(
                 "владелец командой baseline --update после первого полного прогона."
             )
         else:
-            report.write("tests/test_smoke.py", SMOKE_TEST)
+            # В новом проекте тест импортирует пакет: без этого coverage не видит данных пакета.
+            smoke = (
+                SMOKE_TEST if py_existing else PACKAGE_SMOKE_TEST.format(package=package_name(name))
+            )
+            report.write("tests/test_smoke.py", smoke)
+        if py_existing:
+            report.notes.append(
+                "Пакет и .importlinter не созданы: в проекте уже есть код. Правило архитектуры "
+                "существующего кода - решение владельца через /parch:analyze-existing."
+            )
+        else:
+            create_python_package(report, name, description)
     if "typescript" in languages:
         create_typescript_files(project, report, name)
     if "csharp" in languages:

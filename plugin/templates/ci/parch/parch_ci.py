@@ -1026,6 +1026,18 @@ def py_architecture(project: Path) -> Result:
             *shown(uncovered),
         )
         return result
+    for root in config.roots:
+        for source in py_source_roots(project):
+            if (project / source / f"{root}.py").is_file() and not (
+                project / source / root
+            ).is_dir():
+                result.fail(
+                    f"Корневой пакет должен быть пакетом: папка с __init__.py, а не одиночный файл "
+                    f"{root}.py.",
+                    f"Создайте {source}/{root}/__init__.py, перенесите код файла {root}.py в этот "
+                    "пакет и удалите одиночный файл.",
+                )
+                return result
     named = [m for contract in config.contracts for m in contract_modules(contract)]
     missing = unresolved_modules(project, named)
     if missing:
