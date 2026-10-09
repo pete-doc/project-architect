@@ -334,8 +334,28 @@ def test_product_adr_index_is_up_to_date(tmp_path: Path) -> None:
     fresh = (tmp_path / "docs" / "adr" / "README.md").read_text(encoding="utf-8")
     committed = (REPO / "docs" / "adr" / "README.md").read_text(encoding="utf-8")
     assert committed == fresh, "запусти /parch:adr index и закоммить docs/adr/README.md"
+    # Шаблон ADR (0000-template.md) в индекс не входит, все настоящие решения обязаны входить.
     for adr_file in sorted((REPO / "docs" / "adr").glob("0*.md")):
+        if adr_file.name == "0000-template.md":
+            continue
         assert adr_file.name in committed
+    assert "0000-template.md" not in committed
+
+
+def test_adr_index_skips_only_the_template_and_lists_every_real_decision(tmp_path: Path) -> None:
+    """Исключён именно шаблон: настоящий ADR без записи в индексе обязан попасть в индекс."""
+    adr_dir = tmp_path / "docs" / "adr"
+    adr_dir.mkdir(parents=True)
+    shutil.copy(REPO / "docs" / "adr" / "0000-template.md", adr_dir / "0000-template.md")
+    template = (adr_dir / "0000-template.md").read_text(encoding="utf-8")
+    (adr_dir / "0042-real-decision.md").write_text(
+        template.replace("0000", "0042"), encoding="utf-8"
+    )
+    code, _, error = run_script(ADR, {"command": "index", "project_dir": str(tmp_path)})
+    assert code == 0, error
+    index = (adr_dir / "README.md").read_text(encoding="utf-8")
+    assert "0042-real-decision.md" in index
+    assert "0000-template.md" not in index
 
 
 # ---------- /parch:doctor ----------

@@ -7,6 +7,7 @@ CLAUDE.md, не ссылающийся на AGENTS.md, `.md` вне разреш
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -265,11 +266,19 @@ def test_the_target_ci_templates_run_the_standard_check() -> None:
         assert "parch_ci.py standard" in text, name
 
 
-def test_the_product_repository_itself_is_not_subject_to_the_composition_rules() -> None:
+def test_the_product_repository_is_subject_to_the_composition_rules_with_a_recorded_debt() -> None:
+    """Продукт подключён по CONSTITUTION (F25, шаг 2): правила состава на нём работают.
+
+    Нарушения записаны долгом (`standard-baseline.json`), поэтому код 0 и строка
+    «Нарушений состава в долге: N»; признаков «не подключён» в выводе нет.
+    """
     done = subprocess.run(
         [sys.executable, str(SCRIPT), "standard", "--project", str(REPO)],
         capture_output=True,
         text=True,
         encoding="utf-8",
     )
-    assert done.returncode == 0 and "не применяются" in done.stdout
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert re.search(r"Нарушений состава в долге: \d+", done.stdout), done.stdout
+    for stale in ("не применяются", "не подключ", "не проверяются"):
+        assert stale not in done.stdout, done.stdout
