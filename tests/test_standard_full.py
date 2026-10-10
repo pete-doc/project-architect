@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "plugin" / "templates" / "ci" / "parch" / "parch_ci.py"
@@ -282,3 +283,227 @@ def test_the_product_repository_is_subject_to_the_composition_rules_with_a_recor
     assert re.search(r"Нарушений состава в долге: \d+", done.stdout), done.stdout
     for stale in ("не применяются", "не подключ", "не проверяются"):
         assert stale not in done.stdout, done.stdout
+
+
+# ---------- F14, PR 3: карточка соответствия P1–P13 и версия стандарта ----------
+
+STATUS_SCRIPT = SCRIPT.parent / "parch_status.py"
+ANALYZE = REPO / "plugin" / "skills" / "analyze-existing" / "scripts" / "analyze.py"
+CARD_ROW = re.compile(r"^\| (P\d+) \| [^|]*\| \S+ ([^|]+?) \| ([^|]+?) \|", re.MULTILINE)
+APPROVED_GOAL = (
+    "# GOAL — цель продукта «Тест»\n\n> **Статус: утверждена владельцем, 2026-10-01.**\n\n"
+    "- **G1.** Заказ считается верно\n"
+)
+
+
+def status_board(project: Path, previous: Path | None = None) -> str:
+    args = [sys.executable, str(STATUS_SCRIPT), "--project", str(project), "--date", "2026-10-10"]
+    if previous is not None:
+        args += ["--previous", str(previous)]
+    done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def grades(board: str) -> dict[str, str]:
+    return {point: grade for point, grade, _ in CARD_ROW.findall(board)}
+
+
+def trends(board: str) -> dict[str, str]:
+    return {point: trend for point, _, trend in CARD_ROW.findall(board)}
+
+
+def with_version(root: Path, version: str) -> Path:
+    write(
+        root / "docs" / "CONSTITUTION.md",
+        CONSTITUTION + f"\n## Версия стандарта\n\nProjectArchitect {version} (docs/STANDARD.md).\n",
+    )
+    return root
+
+
+def standard_section(heading: str) -> str:
+    text = (REPO / "docs" / "STANDARD.md").read_text(encoding="utf-8")
+    return text.split(f"\n## {heading}", 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_card_has_exactly_the_points_of_section_9_of_the_standard(tmp_path: Path) -> None:
+    import parch_standard
+
+    points = re.findall(r"^\| (P\d+) \|", standard_section("9."), re.MULTILINE)
+    assert [point for point, _ in parch_standard.CARD] == points
+    assert list(grades(status_board(managed(tmp_path)))) == points
+
+
+def test_section_11_and_the_f14_spec_name_the_same_number_of_points_as_section_9() -> None:
+    """Плохой пример: «P1–P12» в разделе 11 при 13 пунктах раздела 9 (так было до F14, PR 3)."""
+    points = re.findall(r"^\| (P\d+) \|", standard_section("9."), re.MULTILINE)
+    expected = f"P1–{points[-1]}"
+    assert expected in standard_section("11.")
+    spec = (REPO / "docs" / "specs" / "F14-standard-full.md").read_text(encoding="utf-8")
+    assert expected in spec
+    for text in (standard_section("11."), spec):
+        assert re.findall(r"P1–P\d+", text) == [expected] * len(re.findall(r"P1–P\d+", text))
+
+
+def test_the_board_shows_the_card_instead_of_the_promise(tmp_path: Path) -> None:
+    board = status_board(managed(tmp_path))
+    assert "## Соответствие стандарту" in board
+    assert "появится вместе с полной проверкой" not in board
+    assert re.search(r"По стандарту \*\*\d+\*\* из 13 пунктов", board), board
+
+
+def test_a_missing_or_unapproved_goal_lowers_p1(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    assert grades(status_board(root))["P1"] == "частично"  # файл есть, критериев и утверждения нет
+    (root / "docs" / "GOAL.md").unlink()
+    assert grades(status_board(root))["P1"] == "отсутствует"
+    write(root / "docs" / "GOAL.md", APPROVED_GOAL)
+    assert grades(status_board(root))["P1"] == "по стандарту"
+
+
+def test_a_second_instruction_file_lowers_p3(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    assert grades(status_board(root))["P3"] == "отсутствует"  # инструкций для ИИ нет вовсе
+    write(root / "AGENTS.md", "# правила\n")
+    assert grades(status_board(root))["P3"] == "по стандарту"
+    write(root / ".cursorrules")
+    assert grades(status_board(root))["P3"] == "частично"
+
+
+def test_markdown_outside_the_allowed_places_lowers_p5(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    assert grades(status_board(root))["P5"] == "по стандарту"
+    write(root / "notes" / "plan.md")
+    board = status_board(root)
+    assert grades(board)["P5"] == "частично" and ".md вне разрешённых мест: 1" in board
+
+
+def test_ci_cost_violations_lower_p13_and_no_ci_at_all_is_absent(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    assert grades(status_board(root))["P13"] == "по стандарту"
+    write(
+        root / ".github" / "workflows" / "ci.yml", WORKFLOW.replace("    timeout-minutes: 20\n", "")
+    )
+    assert grades(status_board(root))["P13"] == "частично"
+    (root / ".github" / "workflows" / "ci.yml").unlink()
+    assert grades(status_board(root))["P13"] == "отсутствует"
+
+
+def test_a_blocked_block_without_an_incident_report_lowers_p10(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    assert grades(status_board(root))["P10"] == "по стандарту"
+    block = {"id": "F1", "title": "Блок", "goal": ["G1"], "depends_on": [], "status": "blocked"}
+    write(root / "state" / "features.json", json.dumps({"version": 1, "features": [block]}))
+    assert grades(status_board(root))["P10"] == "частично"
+
+
+def test_what_the_repository_cannot_show_stays_a_question_to_the_owner(tmp_path: Path) -> None:
+    card = grades(status_board(managed(tmp_path)))
+    assert card["P8"] == card["P12"] == "вопрос владельцу"
+
+
+def test_the_card_shows_the_trend_against_the_previous_board(tmp_path: Path) -> None:
+    root = managed(tmp_path / "proj")
+    first = status_board(root)
+    assert set(trends(first).values()) == {"впервые"}
+    previous = tmp_path / "previous.md"
+    previous.write_text(first, encoding="utf-8")
+    write(root / "docs" / "GOAL.md", APPROVED_GOAL)
+    write(root / "notes" / "plan.md")
+    second = status_board(root, previous)
+    moves = trends(second)
+    assert moves["P1"] == "↑ лучше, было «частично»"
+    assert moves["P5"] == "↓ хуже, было «по стандарту»"
+    assert moves["P13"] == "без изменений"
+    assert re.search(r"По стандарту \*\*\d+\*\* из 13 пунктов[^\n]*", second)
+
+
+def test_the_summary_says_how_many_points_were_at_the_standard_before(tmp_path: Path) -> None:
+    root = managed(tmp_path / "proj")
+    previous = tmp_path / "previous.md"
+    previous.write_text(status_board(root), encoding="utf-8")
+    before = sum(grade == "по стандарту" for grade in grades(previous.read_text("utf-8")).values())
+    write(root / "docs" / "GOAL.md", APPROVED_GOAL)
+    assert f"из 13 пунктов (было {before})" in status_board(root, previous)
+
+
+def test_without_parch_standard_the_board_says_so_instead_of_crashing(tmp_path: Path) -> None:
+    import shutil
+
+    scripts = tmp_path / "ci"
+    scripts.mkdir()
+    for name in ("parch_status.py", "parch_ci.py", "parch_catalog.py", "parch_libraries.py"):
+        shutil.copy(SCRIPT.parent / name, scripts / name)
+    root = managed(tmp_path / "proj")
+    done = subprocess.run(
+        [sys.executable, str(scripts / "parch_status.py"), "--project", str(root)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "Карточка не построена" in done.stdout and "parch_standard.py" in done.stdout
+
+
+def test_an_older_standard_version_shows_what_changed_and_only_warns(tmp_path: Path) -> None:
+    root = with_version(managed(tmp_path), "1.2")
+    done = standard(root)
+    assert done.returncode == 0, done.stdout
+    for text in ("записан на стандарт 1.2, действует 1.3", "1.3: стоимость CI", "P13"):
+        assert text in done.stdout, text
+    assert "/parch:analyze-existing" in done.stdout
+    board = status_board(root)
+    assert "Стандарт проекта: ProjectArchitect 1.2, действующая версия 1.3." in board
+    assert "- 1.3: стоимость CI" in board
+
+
+def test_the_current_version_is_quiet_and_a_missing_or_newer_one_is_named(tmp_path: Path) -> None:
+    import parch_standard
+
+    root = with_version(managed(tmp_path), parch_standard.CURRENT_VERSION)
+    assert "записан на стандарт" not in standard(root).stdout
+    write(root / "docs" / "CONSTITUTION.md", CONSTITUTION)
+    assert "нет раздела «Версия стандарта»" in standard(root).stdout
+    with_version(root, "9.9")
+    assert "обновите плагин" in standard(root).stdout
+
+
+def test_the_version_history_ends_with_the_current_version_and_matches_the_standard() -> None:
+    import parch_ci
+    import parch_standard
+
+    assert parch_standard.CURRENT_VERSION == parch_ci.STANDARD_VERSION
+    text = (REPO / "docs" / "STANDARD.md").read_text(encoding="utf-8")
+    points = {point for point, _ in parch_standard.CARD}
+    for version, what, touched in parch_standard.STANDARD_CHANGES:
+        assert f"Что изменилось в {version}" in text, version
+        assert what and set(touched) <= points, version
+
+
+def test_analyze_existing_shows_the_changes_since_the_project_version(tmp_path: Path) -> None:
+    def inventory(project: Path) -> dict[str, Any]:
+        done = subprocess.run(
+            [sys.executable, str(ANALYZE)],
+            input=json.dumps({"command": "inventory", "project_dir": str(project)}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)["standard_version"]
+
+    old = with_version(managed(tmp_path / "old"), "1.2")
+    found = inventory(old)
+    assert found["project"] == "1.2" and found["current"] == "1.3"
+    assert [c["version"] for c in found["changes"]] == ["1.3"]
+    assert "P13" in found["changes"][0]["points"] and found["notes"]
+    plain = tmp_path / "plain"
+    write(plain / "src" / "app.py", "x = 1\n")
+    assert inventory(plain) == {"project": None, "current": "1.3", "changes": [], "notes": []}
+
+
+def test_the_product_board_carries_the_full_card() -> None:
+    card = grades(status_board(REPO))
+    assert len(card) == 13 and card["P1"] == "по стандарту", card

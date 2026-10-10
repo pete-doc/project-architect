@@ -35,6 +35,7 @@
 | `plugin/skills/analyze-existing/scripts/analyze.py` | `report_dir_state` | Папка отчёта: новая или созданная этим анализом (с маркером). Чужую папку не трогаем. |
 | `plugin/skills/analyze-existing/scripts/analyze.py` | `snapshot` | Состояние дерева по git: изменённые и новые файлы с отпечатками (None, если это не git-репозиторий). |
 | `plugin/skills/analyze-existing/scripts/analyze.py` | `snapshot_file` | Где inventory сохраняет состояние «до»: вне проекта, чтобы в проекте ничего не появлялось. |
+| `plugin/skills/analyze-existing/scripts/analyze.py` | `standard_version` | Версия стандарта проекта против действующей: что изменилось и что сказать владельцу. |
 | `plugin/skills/analyze-existing/scripts/analyze.py` | `write_artifacts` | Пишет в папку отчёта: QUESTIONS.md, PLAN.md, черновики GOAL и решений, facts.json. |
 | `plugin/skills/analyze-existing/scripts/analyze_deadcode.py` | `candidates` | Публичные имена, которые в проекте встречаются один раз (только в объявлении). |
 | `plugin/skills/analyze-existing/scripts/analyze_deadcode.py` | `file_question` | Простой вопрос про файл: только то, что знает владелец (кто и как запускает), а не то, что видно в коде. |
@@ -130,7 +131,10 @@
 | `plugin/templates/ci/parch/parch_ci.py` | `check_module_blocks` | Связь «модуль → блок» (F18): блок существует; новый модуль без блока падает, старый нет. |
 | `plugin/templates/ci/parch/parch_ci.py` | `check_skips` | Пропуски считаются по фактическому результату запуска, текстовый поиск идёт дополнительно. |
 | `plugin/templates/ci/parch/parch_ci.py` | `check_standard` | Соответствие стандарту: стоимость CI, бюджет текста, отчёты, состав проекта (F14). |
+| `plugin/templates/ci/parch/parch_ci.py` | `ci_configs` | Workflow GitHub и конфиги CircleCI проекта. |
+| `plugin/templates/ci/parch/parch_ci.py` | `ci_cost_problems` | Нарушения стоимости CI (STANDARD.md 7.2) во всех workflow GitHub и конфигах CircleCI. |
 | `plugin/templates/ci/parch/parch_ci.py` | `circleci_problems` | Правила стоимости 7.2 для конфига CircleCI. |
+| `plugin/templates/ci/parch/parch_ci.py` | `compliance_card` | Карточка P1–P13 для табло (STANDARD.md, 9 и 11): оценка по файлам и правилам standard. |
 | `plugin/templates/ci/parch/parch_ci.py` | `container_settings` | Отпечатки разделов с настройками проверок в pyproject.toml, setup.cfg, package.json, csproj. |
 | `plugin/templates/ci/parch/parch_ci.py` | `contract_modules` | Все модули, названные в контракте (слои дополняются именем контейнера). |
 | `plugin/templates/ci/parch/parch_ci.py` | `cs_dead_code` | Находки анализаторов мёртвого кода (IDE0051/0052/0060/0005, CS0169/0414 и др.). |
@@ -195,12 +199,18 @@
 | `plugin/templates/ci/parch/parch_standard.py` | `commits_protected_problem` | Если ветка меняет защищённые файлы, в коммитах есть раздел с их названием и причиной (владелец утверждает такие PR). |
 | `plugin/templates/ci/parch/parch_standard.py` | `cyclic_groups` | Все циклы: группы блоков, зависящих друг от друга по кругу (компоненты связности Тарьяна). |
 | `plugin/templates/ci/parch/parch_standard.py` | `features_violations` | Связность реестра блоков (раздел 3): цель, зависимости, цикл, «готово» без тестов приёмки. |
+| `plugin/templates/ci/parch/parch_standard.py` | `first_text` | Текст первого существующего файла из списка; пустая строка, если нет ни одного. |
+| `plugin/templates/ci/parch/parch_standard.py` | `grade_of` | Оценка пункта по признакам: все есть — по стандарту, часть — частично, ни одного — отсутствует. |
 | `plugin/templates/ci/parch/parch_standard.py` | `is_managed` | Подключённый проект: есть CONSTITUTION.md (как в hooks) или установлен `.github/parch/parch_ci.py`. |
 | `plugin/templates/ci/parch/parch_standard.py` | `is_protected` | Файл, который в проекте утверждает владелец: CI, правила, настройки Claude, state/, цель и инструкции. |
 | `plugin/templates/ci/parch/parch_standard.py` | `mentioned` | `name` стоит в тексте отдельным путём: `AGENTS.md` не засчитывается в `docs/AGENTS.md` и `NOT_AGENTS.md`. |
 | `plugin/templates/ci/parch/parch_standard.py` | `named_in` | Файл назван сам или его защищённой папкой (`.github/parch/`, `state/`); `docs/` и `src/` не защищены, не в счёт. |
+| `plugin/templates/ci/parch/parch_standard.py` | `project_standard_version` | Версия из раздела «Версия стандарта» в CONSTITUTION.md (строка «ProjectArchitect 1.3»); None, если её нет. |
 | `plugin/templates/ci/parch/parch_standard.py` | `protected_section_text` | Текст раздела «Защищённые файлы…» в сообщении коммита (`## Защищённые файлы…` или строка «Защищённые файлы…:»). |
+| `plugin/templates/ci/parch/parch_standard.py` | `standard_changes` | Изменения стандарта после версии `since`: версия, что изменилось, какие пункты карточки задеты. |
 | `plugin/templates/ci/parch/parch_standard.py` | `strings` | Непустые элементы списка как строки (не список: пусто). |
+| `plugin/templates/ci/parch/parch_standard.py` | `version_key` | Версия «1.3» как (1, 3): так версии сравниваются по числам, а не по тексту. |
+| `plugin/templates/ci/parch/parch_standard.py` | `version_notes` | Что владельцу знать о версии стандарта проекта; пусто, если записана действующая версия. |
 | `plugin/templates/ci/parch/parch_standard.py` | `write_debt` | Файл остаётся и при пустом долге: иначе существующий проект вернулся бы к предупреждению. |
 | `plugin/templates/ci/parch/parch_state.py` | `annotate` | Пометка вверху табло, сразу после заголовка. |
 | `plugin/templates/ci/parch/parch_state.py` | `failed_tests` | Число упавших тестов в отчёте любого формата (JUnit, JSON, trx). |
@@ -212,14 +222,17 @@
 | `plugin/templates/ci/parch/parch_status.py` | `acceptance_state` | absent: файла приёмки нет; pending: критерии не отмечены или нет итога; accepted: принято. |
 | `plugin/templates/ci/parch/parch_status.py` | `block_passes` | Блок прошёл, если тесты приёмки прошли, а если есть файл приёмки, то и владелец принял. |
 | `plugin/templates/ci/parch/parch_status.py` | `ci_section` | Раздел «Расход CI»: минуты за неделю и на один PR по данным о прогонах Actions. |
+| `plugin/templates/ci/parch/parch_status.py` | `compliance_section` | Карточка соответствия P1–P13 (STANDARD.md, 9 и 11): оценка, динамика и версия стандарта. |
 | `plugin/templates/ci/parch/parch_status.py` | `matches` | Относится ли тест `key` из отчёта к файлу или классу приёмки `entry`. |
 | `plugin/templates/ci/parch/parch_status.py` | `normalize_pr` | PR из `gh pr list --json number,title,isDraft,labels,statusCheckRollup` или уже готовый. |
 | `plugin/templates/ci/parch/parch_status.py` | `parch_ci_module` | Общие правила разбора (бюджет, разделы отчётов) живут в parch_ci.py рядом с этим файлом. |
 | `plugin/templates/ci/parch/parch_status.py` | `plural` | 1 инцидент, 2-4 инцидента, 5 и 11-14 инцидентов. |
+| `plugin/templates/ci/parch/parch_status.py` | `previous_grades` | Оценки карточки на прежнем табло (пункт -> оценка): из них считается динамика. |
 | `plugin/templates/ci/parch/parch_status.py` | `report_warning` | Предупреждение, если отчёт тестов снят не с содержимого текущего коммита ("" = всё в порядке). |
 | `plugin/templates/ci/parch/parch_status.py` | `run_minutes` | Минуты квоты одного прогона: каждое задание округляется вверх, Windows x2, macOS x10. |
 | `plugin/templates/ci/parch/parch_status.py` | `stuck_card` | Карточка решения для застрявшего блока (STANDARD.md, 6.6): три варианта ответа одним словом. |
 | `plugin/templates/ci/parch/parch_status.py` | `traceability_lines` | Раздел «Прослеживаемость»: модули без блока (кандидаты на удаление) и блоки без модулей (F18). |
+| `plugin/templates/ci/parch/parch_status.py` | `trend` | Динамика пункта карточки для владельца: лучше, хуже, без изменений или впервые. |
 | `scripts/preflight.py` | `changed_files` | Файлы, изменённые относительно origin/main, включая неотслеживаемые (None: git не ответил). |
 | `scripts/preflight.py` | `code_changed` | True, если PR меняет что-то кроме текста; при любой неясности считается, что меняет. |
 | `scripts/preflight.py` | `plan` | Шаги проверки: дешёвые первыми, полный прогон последним. |

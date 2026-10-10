@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Пункты P1–P13 и история версий стандарта общие с проверкой standard и табло (F14, PR 3).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "templates" / "ci" / "parch"))
 
 import analyze_deadcode as deadcode
 import analyze_equivalents as eqmod
@@ -42,6 +44,7 @@ import analyze_map as mapmod
 import analyze_plan as planmod
 import analyze_report as report
 import analyze_tools as tools
+import parch_standard
 
 SKIP_DIRS = {
     ".git", "node_modules", "venv", ".venv", "bin", "obj", "dist", "build", "__pycache__",
@@ -67,27 +70,15 @@ INSTRUCTION_DIRS = (".cursor/rules",)
 OK_MARKDOWN = {"README.md", "CHANGELOG.md", "LICENSE.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"}
 AGENTS_MAX_LINES = 150
 GOAL_CRITERION = re.compile(r"^- \*\*G\d+\.\*\*", re.MULTILINE)
-CARD = (
-    ("P1", "Цель продукта записана и имеет проверяемые критерии"),
-    ("P2", "Прослеживаемость цель, блоки, тесты, модули"),
-    ("P3", "Инструкции для ИИ: одно место, короткие, без противоречий"),
-    ("P4", "Инструкции Claude Project версионируются"),
-    ("P5", "Расползание планов и заметок"),
-    ("P6", "Решения записаны"),
-    ("P7", "Защита от ложного «готово»"),
-    ("P8", "Источник истины один"),
-    ("P9", "Протокол перед решением"),
-    ("P10", "Обработка сбоев"),
-    ("P11", "Повторение ошибок"),
-    ("P12", "Взаимодействие человек, Project, исполнитель"),
-    ("P13", "Стоимость CI"),
-)
+CARD = parch_standard.CARD
 QUESTIONS = {
     "P4": "Где хранится канонический текст инструкций Claude Project и совпадает ли он с тем, что показан в настройках Project?",
     "P8": "Где живёт состояние проекта: репозиторий, внешние трекеры, чаты, файлы на диске? Есть ли расхождения?",
     "P12": "Кто что решает и через что передаёт: есть ли решения, которые существуют только в чатах?",
 }  # fmt: skip
-ABSENT, PARTIAL, OK, ASK = "отсутствует", "частично", "по стандарту", "вопрос владельцу"
+ABSENT, PARTIAL, OK, ASK = (
+    parch_standard.ABSENT, parch_standard.PARTIAL, parch_standard.OK, parch_standard.ASK,
+)  # fmt: skip
 
 
 def git(project: Path, *args: str) -> str | None:
@@ -319,6 +310,21 @@ def card(facts: dict[str, Any], project: Path) -> list[dict[str, str]]:
     return [{"id": i, "title": t, "status": status[i][0], "why": status[i][1]} for i, t in CARD]
 
 
+def standard_version(project: Path) -> dict[str, Any]:
+    """Версия стандарта проекта против действующей: что изменилось и что сказать владельцу.
+
+    Неподключённый проект (нет CONSTITUTION.md) приводится ко всему стандарту, поэтому изменений нет.
+    """
+    own = parch_standard.project_standard_version(project)
+    connected = parch_standard.exists_any(project, parch_standard.CONSTITUTION_CANDIDATES)
+    return {
+        "project": own,
+        "current": parch_standard.CURRENT_VERSION,
+        "changes": parch_standard.standard_changes(own) if own else [],
+        "notes": parch_standard.version_notes(project) if connected else [],
+    }
+
+
 def markdown_count(path: Path) -> int:
     if not path.is_dir():
         return 0
@@ -412,6 +418,7 @@ def inventory(
         },
     }
     facts["p_card"] = card(facts, project)
+    facts["standard_version"] = standard_version(project)
     facts["questions"] = [{"id": k, "question": v} for k, v in QUESTIONS.items()]
     facts["tools"] = tools.detect(project, rel, languages)
     facts["hotspots"] = history.hotspots(project, rel)
