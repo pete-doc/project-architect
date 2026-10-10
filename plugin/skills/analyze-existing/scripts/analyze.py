@@ -314,13 +314,14 @@ def standard_version(project: Path) -> dict[str, Any]:
     """Версия стандарта проекта против действующей: что изменилось и что сказать владельцу.
 
     Неподключённый проект (нет CONSTITUTION.md) приводится ко всему стандарту, поэтому изменений нет.
+    Подключённый без строки версии получает всю историю изменений: какая версия была, неизвестно.
     """
     own = parch_standard.project_standard_version(project)
     connected = parch_standard.exists_any(project, parch_standard.CONSTITUTION_CANDIDATES)
     return {
         "project": own,
         "current": parch_standard.CURRENT_VERSION,
-        "changes": parch_standard.standard_changes(own) if own else [],
+        "changes": parch_standard.standard_changes(own or "0") if connected else [],
         "notes": parch_standard.version_notes(project) if connected else [],
     }
 

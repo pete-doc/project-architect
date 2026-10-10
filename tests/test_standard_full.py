@@ -389,6 +389,36 @@ def test_ci_cost_violations_lower_p13_and_no_ci_at_all_is_absent(tmp_path: Path)
     assert grades(status_board(root))["P13"] == "отсутствует"
 
 
+def test_the_card_reads_the_circleci_config_that_init_builds(tmp_path: Path) -> None:
+    from test_status import assembled_config
+
+    root = managed(tmp_path)
+    (root / ".github" / "workflows" / "ci.yml").unlink()
+    config = assembled_config(["python"])
+    write(root / ".circleci" / "config.yml", config)
+    card = grades(status_board(root))
+    assert card["P13"] == "по стандарту" and card["P7"] != "отсутствует"
+    assert "проверка standard в CI: да" in status_board(root)
+    write(root / ".circleci" / "config.yml", config.replace("parch_ci.py standard", "true"))
+    assert "проверка standard в CI: нет" in status_board(root)
+    write(root / ".circleci" / "config.yml", config + "\n# x\n  nightly:\n    schedule:\n")
+    assert grades(status_board(root))["P13"] == "частично"
+
+
+def test_a_missing_target_os_lowers_p13(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    write(root / "docs" / "CONSTITUTION.md", "# CONSTITUTION\n\nБюджет инцидентов на блок: 2\n")
+    board = status_board(root)
+    assert grades(board)["P13"] == "частично" and "целевая ОС в CONSTITUTION.md: нет" in board
+
+
+def test_a_long_claude_md_without_agents_md_lowers_p3(tmp_path: Path) -> None:
+    root = managed(tmp_path)
+    write(root / "CLAUDE.md", "# правила\n" + "строка\n" * 200)
+    board = status_board(root)
+    assert grades(board)["P3"] == "частично" and "строк в CLAUDE.md: 201" in board
+
+
 def test_a_blocked_block_without_an_incident_report_lowers_p10(tmp_path: Path) -> None:
     root = managed(tmp_path)
     assert grades(status_board(root))["P10"] == "по стандарту"
@@ -415,7 +445,6 @@ def test_the_card_shows_the_trend_against_the_previous_board(tmp_path: Path) -> 
     assert moves["P1"] == "↑ лучше, было «частично»"
     assert moves["P5"] == "↓ хуже, было «по стандарту»"
     assert moves["P13"] == "без изменений"
-    assert re.search(r"По стандарту \*\*\d+\*\* из 13 пунктов[^\n]*", second)
 
 
 def test_the_summary_says_how_many_points_were_at_the_standard_before(tmp_path: Path) -> None:
@@ -499,6 +528,10 @@ def test_analyze_existing_shows_the_changes_since_the_project_version(tmp_path: 
     assert found["project"] == "1.2" and found["current"] == "1.3"
     assert [c["version"] for c in found["changes"]] == ["1.3"]
     assert "P13" in found["changes"][0]["points"] and found["notes"]
+    unknown = managed(tmp_path / "unknown")  # подключён, строки версии нет: вся история
+    found = inventory(unknown)
+    assert found["project"] is None and found["notes"]
+    assert [c["version"] for c in found["changes"]] == ["1.2", "1.3"]
     plain = tmp_path / "plain"
     write(plain / "src" / "app.py", "x = 1\n")
     assert inventory(plain) == {"project": None, "current": "1.3", "changes": [], "notes": []}

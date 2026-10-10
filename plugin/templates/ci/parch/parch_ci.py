@@ -3816,14 +3816,16 @@ def compliance_card(project: Path) -> list[dict[str, str]] | None:
         f"реестр блоков: {yes[plan[0]]}, карта модулей: {yes[plan[1]]}, "
         f"нарушений связности: {len(links)}",
     )
-    agents = std.first_text(project, ("AGENTS.md",))
-    size = len(agents.splitlines())
+    # Бюджет строк для главного файла инструкций: AGENTS.md, а если его нет, CLAUDE.md.
+    main_rules = next((n for n in ("AGENTS.md", "CLAUDE.md") if (project / n).is_file()), None)
+    size = len(std.first_text(project, (main_rules,)).splitlines()) if main_rules else 0
     rivals = std.instruction_violations(project)
-    has_rules = bool(agents) or (project / "CLAUDE.md").is_file()
     grade["P3"] = (
-        std.grade_of([not rivals, size <= AGENTS_MAX_LINES]) if has_rules else std.ABSENT,
-        f"строк в AGENTS.md: {size} (бюджет {AGENTS_MAX_LINES}), лишних файлов инструкций: "
-        f"{len(rivals)}",
+        std.grade_of([not rivals, size <= AGENTS_MAX_LINES]) if main_rules else std.ABSENT,
+        f"строк в {main_rules}: {size} (бюджет {AGENTS_MAX_LINES}), лишних файлов инструкций: "
+        f"{len(rivals)}"
+        if main_rules
+        else "нет ни AGENTS.md, ни CLAUDE.md",
     )
     canon = (project / "docs" / "PROJECT_INSTRUCTIONS.md").is_file()
     grade["P4"] = (
@@ -3894,10 +3896,11 @@ def compliance_card(project: Path) -> list[dict[str, str]] | None:
         "в чатах, знаете вы",
     )
     cost = ci_cost_problems(project)
+    os_missing = target_os_problem(project) is not None  # целевая ОС тоже правило 7.2
     grade["P13"] = (
-        (std.PARTIAL if cost else std.OK) if configs else std.ABSENT,
+        (std.PARTIAL if cost or os_missing else std.OK) if configs else std.ABSENT,
         f"конфигов CI: {len(configs)}, нарушений стоимости (таймауты, отмена, триггеры, "
-        f"раннеры): {len(cost)}",
+        f"раннеры): {len(cost)}, целевая ОС в CONSTITUTION.md: {yes[not os_missing]}",
     )
     return [
         {"id": key, "title": title, "status": grade[key][0], "why": grade[key][1]}
