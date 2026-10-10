@@ -144,6 +144,30 @@ def test_a_block_is_not_done_while_a_block_it_depends_on_is_not(tmp_path: Path) 
     assert "✅" not in text
 
 
+def test_a_dependency_listed_after_the_block_that_needs_it_still_lets_both_be_done(
+    tmp_path: Path,
+) -> None:
+    features = [
+        feature("F14", ["G1"], ["tests/test_b.py"], "in_progress", ["F18"]),
+        feature("F18", ["G1"], ["tests/test_a.py"], "in_progress"),
+    ]
+    text = board(make(tmp_path, features, junit(PASS_A, PASS_B)))
+    assert "| F14 | Блок F14 | ✅ готово |" in text
+    assert "| F18 | Блок F18 | ✅ готово |" in text
+
+
+def test_a_chain_of_three_blocks_in_reverse_order_is_all_done(tmp_path: Path) -> None:
+    features = [
+        feature("F3", ["G1"], ["tests/test_c.py"], "in_progress", ["F2"]),
+        feature("F2", ["G1"], ["tests/test_b.py"], "in_progress", ["F1"]),
+        feature("F1", ["G1"], ["tests/test_a.py"], "in_progress"),
+    ]
+    report = junit(PASS_A, PASS_B, ("tests.test_c", "test_three", "passed"))
+    text = board(make(tmp_path, features, report))
+    for id_ in ("F1", "F2", "F3"):
+        assert f"| {id_} | Блок {id_} | ✅ готово |" in text
+
+
 def test_done_written_by_hand_without_passing_tests_is_flagged_and_not_shown_as_done(
     tmp_path: Path,
 ) -> None:
@@ -386,6 +410,43 @@ def test_tests_section_counts_failed_and_skipped(tmp_path: Path) -> None:
     assert "Всего **4**" in tests
     assert "Упавших: **1**. Пропущенных: **1**." in tests
     assert "упал: tests.test_c::t" in tests
+
+
+def test_a_failed_test_is_put_in_front_of_the_owner(tmp_path: Path) -> None:
+    report = junit(PASS_A, ("tests.test_c", "test_breaks", "failed"))
+    decisions = section(board(make(tmp_path, [], report)), "Нужно ваше решение")
+    assert "ничего" not in decisions
+    assert "tests.test_c::test_breaks" in decisions
+    assert "до слияния" not in decisions
+    assert "разберитесь в причине" in decisions
+
+
+def test_no_more_than_ten_failed_tests_are_put_in_front_of_the_owner(tmp_path: Path) -> None:
+    failed = [("tests.test_c", f"test_{i:02d}", "failed") for i in range(12)]
+    text = board(make(tmp_path, [], junit(PASS_A, *failed)))
+    decisions = section(text, "Нужно ваше решение")
+    rows = [line for line in decisions.splitlines() if "**Упал тест**" in line]
+    assert len(rows) == 10
+    for i in range(10):
+        assert f"tests.test_c::test_{i:02d}" in decisions
+    assert "tests.test_c::test_10" not in decisions
+    assert "tests.test_c::test_11" not in decisions
+    assert "ещё 2" in decisions
+    tests = section(text, "Тесты")
+    assert "Упавших: **12**." in tests
+    assert "упал: tests.test_c::test_00" in tests
+
+
+def test_a_stale_report_warning_goes_with_failed_tests_to_the_owner(tmp_path: Path) -> None:
+    report = junit(PASS_A, ("tests.test_c", "test_breaks", "failed"))
+    root = make(tmp_path, [], report)
+    stale = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "no")
+    assert "Отчёт тестов снят не с текущего коммита" in section(stale, "Нужно ваше решение")
+    same = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "yes")
+    decisions = section(same, "Нужно ваше решение")
+    assert "Отчёт тестов снят не с текущего коммита" not in decisions
+    assert "⚠" not in decisions
+    assert "tests.test_c::test_breaks" in decisions
 
 
 def test_the_previous_total_shows_the_trend(tmp_path: Path) -> None:
