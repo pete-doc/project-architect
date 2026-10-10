@@ -10,6 +10,9 @@
 (`existing_project: true` в `state/baseline.json`, его ставит init-project, если при подключении уже был код), сначала только
 получает предупреждение. Когда владелец запишет долг (`standard --update --accept-new`, файл `state/standard-baseline.json`),
 включается храповик: записанные нарушения допускаются, число может только снижаться, новое нарушение падает.
+
+Здесь же (F14, PR 3) пункты карточки соответствия P1–P13 (раздел 9 стандарта; оценивает их `compliance_card` в
+parch_ci.py) и версия стандарта проекта: что изменилось с версии, записанной в CONSTITUTION.md.
 """
 
 from __future__ import annotations
@@ -570,3 +573,109 @@ def check(
     if found:
         notes.append(f"Нарушений состава в долге: {len(found)} (число только снижается).")
     return problems, notes
+
+
+# ---------- карточка соответствия и версия стандарта (F14, PR 3; STANDARD.md, разделы 9 и 11) ----------
+
+CARD = (
+    ("P1", "Цель продукта записана и имеет проверяемые критерии"),
+    ("P2", "Прослеживаемость цель, блоки, тесты, модули"),
+    ("P3", "Инструкции для ИИ: одно место, короткие, без противоречий"),
+    ("P4", "Инструкции Claude Project версионируются"),
+    ("P5", "Расползание планов и заметок"),
+    ("P6", "Решения записаны"),
+    ("P7", "Защита от ложного «готово»"),
+    ("P8", "Источник истины один"),
+    ("P9", "Протокол перед решением"),
+    ("P10", "Обработка сбоев"),
+    ("P11", "Повторение ошибок"),
+    ("P12", "Взаимодействие человек, Project, исполнитель"),
+    ("P13", "Стоимость CI"),
+)  # пункты раздела 9 стандарта: их же оценивает /parch:analyze-existing
+ABSENT, PARTIAL, OK, ASK = "отсутствует", "частично", "по стандарту", "вопрос владельцу"
+# Что изменилось в каждой версии (шапка docs/STANDARD.md) и какие пункты карточки это задевает.
+# Последняя строка: действующая версия (та же, что STANDARD_VERSION в parch_ci.py, это проверяет тест).
+STANDARD_CHANGES = (
+    (
+        "1.2",
+        "защита от петли планировщика: бюджет инцидентов на блок, статус «застрял» (stuck), раздел «Влияние на цель» "
+        "в отчётах об инцидентах, карточка решения для владельца на табло",
+        ("P10", "P11", "P12"),
+    ),
+    (
+        "1.3",
+        "стоимость CI: Linux по умолчанию, таймаут и отмена устаревших прогонов, запуск только на PR, раннер не на "
+        "Linux только через ADR с оценкой; целевая ОС записана в CONSTITUTION.md",
+        ("P13",),
+    ),
+)
+CURRENT_VERSION = STANDARD_CHANGES[-1][0]
+VERSION_HEADING = "## Версия стандарта"
+VERSION_NUMBER = re.compile(r"ProjectArchitect\s+(\d+(?:\.\d+)+)")
+
+
+def grade_of(present: list[bool]) -> str:
+    """Оценка пункта по признакам: все есть — по стандарту, часть — частично, ни одного — отсутствует."""
+    if all(present):
+        return OK
+    return PARTIAL if any(present) else ABSENT
+
+
+def first_text(project: Path, names: tuple[str, ...]) -> str:
+    """Текст первого существующего файла из списка; пустая строка, если нет ни одного."""
+    for name in names:
+        path = project / name
+        if path.is_file():
+            return path.read_text(encoding="utf-8", errors="replace")
+    return ""
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    """Версия «1.3» как (1, 3): так версии сравниваются по числам, а не по тексту."""
+    return tuple(int(part) for part in version.split("."))
+
+
+def project_standard_version(project: Path) -> str | None:
+    """Версия из раздела «Версия стандарта» в CONSTITUTION.md (строка «ProjectArchitect 1.3»); None, если её нет."""
+    _, heading, rest = first_text(project, CONSTITUTION_CANDIDATES).partition(VERSION_HEADING)
+    if not heading:
+        return None
+    found = VERSION_NUMBER.search(rest.split("\n## ", 1)[0])
+    return found.group(1) if found else None
+
+
+def standard_changes(since: str) -> list[dict[str, object]]:
+    """Изменения стандарта после версии `since`: версия, что изменилось, какие пункты карточки задеты."""
+    return [
+        {"version": version, "what": what, "points": list(points)}
+        for version, what, points in STANDARD_CHANGES
+        if version_key(version) > version_key(since)
+    ]
+
+
+def version_notes(project: Path) -> list[str]:
+    """Что владельцу знать о версии стандарта проекта; пусто, если записана действующая версия."""
+    own = project_standard_version(project)
+    if own is None:
+        return [
+            f"В CONSTITUTION.md нет раздела «Версия стандарта» со строкой «ProjectArchitect {CURRENT_VERSION}»: "
+            "без неё не видно, по какой версии правил проект приведён. Что доделать, покажет /parch:analyze-existing; "
+            "строку вписывает владелец."
+        ]
+    if version_key(own) > version_key(CURRENT_VERSION):
+        return [
+            f"Проект записан на стандарт {own}, а установленные проверки знают только {CURRENT_VERSION}: "
+            "обновите плагин parch, иначе новые правила не проверяются."
+        ]
+    changes = standard_changes(own)
+    if not changes:
+        return []
+    lines = [f"Проект записан на стандарт {own}, действует {CURRENT_VERSION}. Что изменилось:"]
+    for change in changes:
+        points = ", ".join(cast("list[str]", change["points"]))
+        lines.append(f"  {change['version']}: {change['what']} (пункты карточки: {points}).")
+    lines.append(
+        f"Что доделать, покажет /parch:analyze-existing; после приведения владелец меняет строку в CONSTITUTION.md "
+        f"на «ProjectArchitect {CURRENT_VERSION}»."
+    )
+    return lines

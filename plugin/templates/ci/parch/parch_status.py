@@ -462,6 +462,7 @@ def render(
     prs: list[dict[str, Any]],
     source: ReportSource,
     ci_runs: list[dict[str, Any]] | None = None,
+    compliance: list[str] | None = None,
 ) -> str:
     out = [f"# Прогресс: {headline(board) if board.blocks else 'блоков пока нет'}"]
     out.append(
@@ -537,12 +538,71 @@ def render(
     out += ci_section(ci_runs, date)
     if board.problems:
         out += ["## Замечания к плану"] + [f"- {x}" for x in board.problems] + [""]
-    out += [
-        "## Соответствие стандарту",
-        "Карточка пунктов P1–P13 появится вместе с полной проверкой `standard`.",
-        "",
-    ]
+    out += compliance or []
     return "\n".join(out)
+
+
+# Не ✅ и не ⛔: эти значки на табло означают статус блока.
+GRADE_ICON = {"по стандарту": "🟢", "частично": "🟡", "отсутствует": "🔴", "вопрос владельцу": "❓"}
+GRADE_RANK = {"отсутствует": 0, "частично": 1, "по стандарту": 2}
+CARD_ROW = re.compile(r"^\| (P\d+) \| [^|]*\| \S+ ([^|]+?) \|", re.MULTILINE)
+
+
+def previous_grades(path: Path | None) -> dict[str, str]:
+    """Оценки карточки на прежнем табло (пункт -> оценка): из них считается динамика."""
+    if path is None or not path.is_file():
+        return {}
+    found = CARD_ROW.findall(path.read_text(encoding="utf-8"))
+    return {point: grade for point, grade in found if grade in GRADE_ICON}
+
+
+def trend(now: str, before: str | None) -> str:
+    """Динамика пункта карточки для владельца: лучше, хуже, без изменений или впервые."""
+    if before is None:
+        return "впервые"
+    if before == now:
+        return "без изменений"
+    if now in GRADE_RANK and before in GRADE_RANK:
+        arrow = "↑ лучше" if GRADE_RANK[now] > GRADE_RANK[before] else "↓ хуже"
+        return f"{arrow}, было «{before}»"
+    return f"было «{before}»"
+
+
+def compliance_section(project: Path, previous: Path | None) -> list[str]:
+    """Карточка соответствия P1–P13 (STANDARD.md, 9 и 11): оценка, динамика и версия стандарта."""
+    out = ["## Соответствие стандарту"]
+    ci = parch_ci_module()
+    card = cast("list[dict[str, str]] | None", ci.compliance_card(project))
+    if card is None:
+        return [
+            *out,
+            "Карточка не построена: рядом с `parch_status.py` нет `parch_standard.py` (повторите init-project).",
+            "",
+        ]
+    import parch_standard  # лежит рядом: parch_ci_module() уже добавил папку в путь поиска
+
+    before = previous_grades(previous)
+    ok = sum(row["status"] == "по стандарту" for row in card)
+    was = sum(grade == "по стандарту" for grade in before.values())
+    out.append(
+        f"По стандарту **{ok}** из {len(card)} пунктов"
+        + (f" (было {was})" if before and was != ok else "")
+        + ". Оценка по файлам репозитория и правилам проверки `standard`; «вопрос владельцу» — из репозитория не видно, ответ знаете вы."
+    )
+    out += ["", "| Пункт | Что проверяется | Оценка | Динамика | Почему |", "|---|---|---|---|---|"]
+    for row in card:
+        grade = row["status"]
+        out.append(
+            f"| {row['id']} | {row['title']} | {GRADE_ICON.get(grade, '•')} {grade} "
+            f"| {trend(grade, before.get(row['id']))} | {row['why']} |"
+        )
+    own = parch_standard.project_standard_version(project)
+    out += [
+        "",
+        f"Стандарт проекта: ProjectArchitect {own or '—'}, действующая версия {parch_standard.CURRENT_VERSION}.",
+    ]
+    out += [f"- {line.strip()}" for line in parch_standard.version_notes(project)]
+    return [*out, ""]
 
 
 def normalize_pr(item: dict[str, Any]) -> dict[str, Any]:
@@ -746,7 +806,7 @@ def build(
             )
     return render(
         board, project, outcomes, commit, date, previous_total(previous), prs,
-        source or ReportSource(), ci_runs,
+        source or ReportSource(), ci_runs, compliance_section(project, previous),
     )  # fmt: skip
 
 

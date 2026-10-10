@@ -3316,7 +3316,12 @@ STANDARD_BASE_RUNNER = "ubuntu-latest"
 # слияния (STATUS.md, features.json), без тестов (STANDARD.md 7.2, п. 6).
 STATE_WORKFLOW = "state"
 AGENTS_MAX_LINES = 150
-STANDARD_NOT_YET = "карточка соответствия P1–P12 в STATUS.md и показ изменений версии стандарта"
+# Карточка P1–P13 на табло и изменения версии стандарта готовы (F14, PR 3); подхарактеристики
+# раздела 8 в карточке пока не показываются: их держат храповики baseline.
+STANDARD_NOT_YET = (
+    "подхарактеристики качества кода (раздел 8 стандарта) в карточке соответствия STATUS.md; "
+    "их не дают ухудшаться храповики baseline"
+)
 WORKFLOW_KEY = re.compile(r"^(?P<indent> *)(?P<key>[\w\"'-]+):[ \t]*(?P<value>.*)$")
 
 
@@ -3761,6 +3766,148 @@ def block_ids_of(project: Path) -> set[str] | None:
     return {str(as_dict(e).get("id", "")) for e in as_list(as_dict(data).get("features"))}
 
 
+def ci_configs(project: Path) -> list[Path]:
+    """Workflow GitHub и конфиги CircleCI проекта."""
+    return sorted((project / ".github" / "workflows").glob("*.y*ml")) + sorted(
+        (project / ".circleci").glob("*.y*ml")
+    )
+
+
+def ci_cost_problems(project: Path) -> list[str]:
+    """Нарушения стоимости CI (STANDARD.md 7.2) во всех workflow GitHub и конфигах CircleCI."""
+    adr_text = accepted_adr_text(project)
+    problems: list[str] = []
+    for path in ci_configs(project):
+        check = circleci_problems if path.parent.name == ".circleci" else standard_workflow_problems
+        problems.extend(check(path, adr_text))
+    return problems
+
+
+GOAL_CRITERION_LINE = re.compile(r"^- \*\*G\d+\.\*\*", re.MULTILINE)
+GOAL_APPROVED = re.compile(r"Статус:\s*утверждена владельцем,\s*\d{4}-\d{2}-\d{2}")
+LESSON_TEST = re.compile(r"tests?/|test_|\bтест", re.IGNORECASE)
+
+
+def compliance_card(project: Path) -> list[dict[str, str]] | None:
+    """Карточка P1–P13 для табло (STANDARD.md, 9 и 11): оценка по файлам и правилам standard.
+
+    None, если рядом нет parch_standard.py. P8 и P12 из репозитория не видны: вопрос владельцу.
+    """
+    try:
+        import parch_standard  # лежит рядом (.github/parch/), копируется вместе с этим файлом
+    except ImportError:
+        return None
+    std = parch_standard
+    yes = {True: "да", False: "нет"}
+    grade: dict[str, tuple[str, str]] = {}
+    goal = std.first_text(project, ("docs/GOAL.md", "GOAL.md"))
+    criteria = len(GOAL_CRITERION_LINE.findall(goal))
+    approved = bool(GOAL_APPROVED.search(goal))
+    grade["P1"] = (
+        std.grade_of([bool(goal), criteria > 0, approved]),
+        f"критериев готовности: {criteria}, утверждена владельцем: {yes[approved]}"
+        if goal
+        else "нет docs/GOAL.md",
+    )
+    plan = [(project / n).is_file() for n in ("state/features.json", "docs/MODULES.md")]
+    links = std.features_violations(project)
+    grade["P2"] = (
+        std.grade_of([*plan, not links]) if any(plan) else std.ABSENT,
+        f"реестр блоков: {yes[plan[0]]}, карта модулей: {yes[plan[1]]}, "
+        f"нарушений связности: {len(links)}",
+    )
+    # Бюджет строк для главного файла инструкций: AGENTS.md, а если его нет, CLAUDE.md.
+    main_rules = next((n for n in ("AGENTS.md", "CLAUDE.md") if (project / n).is_file()), None)
+    size = len(std.first_text(project, (main_rules,)).splitlines()) if main_rules else 0
+    rivals = std.instruction_violations(project)
+    grade["P3"] = (
+        std.grade_of([not rivals, size <= AGENTS_MAX_LINES]) if main_rules else std.ABSENT,
+        f"строк в {main_rules}: {size} (бюджет {AGENTS_MAX_LINES}), лишних файлов инструкций: "
+        f"{len(rivals)}"
+        if main_rules
+        else "нет ни AGENTS.md, ни CLAUDE.md",
+    )
+    canon = (project / "docs" / "PROJECT_INSTRUCTIONS.md").is_file()
+    grade["P4"] = (
+        std.grade_of([canon]),
+        "текст в docs/PROJECT_INSTRUCTIONS.md; совпадает ли он с настройками Project, видите вы"
+        if canon
+        else "нет docs/PROJECT_INSTRUCTIONS.md: инструкции Claude Project есть только в настройках",
+    )
+    stray = std.markdown_violations(project)
+    grade["P5"] = (
+        std.OK if not stray else std.PARTIAL,
+        f".md вне разрешённых мест: {len(stray)}",
+    )
+    adr = [
+        p
+        for p in (project / "docs" / "adr").glob("[0-9][0-9][0-9][0-9]-*.md")
+        if not p.name.startswith("0000-")  # 0000 — шаблон, не решение
+    ]
+    grade["P6"] = (std.grade_of([bool(adr)]), f"записей решений (ADR): {len(adr)}")
+    configs = ci_configs(project)
+    in_ci = "parch_ci.py standard" in "\n".join(
+        p.read_text(encoding="utf-8", errors="replace") for p in configs
+    )
+    guarded = '"permissions"' in std.first_text(project, (".claude/settings.json",))
+    grade["P7"] = (
+        std.grade_of([bool(configs), in_ci, guarded]),
+        f"CI: {yes[bool(configs)]}, проверка standard в CI: {yes[in_ci]}, правила permissions "
+        f"для агентов: {yes[guarded]}; защиту ветки по файлам не видно",
+    )
+    grade["P8"] = (
+        std.ASK,
+        "состояние в state/features.json; есть ли трекеры, чаты или файлы на диске вне "
+        "репозитория, знаете вы",
+    )
+    rules = "\n".join(
+        std.first_text(project, (n,)) for n in ("AGENTS.md", "CLAUDE.md", *CONSTITUTIONS)
+    )
+    protocol = "Основания" in rules
+    grade["P9"] = (
+        std.OK if protocol else std.grade_of([False, "существующ" in rules.lower()]),
+        "в правилах есть протокол с разделом «Основания», CI проверяет, что он заполнен"
+        if protocol
+        else "в правилах нет раздела «Основания»: что искал перед тем, как писать новый код",
+    )
+    template = (project / "docs" / "INCIDENT_TEMPLATE.md").is_file()
+    budget = INCIDENT_BUDGET_LINE.search(std.first_text(project, CONSTITUTIONS)) is not None
+    failures = (
+        blocked_without_incident_problems(project)
+        + incident_report_problems(project, block_ids_of(project))
+        + incident_budget_problems(project)
+    )
+    grade["P10"] = (
+        std.grade_of([template, budget, not failures]),
+        f"шаблон отчёта: {yes[template]}, бюджет инцидентов в CONSTITUTION.md: {yes[budget]}, "
+        f"нарушений в отчётах и статусах блоков: {len(failures)}",
+    )
+    lessons = std.first_text(project, ("docs/LESSONS.md", "LESSONS.md"))
+    tested = bool(LESSON_TEST.search(lessons))
+    grade["P11"] = (
+        std.grade_of([bool(lessons), tested]),
+        f"есть docs/LESSONS.md, уроки ссылаются на тесты: {yes[tested]}"
+        if lessons
+        else "нет docs/LESSONS.md",
+    )
+    grade["P12"] = (
+        std.ASK,
+        "кто что решает и через что передаёт, из репозитория не видно: есть ли решения только "
+        "в чатах, знаете вы",
+    )
+    cost = ci_cost_problems(project)
+    os_missing = target_os_problem(project) is not None  # целевая ОС тоже правило 7.2
+    grade["P13"] = (
+        (std.PARTIAL if cost or os_missing else std.OK) if configs else std.ABSENT,
+        f"конфигов CI: {len(configs)}, нарушений стоимости (таймауты, отмена, триггеры, "
+        f"раннеры): {len(cost)}, целевая ОС в CONSTITUTION.md: {yes[not os_missing]}",
+    )
+    return [
+        {"id": key, "title": title, "status": grade[key][0], "why": grade[key][1]}
+        for key, title in std.CARD
+    ]
+
+
 def check_standard(
     project: Path, language: str, update: bool = False, accept_new: bool = False
 ) -> Result:
@@ -3810,10 +3957,11 @@ def check_standard(
                 "обновите шаблон CI проекта (шаг standard с env PARCH_PR_BODY)."
             )
         incidents_in_debt = managed
+        if managed:
+            composition_notes += parch_standard.version_notes(project)
     workflows = sorted((project / ".github" / "workflows").glob("*.y*ml"))
-    adr_text = accepted_adr_text(project)
-    for path in workflows:
-        problems.extend(standard_workflow_problems(path, adr_text))
+    circle_files = sorted((project / ".circleci").glob("*.y*ml"))
+    problems.extend(ci_cost_problems(project))
     os_problem = target_os_problem(project)
     if os_problem:
         problems.append(os_problem)
@@ -3829,9 +3977,6 @@ def check_standard(
                 f"AGENTS.md: {size} строк, бюджет {AGENTS_MAX_LINES}. Длинные инструкции модель "
                 "выполняет хуже коротких: перенесите детали в docs/ и оставьте ссылки."
             )
-    circle_files = sorted((project / ".circleci").glob("*.y*ml"))
-    for path in circle_files:
-        problems.extend(circleci_problems(path, adr_text))
     if problems:
         result.fail(f"Нарушения стандарта {STANDARD_VERSION} ({len(problems)}):", *shown(problems))
         return result
