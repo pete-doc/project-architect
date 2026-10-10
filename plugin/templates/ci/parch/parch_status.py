@@ -499,11 +499,18 @@ def render(
         if b.shown in {"waiting_owner", "stuck"}
     ]
     decisions += open_questions(project)
+    failed = sorted(k for k, v in outcomes.items() if v == "failed")
+    if failed and stale:
+        decisions.append(stale)
     decisions += [
         f"**Упал тест** `{name}` — программа в этом месте работает не так, как ожидалось; "
-        "до слияния нужно разобраться в причине"
-        for name in sorted(k for k, v in outcomes.items() if v == "failed")
+        "разберитесь в причине"
+        for name in failed[:10]
     ]
+    if len(failed) > 10:
+        decisions.append(
+            f"…и ещё {len(failed) - 10} упавших тестов — полный список в разделе «Тесты»"
+        )
     out += (
         ["## Нужно ваше решение"]
         + ([f"- {x}" for x in decisions] or ["- ничего: всё идёт без вашего участия"])

@@ -417,6 +417,36 @@ def test_a_failed_test_is_put_in_front_of_the_owner(tmp_path: Path) -> None:
     decisions = section(board(make(tmp_path, [], report)), "Нужно ваше решение")
     assert "ничего" not in decisions
     assert "tests.test_c::test_breaks" in decisions
+    assert "до слияния" not in decisions
+    assert "разберитесь в причине" in decisions
+
+
+def test_no_more_than_ten_failed_tests_are_put_in_front_of_the_owner(tmp_path: Path) -> None:
+    failed = [("tests.test_c", f"test_{i:02d}", "failed") for i in range(12)]
+    text = board(make(tmp_path, [], junit(PASS_A, *failed)))
+    decisions = section(text, "Нужно ваше решение")
+    rows = [line for line in decisions.splitlines() if "**Упал тест**" in line]
+    assert len(rows) == 10
+    for i in range(10):
+        assert f"tests.test_c::test_{i:02d}" in decisions
+    assert "tests.test_c::test_10" not in decisions
+    assert "tests.test_c::test_11" not in decisions
+    assert "ещё 2" in decisions
+    tests = section(text, "Тесты")
+    assert "Упавших: **12**." in tests
+    assert "упал: tests.test_c::test_00" in tests
+
+
+def test_a_stale_report_warning_goes_with_failed_tests_to_the_owner(tmp_path: Path) -> None:
+    report = junit(PASS_A, ("tests.test_c", "test_breaks", "failed"))
+    root = make(tmp_path, [], report)
+    stale = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "no")
+    assert "Отчёт тестов снят не с текущего коммита" in section(stale, "Нужно ваше решение")
+    same = board(root, "--report-commit", "9f8e7d6", "--report-same-tree", "yes")
+    decisions = section(same, "Нужно ваше решение")
+    assert "Отчёт тестов снят не с текущего коммита" not in decisions
+    assert "⚠" not in decisions
+    assert "tests.test_c::test_breaks" in decisions
 
 
 def test_the_previous_total_shows_the_trend(tmp_path: Path) -> None:
