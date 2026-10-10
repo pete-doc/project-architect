@@ -303,12 +303,18 @@ def compute(
                 board.problems.append(f"{block.id}: «готово», но зависит от неготового блока")
                 block.shown = "in_progress"
                 changed = True
-    for (
-        block
-    ) in board.blocks:  # «готово» ставит только отчёт CI: тесты приёмки прошли, зависимости готовы
-        if block.status in {"planned", "in_progress", "waiting_owner"} and block.passes:
-            if all(by_id[d].shown == "done" for d in block.depends_on if d in by_id):
+    changed = True
+    while changed:  # «готово» ставит только отчёт CI: тесты приёмки прошли, зависимости готовы
+        changed = False
+        for block in board.blocks:
+            if (
+                block.shown != "done"
+                and block.status in {"planned", "in_progress", "waiting_owner"}
+                and block.passes
+                and all(by_id[d].shown == "done" for d in block.depends_on if d in by_id)
+            ):
                 block.shown = "done"
+                changed = True
 
 
 # ---------- вывод ----------
@@ -493,6 +499,11 @@ def render(
         if b.shown in {"waiting_owner", "stuck"}
     ]
     decisions += open_questions(project)
+    decisions += [
+        f"**Упал тест** `{name}` — программа в этом месте работает не так, как ожидалось; "
+        "до слияния нужно разобраться в причине"
+        for name in sorted(k for k, v in outcomes.items() if v == "failed")
+    ]
     out += (
         ["## Нужно ваше решение"]
         + ([f"- {x}" for x in decisions] or ["- ничего: всё идёт без вашего участия"])

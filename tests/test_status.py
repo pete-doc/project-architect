@@ -144,6 +144,30 @@ def test_a_block_is_not_done_while_a_block_it_depends_on_is_not(tmp_path: Path) 
     assert "✅" not in text
 
 
+def test_a_dependency_listed_after_the_block_that_needs_it_still_lets_both_be_done(
+    tmp_path: Path,
+) -> None:
+    features = [
+        feature("F14", ["G1"], ["tests/test_b.py"], "in_progress", ["F18"]),
+        feature("F18", ["G1"], ["tests/test_a.py"], "in_progress"),
+    ]
+    text = board(make(tmp_path, features, junit(PASS_A, PASS_B)))
+    assert "| F14 | Блок F14 | ✅ готово |" in text
+    assert "| F18 | Блок F18 | ✅ готово |" in text
+
+
+def test_a_chain_of_three_blocks_in_reverse_order_is_all_done(tmp_path: Path) -> None:
+    features = [
+        feature("F3", ["G1"], ["tests/test_c.py"], "in_progress", ["F2"]),
+        feature("F2", ["G1"], ["tests/test_b.py"], "in_progress", ["F1"]),
+        feature("F1", ["G1"], ["tests/test_a.py"], "in_progress"),
+    ]
+    report = junit(PASS_A, PASS_B, ("tests.test_c", "test_three", "passed"))
+    text = board(make(tmp_path, features, report))
+    for id_ in ("F1", "F2", "F3"):
+        assert f"| {id_} | Блок {id_} | ✅ готово |" in text
+
+
 def test_done_written_by_hand_without_passing_tests_is_flagged_and_not_shown_as_done(
     tmp_path: Path,
 ) -> None:
@@ -386,6 +410,13 @@ def test_tests_section_counts_failed_and_skipped(tmp_path: Path) -> None:
     assert "Всего **4**" in tests
     assert "Упавших: **1**. Пропущенных: **1**." in tests
     assert "упал: tests.test_c::t" in tests
+
+
+def test_a_failed_test_is_put_in_front_of_the_owner(tmp_path: Path) -> None:
+    report = junit(PASS_A, ("tests.test_c", "test_breaks", "failed"))
+    decisions = section(board(make(tmp_path, [], report)), "Нужно ваше решение")
+    assert "ничего" not in decisions
+    assert "tests.test_c::test_breaks" in decisions
 
 
 def test_the_previous_total_shows_the_trend(tmp_path: Path) -> None:
